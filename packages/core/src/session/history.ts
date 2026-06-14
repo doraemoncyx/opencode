@@ -1,7 +1,6 @@
 import { and, asc, desc, eq, gt, gte, ne, or } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import { Database } from "../database/database"
-import { MessageDecodeError } from "./error"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionContextEpochTable, SessionMessageTable } from "./sql"
@@ -53,15 +52,7 @@ const messageRows = Effect.fnUntraced(function* (
 })
 
 const decodeMessageRow = (row: typeof SessionMessageTable.$inferSelect) =>
-  decode({ ...row.data, id: row.id, type: row.type }).pipe(
-    Effect.mapError(
-      () =>
-        new MessageDecodeError({
-          sessionID: SessionSchema.ID.make(row.session_id),
-          messageID: SessionMessage.ID.make(row.id),
-        }),
-    ),
-  )
+  decode({ ...row.data, id: row.id, type: row.type }).pipe(Effect.orDie)
 
 export const load = Effect.fn("SessionHistory.load")(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
   const [epoch, compaction] = yield* Effect.all(

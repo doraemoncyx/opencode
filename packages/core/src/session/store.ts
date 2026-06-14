@@ -4,7 +4,6 @@ import { eq } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { SessionHistory } from "./history"
-import { MessageDecodeError } from "./error"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionMessageTable, SessionTable } from "./sql"
@@ -12,11 +11,11 @@ import { fromRow } from "./info"
 
 export interface Interface {
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info | undefined>
-  readonly context: (sessionID: SessionSchema.ID) => Effect.Effect<SessionMessage.Message[], MessageDecodeError>
+  readonly context: (sessionID: SessionSchema.ID) => Effect.Effect<SessionMessage.Message[]>
   readonly runnerContext: (
     sessionID: SessionSchema.ID,
     baselineSeq: number,
-  ) => Effect.Effect<SessionMessage.Message[], MessageDecodeError>
+  ) => Effect.Effect<SessionMessage.Message[]>
   readonly message: (
     messageID: SessionMessage.ID,
   ) => Effect.Effect<{ readonly sessionID: SessionSchema.ID; readonly message: SessionMessage.Message } | undefined>

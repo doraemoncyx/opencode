@@ -11,6 +11,7 @@ import {
   ConflictError,
   InvalidCursorError,
   InvalidRequestError,
+  MessageNotFoundError,
   ServiceUnavailableError,
   SessionNotFoundError,
   UnknownError,
@@ -19,6 +20,7 @@ import { SessionLocationMiddleware } from "../middleware/session-location"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Location } from "@opencode-ai/core/location"
+import { File } from "@opencode-ai/core/file"
 
 const SessionsQueryFields = {
   workspace: WorkspaceV2.ID.pipe(Schema.optional),
@@ -188,6 +190,21 @@ export const SessionGroup = HttpApiGroup.make("server.session")
           identifier: "v2.session.wait",
           summary: "Wait for session",
           description: "Wait for a session agent loop to become idle.",
+        }),
+      ),
+  )
+  .add(
+    HttpApiEndpoint.get("session.revert.preview", "/api/session/:sessionID/message/:messageID/revert", {
+      params: { sessionID: SessionV2.ID, messageID: SessionMessage.ID },
+      success: Schema.Struct({ data: Schema.Array(File.Diff) }),
+      error: [MessageNotFoundError, SessionNotFoundError, UnknownError],
+    })
+      .middleware(SessionLocationMiddleware)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.revert.preview",
+          summary: "Preview message revert",
+          description: "Preview the filesystem changes required to revert all assistant work after a message.",
         }),
       ),
   )

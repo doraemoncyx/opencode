@@ -26,9 +26,10 @@ import { SessionRunner } from "./session/runner/index"
 import { SessionStore } from "./session/store"
 import { SessionExecution } from "./session/execution"
 import { logFailure } from "./session/logging"
-import { MessageDecodeError } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
+import { File } from "./file"
+import { Snapshot } from "./snapshot"
 
 // get project -> project.locations
 //
@@ -93,14 +94,19 @@ export class OperationUnavailableError extends Schema.TaggedErrorClass<Operation
   },
 ) {}
 
-export { ContextSnapshotDecodeError, MessageDecodeError } from "./session/error"
+export { ContextSnapshotDecodeError } from "./session/error"
 
 export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictError>()("Session.PromptConflictError", {
   sessionID: SessionSchema.ID,
   messageID: SessionMessage.ID,
 }) {}
 
-export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError
+export class MessageNotFoundError extends Schema.TaggedErrorClass<MessageNotFoundError>()("Session.MessageNotFoundError", {
+  sessionID: SessionSchema.ID,
+  messageID: SessionMessage.ID,
+}) {}
+
+export type Error = NotFoundError | OperationUnavailableError | PromptConflictError
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
@@ -114,14 +120,14 @@ export interface Interface {
       id: SessionMessage.ID
       direction: "previous" | "next"
     }
-  }) => Effect.Effect<SessionMessage.Message[], NotFoundError | MessageDecodeError>
+  }) => Effect.Effect<SessionMessage.Message[], NotFoundError>
   readonly message: (input: {
     sessionID: SessionSchema.ID
     messageID: SessionMessage.ID
   }) => Effect.Effect<SessionMessage.Message | undefined>
   readonly context: (
     sessionID: SessionSchema.ID,
-  ) => Effect.Effect<SessionMessage.Message[], NotFoundError | MessageDecodeError>
+  ) => Effect.Effect<SessionMessage.Message[], NotFoundError>
   readonly events: (input: {
     sessionID: SessionSchema.ID
     after?: EventV2.Cursor
@@ -157,18 +163,31 @@ export interface Interface {
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly revert: {
+    readonly preview: (input: {
+      sessionID: SessionSchema.ID
+      messageID: SessionMessage.ID
+    }) => Effect.Effect<
+      readonly File.Diff[],
+      NotFoundError | MessageNotFoundError | Snapshot.Error
+    >
+  }
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Session") {}
 
-export const layer = Layer.effect(
-  Service,
-  Effect.gen(function* () {
+export const layer = Layer.unwrap(
+  Effect.promise(() => import("./location-layer")).pipe(
+    Effect.map(({ LocationServiceMap }) =>
+      Layer.effect(
+        Service,
+        Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const events = yield* EventV2.Service
     const projects = yield* ProjectV2.Service
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
+          const locations = yield* LocationServiceMap
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
     const scope = yield* Effect.scope
@@ -186,15 +205,7 @@ export const layer = Layer.effect(
       )
 
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
-      decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(
-        Effect.mapError(
-          () =>
-            new MessageDecodeError({
-              sessionID: SessionSchema.ID.make(row.session_id),
-              messageID: SessionMessage.ID.make(row.id),
-            }),
-        ),
-      )
+      decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(Effect.orDie)
 
     const result = Service.of({
       create: Effect.fn("V2Session.create")(function* (input) {
@@ -419,18 +430,68 @@ export const layer = Layer.effect(
           }),
         ),
       ),
+      revert: {
+        preview: Effect.fn("V2Session.revert.preview")(function* (input) {
+          const session = yield* result.get(input.sessionID)
+          const boundary = yield* db
+            .select({ seq: SessionMessageTable.seq })
+            .from(SessionMessageTable)
+            .where(
+              and(
+                eq(SessionMessageTable.session_id, input.sessionID),
+                eq(SessionMessageTable.id, input.messageID),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+          if (!boundary) return yield* new MessageNotFoundError(input)
+          const rows = yield* db
+            .select()
+            .from(SessionMessageTable)
+            .where(
+              and(
+                eq(SessionMessageTable.session_id, input.sessionID),
+                eq(SessionMessageTable.type, "assistant"),
+                gt(SessionMessageTable.seq, boundary.seq),
+              ),
+            )
+            .orderBy(asc(SessionMessageTable.seq))
+            .all()
+            .pipe(Effect.orDie)
+          const files = new Map<RelativePath, Snapshot.ID>()
+          for (const row of rows) {
+            const message = yield* decode(row).pipe(Effect.orDie)
+            if (message.type !== "assistant" || !message.snapshot?.start) continue
+            for (const file of message.snapshot.files ?? [])
+              if (!files.has(file)) files.set(file, Snapshot.ID.make(message.snapshot.start))
+          }
+          return yield* Effect.gen(function* () {
+            return yield* (yield* Snapshot.Service).preview({ files })
+          }).pipe(Effect.provide(locations.get(session.location)))
+        }),
+      },
     })
 
-    return result
-  }),
+          return result
+        }),
+      ),
+    ),
+  ),
 )
 
-export const defaultLayer = layer.pipe(
-  Layer.provide(SessionExecution.noopLayer),
-  Layer.provide(SessionStore.defaultLayer),
-  Layer.provide(SessionProjector.defaultLayer),
-  Layer.provide(EventV2.defaultLayer),
-  Layer.provide(Database.defaultLayer),
-  Layer.provide(ProjectV2.defaultLayer),
-  Layer.orDie,
+export const defaultLayer = Layer.unwrap(
+  Effect.promise(() => import("./location-layer")).pipe(
+    Effect.map(({ LocationServiceMap }) =>
+      layer.pipe(
+        Layer.provide(LocationServiceMap.layer),
+        Layer.provide(SessionExecution.noopLayer),
+        Layer.provide(SessionStore.defaultLayer),
+        Layer.provide(SessionProjector.defaultLayer),
+        Layer.provide(EventV2.defaultLayer),
+        Layer.provide(Database.defaultLayer),
+        Layer.provide(ProjectV2.defaultLayer),
+        Layer.orDie,
+      ),
+    ),
+  ),
 )

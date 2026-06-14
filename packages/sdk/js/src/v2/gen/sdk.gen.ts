@@ -337,6 +337,8 @@ import type {
   V2SessionQuestionRejectResponses,
   V2SessionQuestionReplyErrors,
   V2SessionQuestionReplyResponses,
+  V2SessionRevertPreviewErrors,
+  V2SessionRevertPreviewResponses,
   V2SessionWaitErrors,
   V2SessionWaitResponses,
   V2SkillListErrors,
@@ -5007,6 +5009,42 @@ export class Agent extends HeyApiClient {
   }
 }
 
+export class Revert extends HeyApiClient {
+  /**
+   * Preview message revert
+   *
+   * Preview the filesystem changes required to revert all assistant work after a message.
+   */
+  public preview<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      messageID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "messageID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      V2SessionRevertPreviewResponses,
+      V2SessionRevertPreviewErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/message/{messageID}/revert",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Permission2 extends HeyApiClient {
   /**
    * List session permission requests
@@ -5410,6 +5448,11 @@ export class Session3 extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _revert?: Revert
+  get revert(): Revert {
+    return (this._revert ??= new Revert({ client: this.client }))
   }
 
   private _permission?: Permission2
