@@ -8,27 +8,35 @@ export const ID = Schema.String.pipe(Schema.brand("Snapshot.ID"))
 export type ID = typeof ID.Type
 
 export class Error extends Schema.TaggedErrorClass<Error>()("Snapshot.Error", {
-  operation: Schema.Literals(["capture", "diff", "restore"]),
+  operation: Schema.Literals(["capture", "files", "diff", "preview", "restore"]),
   message: Schema.String,
   cause: Schema.optional(Schema.Defect),
 }) {}
 
-export interface DiffInput {
+export interface CompareInput {
   readonly from: ID
   readonly to: ID
+}
+
+export interface DiffInput extends CompareInput {
   readonly context?: number
 }
 
 export interface RestoreInput {
-  readonly files: readonly {
-    readonly path: RelativePath
-    readonly snapshot: ID
-  }[]
+  /** Paths are relative to the project root. */
+  readonly files: ReadonlyMap<RelativePath, ID>
+}
+
+export interface PreviewInput extends RestoreInput {
+  readonly context?: number
 }
 
 export interface Interface {
+  /** Capture the current Location-scoped state. */
   readonly capture: () => Effect.Effect<ID | undefined, Error>
+  readonly files: (input: CompareInput) => Effect.Effect<readonly RelativePath[], Error>
   readonly diff: (input: DiffInput) => Effect.Effect<readonly File.Diff[], Error>
+  readonly preview: (input: PreviewInput) => Effect.Effect<readonly File.Diff[], Error>
   readonly restore: (input: RestoreInput) => Effect.Effect<void, Error>
 }
 
