@@ -49,6 +49,7 @@ import { SystemContext } from "@opencode-ai/core/system-context"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
 import { SkillGuidance } from "@opencode-ai/core/skill/guidance"
 import { ReferenceGuidance } from "@opencode-ai/core/reference/guidance"
+import { Snapshot } from "@opencode-ai/core/snapshot"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Location } from "@opencode-ai/core/location"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -247,6 +248,7 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(skillGuidance),
   Layer.provide(referenceGuidance),
   Layer.provide(config),
+  Layer.provide(Snapshot.noopLayer),
 )
 const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
 const execution = Layer.effect(
@@ -1787,6 +1789,19 @@ describe("SessionRunnerLLM", () => {
       expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
       expect(authorizations).toMatchObject([{ sessionID, toolCallID: "call-echo" }])
       expect(executions).toEqual(["hello"])
+      const { db } = yield* Database.Service
+      const events = yield* db
+        .select({ seq: EventTable.seq, type: EventTable.type })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .orderBy(asc(EventTable.seq))
+        .all()
+      const success = events.find((event) => event.type === "session.next.tool.success.1")
+      const ended = events.find((event) => event.type === "session.next.step.ended.2")
+      expect(success).toBeDefined()
+      expect(ended).toBeDefined()
+      if (!success || !ended) throw new Error("Missing tool settlement events")
+      expect(ended.seq).toBeGreaterThan(success.seq)
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Echo this" },
         {

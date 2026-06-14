@@ -127,11 +127,16 @@ export const layer = Layer.effect(
 )
 
 export const locationLayer = layer.pipe(
-  Layer.provideMerge(Integration.locationLayer),
-  Layer.provideMerge(Catalog.locationLayer),
-  Layer.provideMerge(CommandV2.locationLayer),
-  Layer.provideMerge(Config.locationLayer),
-  Layer.provideMerge(AgentV2.locationLayer),
-  Layer.provideMerge(SkillV2.locationLayer),
-  Layer.provideMerge(Reference.locationLayer),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      Integration.locationLayer,
+      Catalog.locationLayer,
+      CommandV2.locationLayer,
+      Config.locationLayer,
+      AgentV2.locationLayer,
+      SkillV2.locationLayer,
+      Reference.locationLayer,
+      PluginV2.locationLayer,
+    ),
+  ),
 )

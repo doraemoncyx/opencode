@@ -73,4 +73,6 @@ export const layer = Layer.effect(
   }),
 )
 
-export const locationLayer = layer
+export const locationLayer = layer.pipe(
+  Layer.provideMerge(Layer.merge(PluginBoot.locationLayer, SkillV2.locationLayer)),
+)

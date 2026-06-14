@@ -31,6 +31,8 @@ import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { type RunError, Service, StepLimitExceededError } from "./index"
 import { SessionRunnerModel } from "./model"
+import { Snapshot } from "../../snapshot"
+import { SystemContextBuiltIns } from "../../system-context/builtins"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
 
@@ -57,7 +59,8 @@ import { toLLMMessages } from "./to-llm-message"
  *   - [ ] Resolve policy-filtered built-in, MCP, plugin, and structured-output tool definitions.
  *   - [x] Stream exactly one `llm.stream(request)` provider turn.
  *   - [x] Persist assistant text and usage events incrementally as they arrive.
- *   - [ ] Persist snapshots, patches, and retry notices incrementally as they arrive.
+ *   - [x] Persist snapshots and changed paths at settled step boundaries.
+ *   - [ ] Persist retry notices incrementally as they arrive.
  *   - [x] Persist reasoning, provider errors, and tool-call events incrementally as they arrive.
  *
  * - Tool settlement and continuation
@@ -101,6 +104,7 @@ export const layer = Layer.effect(
     const skillGuidance = yield* SkillGuidance.Service
     const referenceGuidance = yield* ReferenceGuidance.Service
     const config = yield* Config.Service
+    const snapshots = yield* Snapshot.Service
     const db = (yield* Database.Service).db
     const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
@@ -227,6 +231,7 @@ export const layer = Layer.effect(
       })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(rebuildPreparedTurn())
+      const startSnapshot = yield* snapshots.capture()
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
         agent: agent.id,
@@ -235,6 +240,7 @@ export const layer = Layer.effect(
           providerID: ProviderV2.ID.make(model.provider),
           ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
         },
+        snapshot: startSnapshot,
       })
       const withPublication = Semaphore.makeUnsafe(1).withPermit
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
@@ -327,6 +333,32 @@ export const layer = Layer.effect(
             const message = failure instanceof Error ? failure.message : String(failure)
             yield* withPublication(publisher.failUnsettledTools(`Tool execution failed: ${message}`))
           }
+          const stepSettlement = publisher.stepSettlement()
+          if (stepSettlement && !publisher.hasProviderError()) {
+            const endSnapshot = yield* snapshots.capture()
+            const files =
+              startSnapshot && endSnapshot
+                ? yield* snapshots
+                    .files({ from: startSnapshot, to: endSnapshot })
+                    .pipe(
+                      Effect.catch((cause) =>
+                        Effect.logWarning("failed to list step snapshot files", { cause }).pipe(Effect.as(undefined)),
+                      ),
+                    )
+                : undefined
+            yield* withPublication(
+              events.publish(SessionEvent.Step.Ended, {
+                sessionID: session.id,
+                timestamp: yield* DateTime.now,
+                assistantMessageID: yield* publisher.startAssistant(),
+                finish: stepSettlement.finish,
+                cost: 0,
+                tokens: stepSettlement.tokens,
+                snapshot: endSnapshot,
+                files,
+              }),
+            )
+          }
           if (publisher.hasProviderError())
             yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
           if (stream._tag === "Success" && !publisher.hasProviderError())
@@ -402,3 +434,18 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer
+
+export const locationLayer = layer.pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      AgentV2.locationLayer,
+      ToolRegistry.locationLayer,
+      SessionRunnerModel.locationLayer,
+      SystemContextBuiltIns.locationLayer,
+      SkillGuidance.locationLayer,
+      ReferenceGuidance.locationLayer,
+      Config.locationLayer,
+      Snapshot.locationLayer,
+    ),
+  ),
+)

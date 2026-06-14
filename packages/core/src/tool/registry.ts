@@ -137,3 +137,5 @@ export const defaultLayer = layer.pipe(
   Layer.provide(ApplicationTools.layer),
   Layer.provide(ToolOutputStore.defaultLayer),
 )
+
+export const locationLayer = layer.pipe(Layer.provideMerge(ToolOutputStore.locationLayer))

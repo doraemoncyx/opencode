@@ -139,4 +139,4 @@ export const layer = Layer.effect(
   ),
 )
 
-export const locationLayer = layer.pipe(Layer.provide(Config.locationLayer), Layer.provide(Git.defaultLayer))
+export const locationLayer = layer.pipe(Layer.provide(Config.locationLayer))

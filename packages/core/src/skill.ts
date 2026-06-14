@@ -158,4 +158,4 @@ export const layer = Layer.effect(
   }),
 )
 
-export const locationLayer = layer.pipe(Layer.provide(SkillDiscovery.defaultLayer))
+export const locationLayer = layer.pipe(Layer.provideMerge(SkillDiscovery.layer))

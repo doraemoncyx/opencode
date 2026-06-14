@@ -129,16 +129,14 @@ describe("Git trees", () => {
       if (!source) throw new Error("Repository not found")
       const storage = AbsolutePath.make(path.join(root.path, ".snapshot"))
       const repository = yield* git.repo.create({ worktree: source.worktree, gitDirectory: storage, seed: source })
-      yield* git.index.refresh({ repository, scope: RelativePath.make("scope") })
-      const before = yield* git.tree.write(repository)
+      const before = yield* git.tree.capture({ repository, scopes: [RelativePath.make("scope")] })
 
       yield* Effect.promise(async () => {
         await fs.writeFile(path.join(root.path, "scope", "tracked.txt"), "two\n")
         await fs.writeFile(path.join(root.path, "scope", "added.txt"), "added\n")
         await fs.writeFile(path.join(root.path, "outside.txt"), "changed outside\n")
       })
-      yield* git.index.refresh({ repository, scope: RelativePath.make("scope") })
-      const after = yield* git.tree.write(repository)
+      const after = yield* git.tree.capture({ repository, scopes: [RelativePath.make("scope")] })
 
       expect(yield* git.tree.files({ repository, from: before, to: after })).toEqual([
         RelativePath.make("scope/added.txt"),

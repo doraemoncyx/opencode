@@ -148,6 +148,7 @@ export class Assistant extends Schema.Class<Assistant>("Session.Message.Assistan
   snapshot: Schema.Struct({
     start: Schema.String.pipe(Schema.optional),
     end: Schema.String.pipe(Schema.optional),
+    files: SessionEvent.Step.Ended.data.fields.files,
   }).pipe(Schema.optional),
   finish: Schema.String.pipe(Schema.optional),
   cost: Schema.Finite.pipe(Schema.optional),

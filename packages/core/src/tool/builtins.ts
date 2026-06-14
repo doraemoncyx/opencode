@@ -14,6 +14,16 @@ import { TodoWriteTool } from "./todowrite"
 import { WebFetchTool } from "./webfetch"
 import { WebSearchTool } from "./websearch"
 import { WriteTool } from "./write"
+import { ToolRegistry } from "./registry"
+import { PermissionV2 } from "../permission"
+import { Config } from "../config"
+import { PluginBoot } from "../plugin/boot"
+import { SkillV2 } from "../skill"
+import { LocationMutation } from "../location-mutation"
+import { FileMutation } from "../file-mutation"
+import { QuestionV2 } from "../question"
+import { SessionTodo } from "../session/todo"
+import { Image } from "../image"
 
 /**
  * Composes only the shipped Location-scoped built-in tool transforms.
@@ -41,4 +51,19 @@ export const locationLayer = Layer.mergeAll(
   WebFetchTool.layer,
   WebSearchTool.layer.pipe(Layer.provide(WebSearchTool.defaultConfigLayer)),
   WriteTool.layer,
+).pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      ToolRegistry.locationLayer,
+      PermissionV2.locationLayer,
+      Config.locationLayer,
+      PluginBoot.locationLayer,
+      SkillV2.locationLayer,
+      LocationMutation.locationLayer,
+      FileMutation.locationLayer,
+      QuestionV2.locationLayer,
+      SessionTodo.locationLayer,
+      Image.locationLayer,
+    ),
+  ),
 )

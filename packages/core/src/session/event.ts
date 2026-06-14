@@ -204,6 +204,7 @@ export namespace Step {
         }),
       }),
       snapshot: Schema.String.pipe(Schema.optional),
+      files: RelativePath.pipe(Schema.Array, Schema.optional),
     },
   })
   export type Ended = typeof Ended.Type

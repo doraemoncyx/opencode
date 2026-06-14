@@ -8,7 +8,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { ProviderV2 } from "@opencode-ai/core/provider"
-import { AbsolutePath } from "@opencode-ai/core/schema"
+import { AbsolutePath, RelativePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionMessage } from "@opencode-ai/core/session/message"
@@ -524,6 +524,8 @@ describe("SessionProjector", () => {
         finish: "stop",
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        snapshot: "tree_after",
+        files: [RelativePath.make("src/index.ts")],
       })
 
       const rows = yield* db
@@ -540,6 +542,7 @@ describe("SessionProjector", () => {
       expect(messages[1]).toMatchObject({
         type: "assistant",
         finish: "stop",
+        snapshot: { end: "tree_after", files: [RelativePath.make("src/index.ts")] },
         time: { completed: DateTime.makeUnsafe(1) },
       })
     }),

@@ -296,5 +296,11 @@ export const layer = Layer.effect(
   }),
 )
 
-export const locationLayer = layer
+export const locationLayer = Layer.merge(
+  layer,
+  Layer.effectDiscard(refreshAfterBoot).pipe(
+    Layer.provide(layer),
+    Layer.provide(PluginBoot.locationLayer),
+  ),
+)
 export const node = LayerNode.make(layer, [FSUtil.node, Git.node, ProjectDirectories.node, EventV2.node, Database.node])
