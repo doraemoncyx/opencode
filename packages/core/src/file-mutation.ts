@@ -5,6 +5,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { dirname } from "path"
 import { KeyedMutex } from "./effect/keyed-mutex"
 import { FSUtil } from "./fs-util"
+import { detectEncoding, encodeText } from "./util/encoding"
 
 export interface Target {
   readonly canonical: string
@@ -112,10 +113,13 @@ const layer = Layer.effect(
           const current = yield* fs
             .readFile(input.target.canonical)
             .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined)))
-          yield* fs.writeWithDirs(
-            input.target.canonical,
-            joinBom(next.text, Boolean(current && hasUtf8Bom(current)) || next.bom),
-          )
+          const encoding = current ? detectEncoding(current) : "utf-8"
+          const content = (() => {
+            const text = joinBom(next.text, Boolean(current && hasUtf8Bom(current)) || next.bom)
+            if (encoding === "gbk") return encodeText(text, "gbk")
+            return text
+          })()
+          yield* fs.writeWithDirs(input.target.canonical, content)
           return writeResult(input.target, current !== undefined)
         }),
       ),

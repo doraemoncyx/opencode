@@ -24,9 +24,12 @@
 // Ctrl-c clears a live prompt draft first; otherwise interrupt and exit use a
 // two-press pattern where the first press shows a hint and the second press
 // within 5 seconds actually fires the action.
+//
+// 修改记录: 2026-06-15: 添加显式 registerSpinner() 调用防构建产物中 side-effect import 被 tree-shake
 import { CliRenderEvents, type CliRenderer, type KeyEvent, type Renderable, type TreeSitterClient } from "@opentui/core"
 import type { Keymap } from "@opentui/keymap"
 import { render } from "@opentui/solid"
+import { registerSpinner } from "opentui-spinner/solid"
 import { createComponent, createSignal, type Accessor, type Setter } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { OpencodeKeymapProvider } from "@opencode-ai/tui/keymap"
@@ -297,6 +300,7 @@ export class RunFooter implements FooterApi {
     this.renderer.prependInputHandler(this.handleThemeNotification)
     process.on("SIGUSR2", this.handleThemeSignal)
 
+    registerSpinner()
     const footer = this
     void render(
       () =>

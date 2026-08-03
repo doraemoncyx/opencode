@@ -1,3 +1,8 @@
+/**
+ * TUI 应用入口。管理渲染器生命周期、插件、路由、主题、键盘映射。
+ * 根组件 `App` 组合所有 context provider 并路由到 home/session/plugin 页面。
+ * 修改记录: 2026-06-15: 添加显式 registerSpinner() 调用防构建产物中 side-effect import 被 tree-shake
+ */
 import { render, TimeToFirstDraw, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { registerOpencodeSpinner } from "./component/register-spinner"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
@@ -86,6 +91,7 @@ import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat } from "./util/error"
+import { registerSpinner } from "opentui-spinner/solid"
 
 registerOpencodeSpinner()
 
@@ -242,6 +248,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         const mode = (await renderer.waitForThemeMode(1000)) ?? "dark"
         if (renderer.isDestroyed) return
 
+        registerSpinner()
         await render(() => {
           return (
             <ExitProvider

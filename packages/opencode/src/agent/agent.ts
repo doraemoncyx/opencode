@@ -199,8 +199,9 @@ const layer = Layer.effect(
               defaults,
               Permission.fromConfig({
                 "*": "deny",
-                grep: "allow",
-                glob: "allow",
+                "fff-mcp_find_files": "allow",
+                "fff-mcp_grep": "allow",
+                "fff-mcp_multi_grep": "allow",
                 list: "allow",
                 bash: "allow",
                 webfetch: "allow",

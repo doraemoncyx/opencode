@@ -6,8 +6,6 @@ import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
 import { EditTool } from "./edit"
-import { GlobTool } from "./glob"
-import { GrepTool } from "./grep"
 import { ReadTool } from "./read"
 import { TaskTool } from "./task"
 import { Database } from "@opencode-ai/core/database/database"
@@ -103,10 +101,8 @@ const layer = Layer.effect(
     const webfetch = yield* WebFetchTool
     const websearch = yield* WebSearchTool
     const shell = yield* ShellTool
-    const globtool = yield* GlobTool
     const writetool = yield* WriteTool
     const edit = yield* EditTool
-    const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
     const agent = yield* Agent.Service
@@ -115,6 +111,16 @@ const layer = Layer.effect(
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("ToolRegistry.state")(function* (ctx) {
+        const mcpStatus = yield* mcp.status()
+        const fffStatus = mcpStatus["fff-mcp"]
+        if (fffStatus?.status !== "connected") {
+          yield* Effect.die(
+            `MCP server "fff-mcp" is not connected (status: ${fffStatus?.status ?? "not found"}). ` +
+              `File search tools (find_files, grep, multi_grep) are unavailable. ` +
+              `Please check your MCP configuration to ensure fff-mcp is running.`,
+          )
+        }
+
         const custom: Tool.Def[] = []
 
         function fromPlugin(id: string, def: ToolDefinition): Tool.Def {
@@ -205,8 +211,6 @@ const layer = Layer.effect(
           invalid: Tool.init(invalid),
           shell: Tool.init(shell),
           read: Tool.init(read),
-          glob: Tool.init(globtool),
-          grep: Tool.init(greptool),
           edit: Tool.init(edit),
           write: Tool.init(writetool),
           task: Tool.init(task),
@@ -228,8 +232,6 @@ const layer = Layer.effect(
             ...(questionEnabled ? [tool.question] : []),
             tool.shell,
             tool.read,
-            tool.glob,
-            tool.grep,
             tool.edit,
             tool.write,
             tool.task,
