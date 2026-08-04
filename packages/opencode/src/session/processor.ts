@@ -632,44 +632,98 @@ const layer = Layer.effect(
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
-        return yield* Effect.gen(function* () {
-          yield* Effect.gen(function* () {
-            ctx.currentText = undefined
-            ctx.reasoningMap = {}
-            yield* status.set(ctx.sessionID, { type: "busy" })
-            const stream = llm.stream(streamInput)
+        // AI SDK surfaces empty/truncated provider response bodies as a
+        // JSONParseError ("JSON parsing failed: Text: ... / Unexpected EOF").
+        // Detect it by name or message so the processor can auto-recover by
+        // sending a "continue" user message instead of halting the session.
+        const isJsonParseError = (error: unknown) => {
+          if (error instanceof Error && error.name === "AI_JSONParseError") return true
+          if (error instanceof Error && error.message.includes("JSON parsing failed")) return true
+          return false
+        }
 
-            yield* stream.pipe(
-              Stream.tap((event) => handleEvent(event)),
-              Stream.takeUntil(() => ctx.needsCompaction),
-              Stream.runDrain,
-            )
-          }).pipe(
+        let jsonParseRecoveries = 0
+        const JSON_PARSE_RECOVERY_LIMIT = 3
+
+        const streamTurn = Effect.fn("SessionProcessor.streamTurn")(function* () {
+          ctx.currentText = undefined
+          ctx.reasoningMap = {}
+          yield* status.set(ctx.sessionID, { type: "busy" })
+          const stream = llm.stream(streamInput)
+          yield* stream.pipe(
+            Stream.tap((event) => handleEvent(event)),
+            Stream.takeUntil(() => ctx.needsCompaction),
+            Stream.runDrain,
+          )
+        })
+
+        const retryPolicy = SessionRetry.policy({
+          provider: input.model.providerID,
+          parse,
+          set: (info) => {
+            return status.set(ctx.sessionID, {
+              type: "retry",
+              attempt: info.attempt,
+              message: info.message,
+              action: info.action,
+              next: info.next,
+            })
+          },
+        })
+
+        // Re-run the LLM turn with a "continue" user message appended when the
+        // AI SDK fails to parse the provider's (empty/truncated) response body.
+        const runWithRecovery = (): Effect.Effect<void, unknown> =>
+          streamTurn().pipe(
+            Effect.catchCauseIf(
+              (cause) => !Cause.hasInterruptsOnly(cause),
+              (cause) => Effect.fail(Cause.squash(cause)),
+            ),
+            Effect.retry(retryPolicy),
+            Effect.catchIf(
+              (error) => isJsonParseError(error) && jsonParseRecoveries < JSON_PARSE_RECOVERY_LIMIT,
+              (error) =>
+                Effect.gen(function* () {
+                  jsonParseRecoveries++
+                  // Finalize any partially emitted text part so it doesn't dangle.
+                  if (ctx.currentText) {
+                    const end = Date.now()
+                    ctx.currentText.time = { start: ctx.currentText.time?.start ?? end, end }
+                    yield* session.updatePart(ctx.currentText)
+                    ctx.currentText = undefined
+                  }
+                  yield* Effect.logWarning("llm json parse error; recovering by sending continue", {
+                    "session.id": input.sessionID,
+                    messageID: input.assistantMessage.id,
+                    providerID: input.model.providerID,
+                    modelID: input.model.id,
+                    attempt: jsonParseRecoveries,
+                    error: errorMessage(error),
+                    text:
+                      error instanceof Error && "text" in error
+                        ? JSON.stringify((error as { text?: unknown }).text)
+                        : undefined,
+                    cause:
+                      error instanceof Error && error.cause instanceof Error
+                        ? error.cause.message
+                        : error instanceof Error
+                          ? String(error.cause)
+                          : undefined,
+                  })
+                  streamInput.messages.push({ role: "user", content: "continue" })
+                  return runWithRecovery()
+                }),
+            ),
+          )
+
+        return yield* Effect.gen(function* () {
+          yield* runWithRecovery().pipe(
             Effect.onInterrupt(() =>
               Effect.gen(function* () {
                 aborted = true
                 if (!ctx.assistantMessage.error) {
                   yield* halt(new DOMException("Aborted", "AbortError"))
                 }
-              }),
-            ),
-            Effect.catchCauseIf(
-              (cause) => !Cause.hasInterruptsOnly(cause),
-              (cause) => Effect.fail(Cause.squash(cause)),
-            ),
-            Effect.retry(
-              SessionRetry.policy({
-                provider: input.model.providerID,
-                parse,
-                set: (info) => {
-                  return status.set(ctx.sessionID, {
-                    type: "retry",
-                    attempt: info.attempt,
-                    message: info.message,
-                    action: info.action,
-                    next: info.next,
-                  })
-                },
               }),
             ),
             Effect.catch(halt),
