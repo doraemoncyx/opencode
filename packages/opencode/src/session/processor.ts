@@ -418,8 +418,15 @@ const layer = Layer.effect(
             return
           }
 
-          case "provider-error":
-            throw new Error(value.message)
+          case "provider-error": {
+            // Provider explicitly reported an error (via an error chunk /
+            // provider-error event). This is a deterministic result, not a
+            // stream interruption — do not auto-recover it. Tag the thrown
+            // error so isRecoverableStreamError can exclude it.
+            const error = new Error(value.message)
+            error.name = "ProviderError"
+            throw error
+          }
 
           case "step-start":
             if (!ctx.snapshot) ctx.snapshot = yield* snapshot.track()
@@ -632,18 +639,30 @@ const layer = Layer.effect(
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
-        // AI SDK surfaces empty/truncated provider response bodies as a
-        // JSONParseError ("JSON parsing failed: Text: ... / Unexpected EOF").
-        // Detect it by name or message so the processor can auto-recover by
-        // sending a "continue" user message instead of halting the session.
-        const isJsonParseError = (error: unknown) => {
-          if (error instanceof Error && error.name === "AI_JSONParseError") return true
-          if (error instanceof Error && error.message.includes("JSON parsing failed")) return true
-          return false
+        // Broad auto-recovery: classify the stream failure via MessageV2 and
+        // retry by sending a "continue" user message for anything except the
+        // explicitly terminal cases. HTTP API errors (status codes) are kept
+        // on the existing halt path — a 4xx/5xx response is a deterministic
+        // request result, not a stream interruption, and the retry policy
+        // already handles transient 5xx/rate-limit cases. This covers AI SDK
+        // JSONParseError, plain gateway stream errors (e.g. "upstream stream
+        // error: error decoding response body"), and other transient
+        // decode/transport failures without enumerating strings.
+        const isRecoverableStreamError = (error: unknown) => {
+          if (error instanceof Error && error.name === "ProviderError") return false
+          const parsed = parse(error)
+          if (SessionV1.AbortedError.isInstance(parsed)) return false
+          if (SessionV1.AuthError.isInstance(parsed)) return false
+          if (SessionV1.ContextOverflowError.isInstance(parsed)) return false
+          if (SessionV1.OutputLengthError.isInstance(parsed)) return false
+          if (SessionV1.ContentFilterError.isInstance(parsed)) return false
+          if (SessionV1.StructuredOutputError.isInstance(parsed)) return false
+          if (SessionV1.APIError.isInstance(parsed)) return false
+          return true
         }
 
-        let jsonParseRecoveries = 0
-        const JSON_PARSE_RECOVERY_LIMIT = 3
+        let streamRecoveries = 0
+        const STREAM_RECOVERY_LIMIT = 3
 
         const streamTurn = Effect.fn("SessionProcessor.streamTurn")(function* () {
           ctx.currentText = undefined
@@ -681,10 +700,10 @@ const layer = Layer.effect(
             ),
             Effect.retry(retryPolicy),
             Effect.catchIf(
-              (error) => isJsonParseError(error) && jsonParseRecoveries < JSON_PARSE_RECOVERY_LIMIT,
+              (error) => isRecoverableStreamError(error) && streamRecoveries < STREAM_RECOVERY_LIMIT,
               (error) =>
                 Effect.gen(function* () {
-                  jsonParseRecoveries++
+                  streamRecoveries++
                   // Finalize any partially emitted text part so it doesn't dangle.
                   if (ctx.currentText) {
                     const end = Date.now()
@@ -692,12 +711,12 @@ const layer = Layer.effect(
                     yield* session.updatePart(ctx.currentText)
                     ctx.currentText = undefined
                   }
-                  yield* Effect.logWarning("llm json parse error; recovering by sending continue", {
+                  yield* Effect.logWarning("llm stream interruption; recovering by sending continue", {
                     "session.id": input.sessionID,
                     messageID: input.assistantMessage.id,
                     providerID: input.model.providerID,
                     modelID: input.model.id,
-                    attempt: jsonParseRecoveries,
+                    attempt: streamRecoveries,
                     error: errorMessage(error),
                     text:
                       error instanceof Error && "text" in error
