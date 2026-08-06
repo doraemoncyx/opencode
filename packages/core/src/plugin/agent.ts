@@ -171,8 +171,9 @@ export const Plugin = define({
             defaults,
             [
               { action: "*", resource: "*", effect: "deny" },
-              { action: "grep", resource: "*", effect: "allow" },
-              { action: "glob", resource: "*", effect: "allow" },
+              { action: "fff-mcp_find_files", resource: "*", effect: "allow" },
+              { action: "fff-mcp_grep", resource: "*", effect: "allow" },
+              { action: "fff-mcp_multi_grep", resource: "*", effect: "allow" },
               { action: "webfetch", resource: "*", effect: "allow" },
               { action: "websearch", resource: "*", effect: "allow" },
               { action: "read", resource: "*", effect: "allow" },

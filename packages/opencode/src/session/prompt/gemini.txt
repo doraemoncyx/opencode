@@ -132,7 +132,7 @@ I've written the tests. Now I'll run the project's test command to verify them.
 user: How do I update the user's profile information in this system?
 model:
 I'm not immediately sure how user profile information is updated. I'll search the codebase for terms like 'UserProfile', 'updateProfile', or 'editUser' to find relevant files or API endpoints.
-[tool_call: grep for pattern 'UserProfile|updateProfile|editUser']
+[tool_call: fff-mcp_grep for pattern 'UserProfile|updateProfile|editUser']
 (After reviewing search results, assuming a relevant file like '/path/to/UserProfileService.java' was found)
 Okay, \`/path/to/UserProfileService.java\` seems like the most relevant file. I'll read its content to understand how updates are handled.
 [tool_call: read for absolute_path '/path/to/UserProfileService.java']
