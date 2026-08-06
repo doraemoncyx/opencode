@@ -7,7 +7,6 @@ import { detectEncoding, type FileEncoding } from "@opencode-ai/core/util/encodi
 import { LSP } from "@/lsp/lsp"
 import DESCRIPTION from "./read.txt"
 import { InstanceState } from "@/effect/instance-state"
-import { assertExternalDirectoryEffect } from "./external-directory"
 import { Instruction } from "../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 
@@ -242,11 +241,6 @@ export const ReadTool = Tool.define<
           () => Effect.succeed(undefined),
         ),
       )
-
-      yield* assertExternalDirectoryEffect(ctx, filepath, {
-        bypass: Boolean(ctx.extra?.["bypassCwdCheck"]),
-        kind: stat?.type === "Directory" ? "directory" : "file",
-      })
 
       yield* ctx.ask({
         permission: "read",
