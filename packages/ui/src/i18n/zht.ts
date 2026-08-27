@@ -212,8 +212,11 @@ export const dict = {
   "ui.tool.task": "任務",
   "ui.tool.skill": "技能",
   "ui.basicTool.called": "呼叫了 `{{tool}}`",
+  "ui.basicTool.parameters": "參數",
   "ui.toolErrorCard.failed": "失敗",
   "ui.toolErrorCard.copyError": "複製錯誤",
   "ui.message.duration.seconds": "{{count}}秒",
   "ui.message.duration.minutesSeconds": "{{minutes}}分 {{seconds}}秒",
+  "ui.message.tokens.ttft": "ttft {{value}} 秒",
+  "ui.message.tokens.tps": "平均 {{value}} tps",
 } satisfies Partial<Record<Keys, string>>

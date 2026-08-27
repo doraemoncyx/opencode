@@ -1,4 +1,5 @@
 import { Formatter, Logger, type LogLevel } from "effect"
+import fs from "fs"
 import path from "path"
 import { Global } from "../global"
 import { runID } from "./shared"
@@ -48,7 +49,21 @@ function format(input: unknown) {
 
 export function fileLogger(file = path.join(Global.Path.log, "opencode.log"), id: string = runID) {
   // Do not set batchWindow to 0; it causes high idle CPU usage.
+  rotate(file)
   return Logger.toFile(formatter(id), file, { flag: "a" })
+}
+
+// 启动时按大小滚动日志，避免单个日志文件无限增长。
+function rotate(file: string) {
+  const maximum = 10 * 1024 * 1024
+  const retention = 7
+  if (!fs.existsSync(file) || fs.statSync(file).size < maximum) return
+  for (let index = retention - 1; index >= 1; index--) {
+    const source = `${file}.${index}`
+    const target = `${file}.${index + 1}`
+    if (fs.existsSync(source)) fs.renameSync(source, target)
+  }
+  fs.renameSync(file, `${file}.1`)
 }
 
 const stderrLogger = Logger.make((options) => process.stderr.write(formatter().log(options) + "\n"))

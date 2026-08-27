@@ -117,10 +117,16 @@ function createServerCtx(
       ? sync.data.project.find((x) => x.id === projectID)
       : sync.data.project.find((x) => x.worktree === project.worktree)
 
+    // Projects without a server identity ("global" or not yet discovered) keep their
+    // per-directory name/icon/commands only in localStorage (projectMeta). Projects with
+    // a real server identity use the server as the source of truth.
+    const base =
+      metadata && metadata.id !== "global"
+        ? { ...metadata, ...project }
+        : { ...metadata, ...childStore.projectMeta, ...project }
     // Preserve local icon override from per-workspace localStorage cache (childStore.icon).
     // Without this, different subdirectories of the same git repo would share the same
     // icon from the database instead of using their individual overrides.
-    const base = { ...metadata, ...project }
     if (childStore.icon) {
       return { ...base, icon: { ...base.icon, override: childStore.icon } }
     }

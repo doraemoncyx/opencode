@@ -381,6 +381,51 @@ describe("EditTool", () => {
     ),
   )
 
+  it.live("preserves CR (old Mac) line endings for new lines", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const target = path.join(tmp.path, "cr.txt")
+        return Effect.promise(() => fs.writeFile(target, "alpha\rbeta\rgamma\r")).pipe(
+          Effect.andThen(
+            withTool(tmp.path, (registry) =>
+              executeTool(registry, call({ path: "cr.txt", oldString: "beta", newString: "beta1\nbeta2" })),
+            ),
+          ),
+          Effect.andThen(() => Effect.promise(() => fs.readFile(target, "utf8"))),
+          Effect.tap((content) =>
+            Effect.sync(() => {
+              expect(content).toBe("alpha\rbeta1\rbeta2\rgamma\r")
+              expect(content).not.toContain("\n")
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("uses the dominant line ending for new lines and preserves existing endings in mixed files", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const target = path.join(tmp.path, "mixed.txt")
+        return Effect.promise(() => fs.writeFile(target, "alpha\r\nbeta\r\ngamma\n")).pipe(
+          Effect.andThen(
+            withTool(tmp.path, (registry) =>
+              executeTool(registry, call({ path: "mixed.txt", oldString: "beta", newString: "beta1\nbeta2" })),
+            ),
+          ),
+          Effect.andThen(() => Effect.promise(() => fs.readFile(target, "utf8"))),
+          Effect.tap((content) => Effect.sync(() => expect(content).toBe("alpha\r\nbeta1\r\nbeta2\r\ngamma\n"))),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
   it.live("rejects an in-place content change after matching but before conditional commit", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

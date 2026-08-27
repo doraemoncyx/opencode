@@ -368,6 +368,52 @@
   }
 }
 
+[data-component="tool-input"] {
+  white-space: pre;
+  padding: 0;
+  margin-bottom: 8px;
+  height: fit-content;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+
+  [data-slot="tool-input-label"] {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--text-text-weak);
+    margin-bottom: 4px;
+  }
+
+  [data-slot="tool-input-json"] {
+    margin: 0;
+    padding: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-text-weak);
+    background: var(--v2-background-bg-transparent, var(--text-text-weaker, transparent));
+    border: 0.5px solid var(--v2-border-border-base);
+    border-radius: 6px;
+    overflow: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+
+    &::-webkit-scrollbar {
+      display: none;
+    }
+  }
+
+  &[data-scrollable] {
+    max-height: 240px;
+    overflow-y: auto;
+  }
+}
+
 [data-component="bash-output"] {
   direction: ltr;
   unicode-bidi: isolate;

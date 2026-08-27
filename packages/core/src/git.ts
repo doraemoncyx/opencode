@@ -2,7 +2,7 @@ export * as Git from "./git"
 
 import path from "path"
 import { randomUUID } from "crypto"
-import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Schedule, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { AbsolutePath, RelativePath } from "./schema"
 import { FSUtil } from "./fs-util"
@@ -180,6 +180,10 @@ const layer = Layer.effect(
     const locks = KeyedMutex.makeUnsafe<string>()
     const locked = <A, E, R>(repository: Repository, effect: Effect.Effect<A, E, R>) =>
       locks.withLock(repository.gitDirectory)(effect)
+
+    // Git 锁通常是短暂并发冲突，退避重试后再交给上层 best-effort 处理。
+    const captureWithRetry = <A>(effect: Effect.Effect<A, OperationError>) =>
+      effect.pipe(Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 2 }))
 
     const discover = Effect.fn("Git.repo.discover")(function* (input: AbsolutePath) {
       const dotgit = yield* fs.up({ targets: [".git"], start: input }).pipe(
@@ -540,12 +544,14 @@ const layer = Layer.effect(
       }) =>
         locked(
           input.repository,
-          Effect.gen(function* () {
-            yield* Effect.forEach(input.scopes, (scope) => refresh({ ...input, scope }), { discard: true })
-            return yield* writeTree(input.repository)
-          }),
+          captureWithRetry(
+            Effect.gen(function* () {
+              yield* Effect.forEach(input.scopes, (scope) => refresh({ ...input, scope }), { discard: true })
+              return yield* writeTree(input.repository)
+            }),
+          ),
         ),
-    )
+      )
 
     const treeFiles = Effect.fn("Git.tree.files")(function* (input: {
       repository: Repository

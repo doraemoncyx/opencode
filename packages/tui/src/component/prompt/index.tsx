@@ -13,6 +13,8 @@ import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, S
 import { registerOpencodeSpinner } from "../register-spinner"
 import path from "path"
 import { fileURLToPath } from "url"
+import { Effect, ManagedRuntime } from "effect"
+import * as Observability from "@opencode-ai/core/observability"
 import { useLocal } from "../../context/local"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { tint, useTheme } from "../../context/theme"
@@ -37,7 +39,7 @@ import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { AssistantMessage, FilePart, UserMessage } from "@opencode-ai/sdk/v2"
+import type { AssistantMessage, FilePart, ReasoningPart, TextPart, ToolPart, UserMessage } from "@opencode-ai/sdk/v2"
 import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
@@ -57,6 +59,7 @@ import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
 import { useLocation } from "../../context/location"
+import { reasoningSummary } from "../../context/thinking"
 
 registerOpencodeSpinner()
 
@@ -112,6 +115,14 @@ function fadeColor(color: RGBA, alpha: number) {
   return RGBA.fromValues(color.r, color.g, color.b, color.a * alpha)
 }
 
+// 运行中工具的状态栏文案：优先用 server 提供的 title，否则用 bash 命令首行
+function runningToolLabel(part: ToolPart) {
+  const command = part.state.input.command
+  const cmd = typeof command === "string" && command.trim() ? command.trim().split("\n")[0] : undefined
+  const detail = "title" in part.state ? part.state.title : undefined
+  return (detail ?? cmd) ? `Running ${part.tool}: ${detail ?? cmd}` : `Running ${part.tool}`
+}
+
 function hasEditorRangeSelection(selection: EditorSelection["ranges"][number]) {
   return (
     selection.selection.start.line !== selection.selection.end.line ||
@@ -161,6 +172,58 @@ export function Prompt(props: PromptProps) {
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+
+  // 推导 agent 此刻在做什么：区分等 shell（工具运行中）vs 等 api（模型生成中）
+  const activity = createMemo<{ label: string; since?: number; queued: number } | undefined>(() => {
+    if (sync.data.session_status?.[props.sessionID ?? ""]?.type !== "busy") return
+    const sessionID = props.sessionID
+    if (!sessionID) return
+    const messages = sync.data.message[sessionID]
+    if (!messages?.length) return { label: "Working", queued: 0 }
+
+    const pendingIndex = messages.findLastIndex((m) => m.role === "assistant" && !m.time.completed)
+    if (pendingIndex === -1) return { label: "Working", queued: 0 }
+    const queued = messages.filter((m, index) => index > pendingIndex && m.role === "user").length
+    const pending = messages[pendingIndex]
+    const parts = sync.data.part[pending.id] ?? []
+
+    for (let index = parts.length - 1; index >= 0; index--) {
+      const part = parts[index]
+      if (part.type !== "tool") continue
+      if (part.state.status === "pending") {
+        return { label: `Queued ${part.tool}`, since: pending.time.created, queued }
+      }
+      if (part.state.status === "running") {
+        return { label: runningToolLabel(part), since: part.state.time.start, queued }
+      }
+    }
+
+    const last = parts[parts.length - 1]
+    if (last?.type === "reasoning" && last.time.end === undefined) {
+      const summary = reasoningSummary(last.text.replace("[REDACTED]", "").trim())
+      return { label: summary.title ? `Thinking: ${summary.title}` : "Thinking", since: last.time.start, queued }
+    }
+    if (last?.type === "text" && last.text.trim()) {
+      return { label: "Writing", since: last.time?.start ?? pending.time.created, queued }
+    }
+    return { label: "Waiting for model", since: pending.time.created, queued }
+  })
+
+  // 每秒 tick 一次：状态栏活动时长与 avg ttft/tps 实时刷新
+  const [now, setNow] = createSignal(Date.now())
+  onMount(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    onCleanup(() => clearInterval(timer))
+  })
+
+  const activityDisplay = createMemo(() => {
+    const item = activity()
+    if (!item) return
+    const parts = [item.label]
+    if (item.since !== undefined) parts.push(Locale.duration(now() - item.since))
+    if (item.queued > 0) parts.push(`${item.queued} queued`)
+    return parts.join(" · ")
+  })
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
@@ -279,6 +342,72 @@ export function Prompt(props: PromptProps) {
       context: pct ? `${Locale.number(tokens)} (${pct})` : Locale.number(tokens),
       cost: cost > 0 ? money.format(cost) : undefined,
     }
+  })
+
+  // 会话级平均指标：avg ttft（首个内容 token 到达耗时）与 avg tps（生成吞吐）
+  // tps 只统计实际生成的 token（output+reasoning），不含 input/cache。
+  // 分母改用 text/reasoning part 的实际生成时长（start→end），不含工具执行时间；
+  // 进行中的 part 用实时时钟估算，无 text/reasoning part 的消息回退到消息级时长。
+  const stats = createMemo(() => {
+    if (!props.sessionID) return
+    const messages = sync.data.message[props.sessionID]
+    if (!messages?.length) return
+    const currentMs = Math.max(Date.now(), now())
+
+    let totalTokens = 0
+    let totalMs = 0
+    const ttfts: number[] = []
+    const detail: string[] = []
+    for (const msg of messages) {
+      if (msg.role !== "assistant") continue
+      const created = msg.time?.created
+      if (typeof created !== "number") continue
+      const parts = sync.data.part[msg.id] ?? []
+      const completed = msg.time.completed
+      const done = completed !== undefined && completed > created
+
+      let genMs = 0
+      for (const part of parts) {
+        if (part.type !== "text" && part.type !== "reasoning") continue
+        const start = part.time?.start
+        if (typeof start !== "number") continue
+        const end = part.time?.end
+        genMs += typeof end === "number" && end > start ? end - start : Math.max(0, currentMs - start)
+      }
+      if (genMs <= 0) genMs = done ? completed - created : Math.max(0, currentMs - created)
+
+      // 完成的消息用权威 usage，进行中的消息用 part 实时文本估算，保证过程中也能实时刷新 tps
+      const gen = done
+        ? (msg.tokens?.output ?? 0) + (msg.tokens?.reasoning ?? 0)
+        : parts.reduce(
+            (sum, part) => (part.type === "text" || part.type === "reasoning" ? sum + estimateTokens(part.text) : sum),
+            0,
+          )
+      if (gen <= 0 || genMs <= 0) continue
+      totalTokens += gen
+      totalMs += genMs
+      detail.push(`${gen}/${genMs}`)
+      const first = parts.find(
+        (part): part is TextPart | ReasoningPart => part.type === "text" || part.type === "reasoning",
+      )
+      const start = first?.type === "reasoning" ? first.time.start : first?.time?.start
+      if (start !== undefined && start >= created) ttfts.push(start - created)
+    }
+    const tps = totalMs > 0 ? totalTokens / (totalMs / 1000) : undefined
+    logTpsStats(props.sessionID, tps, totalTokens, totalMs, detail)
+    return {
+      ttft: ttfts.length ? ttfts.reduce((a, b) => a + b, 0) / ttfts.length : undefined,
+      tps,
+    }
+  })
+
+  const statsDisplay = createMemo(() => {
+    const item = stats()
+    if (!item) return
+    const parts: string[] = []
+    if (item.ttft !== undefined) parts.push(`avg ttft ${Locale.duration(item.ttft)}`)
+    if (item.tps !== undefined && item.tps > 0) parts.push(`avg ${item.tps.toFixed(1)} tps`)
+    return parts.join(" · ")
   })
 
   const [store, setStore] = createStore<{
@@ -1584,6 +1713,15 @@ export function Prompt(props: PromptProps) {
                     })()}
                   </box>
                 </box>
+                <Show when={activityDisplay()}>
+                  {(text) => (
+                    <box flexGrow={1} minWidth={0}>
+                      <text fg={theme.textMuted} wrapMode="none" truncate>
+                        {text()}
+                      </text>
+                    </box>
+                  )}
+                </Show>
                 <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
                   esc{" "}
                   <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
@@ -1659,6 +1797,13 @@ export function Prompt(props: PromptProps) {
                   <text fg={editorContextLabelState() === "pending" ? theme.secondary : theme.textMuted}>{file()}</text>
                 )}
               </Show>
+              <Show when={statsDisplay()}>
+                {(text) => (
+                  <text fg={theme.textMuted} wrapMode="none" truncate>
+                    {text()}
+                  </text>
+                )}
+              </Show>
               <Switch>
                 <Match when={store.mode === "normal"}>
                   <Switch>
@@ -1713,4 +1858,32 @@ export function Prompt(props: PromptProps) {
       />
     </>
   )
+}
+
+let lastTpsLogAt = 0
+let lastTpsLog = ""
+const logRuntime = ManagedRuntime.make(Observability.layer)
+
+// 粗略估算文本 token 数：CJK 字符 1 字≈1 token，其余 ≈4 字符/token；用于进行中回合的实时 tps
+function estimateTokens(text: string) {
+  if (!text) return 0
+  let cjk = 0
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    if ((code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3000 && code <= 0x303f) || (code >= 0xff00 && code <= 0xffef))
+      cjk++
+  }
+  return cjk + Math.ceil((text.length - cjk) / 4)
+}
+
+// 仅在显式调试时记录 TPS，并避免相同统计信息持续刷屏。
+function logTpsStats(sessionID: string, tps: number | undefined, tokens: number, genMs: number, detail: string[]) {
+  if (process.env.OPENCODE_TPS_DEBUG !== "1") return
+  const at = Date.now()
+  const message = `tps-debug session=${sessionID} tps=${tps === undefined ? "n/a" : tps.toFixed(1)} tokens=${tokens} genMs=${genMs} parts=[${detail.join(",")}]`
+  if (message === lastTpsLog) return
+  if (at - lastTpsLogAt < 5000) return
+  lastTpsLogAt = at
+  lastTpsLog = message
+  logRuntime.runFork(Effect.logInfo(message))
 }

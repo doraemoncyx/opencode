@@ -17,8 +17,11 @@ const isWindowsPath = (value: string) => value[1] === ":" || value.startsWith("\
 
 export const pathKey = (path: string) => {
   const value = isWindowsPath(path) ? path.replaceAll("\\", "/") : path
-  const trimmed = trimTrailingSlashes(value)
-  if (!trimmed && value.startsWith("/")) return "/" as PathKey
+  // 归一化 Windows 盘符大小写，与服务端 FSUtil.resolve 的规范保持一致，
+  // 避免 f:\ 与 F:\ 因盘符大小写不同导致会话/项目路径匹配失败。
+  const normalized = value.replace(/^[a-zA-Z](?=:)/, (drive) => drive.toUpperCase())
+  const trimmed = trimTrailingSlashes(normalized)
+  if (!trimmed && normalized.startsWith("/")) return "/" as PathKey
   if (isDrive(trimmed)) return `${trimmed}/` as PathKey
   return trimmed as PathKey
 }

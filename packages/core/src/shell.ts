@@ -3,7 +3,7 @@ export * as Shell from "./shell"
 import path from "path"
 import { spawn, type ChildProcess } from "child_process"
 import { readFile } from "fs/promises"
-import { statSync } from "fs"
+import { accessSync, statSync } from "fs"
 import { setTimeout as sleep } from "node:timers/promises"
 import { Flag } from "./flag/flag"
 import { FSUtil } from "./fs-util"
@@ -60,7 +60,30 @@ export async function killTree(proc: ChildProcess, opts?: { exited?: () => boole
 }
 
 function stat(file: string) {
-  return statSync(file, { throwIfNoEntry: false }) ?? undefined
+  try {
+    return statSync(file, { throwIfNoEntry: false }) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+function accessible(file: string) {
+  try {
+    accessSync(file)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function windowsApp(file: string) {
+  const appData = process.env.LOCALAPPDATA
+  if (!appData) return
+  const alias = path.join(appData, "Microsoft", "WindowsApps", `${file}.exe`)
+  // Store-installed shells (e.g. pwsh) surface only as 0-byte App Execution
+  // Alias reparse points in WindowsApps that reject stat with EACCES, so `which`
+  // misses them even though they spawn fine; `access` still sees them.
+  if (accessible(alias)) return alias
 }
 
 function full(file: string) {
@@ -89,16 +112,23 @@ function rooted(file: string) {
 function resolve(file: string) {
   const shell = full(file)
   if (rooted(shell)) {
-    if (stat(shell)?.isFile()) return shell
+    const info = stat(shell)
+    if (info?.isFile()) return shell
+    if (!info && accessible(shell)) return shell
     return
   }
-  return which(shell) ?? undefined
+  return which(shell) ?? windowsApp(shell)
 }
 
 function win() {
   return Array.from(
     new Set(
-      [which("pwsh"), which("powershell"), gitbash(), process.env.COMSPEC || "cmd.exe"]
+      [
+        which("pwsh") ?? windowsApp("pwsh"),
+        which("powershell") ?? windowsApp("powershell"),
+        gitbash(),
+        process.env.COMSPEC || "cmd.exe",
+      ]
         .filter((item): item is string => Boolean(item))
         .map(full),
     ),

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
+import iconv from "iconv-lite"
 import path from "path"
 import fs from "fs/promises"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -171,6 +172,23 @@ describe("tool.edit", () => {
         const content = yield* loadRaw(filepath)
         expect(content.charCodeAt(0)).toBe(0xfeff)
         expect(content.slice(1)).toBe("using Up;\nclass Test {}\n")
+      }),
+    )
+
+    it.instance("keeps a GBK file in GBK when editing", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "gbk.txt")
+        yield* Effect.promise(() =>
+          fs.writeFile(filepath, Buffer.from(iconv.encode("// 中文注释\nconst value = 1\n", "gbk"))),
+        )
+
+        yield* run({ filePath: filepath, oldString: "const value = 1", newString: "const value = 2" })
+
+        const written = yield* Effect.promise(() => fs.readFile(filepath))
+        expect(
+          Buffer.from(written).equals(Buffer.from(iconv.encode("// 中文注释\nconst value = 2\n", "gbk"))),
+        ).toBe(true)
       }),
     )
 
@@ -521,6 +539,43 @@ describe("tool.edit", () => {
         })
         expect(output).toBe(normalize(blockNew + "\n" + blockNew + "\n", "\r\n"))
         expectCrlf(output)
+      }),
+    )
+
+    it.instance("preserves CR (old Mac) line endings for new lines", () =>
+      Effect.gen(function* () {
+        const content = "alpha\rbeta\rgamma\r"
+        const output = yield* apply({
+          content,
+          oldString: "beta",
+          newString: "beta1\nbeta2",
+        })
+        expect(output).toBe("alpha\rbeta1\rbeta2\rgamma\r")
+        expect(output).not.toContain("\n")
+      }),
+    )
+
+    it.instance("uses dominant CRLF for new lines and preserves existing LF lines in mixed files", () =>
+      Effect.gen(function* () {
+        const content = "alpha\r\nbeta\r\ngamma\n"
+        const output = yield* apply({
+          content,
+          oldString: "beta",
+          newString: "beta-updated\nextra",
+        })
+        expect(output).toBe("alpha\r\nbeta-updated\r\nextra\r\ngamma\n")
+      }),
+    )
+
+    it.instance("uses dominant LF for new lines and preserves existing CRLF lines in mixed files", () =>
+      Effect.gen(function* () {
+        const content = "alpha\nbeta\ngamma\r\n"
+        const output = yield* apply({
+          content,
+          oldString: "beta",
+          newString: "beta-updated\nextra",
+        })
+        expect(output).toBe("alpha\nbeta-updated\nextra\ngamma\r\n")
       }),
     )
   })

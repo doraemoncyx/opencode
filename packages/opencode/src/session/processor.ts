@@ -418,8 +418,15 @@ const layer = Layer.effect(
             return
           }
 
-          case "provider-error":
-            throw new Error(value.message)
+          case "provider-error": {
+            // Provider explicitly reported an error (via an error chunk /
+            // provider-error event). This is a deterministic result, not a
+            // stream interruption — do not auto-recover it. Tag the thrown
+            // error so isRecoverableStreamError can exclude it.
+            const error = new Error(value.message)
+            error.name = "ProviderError"
+            throw error
+          }
 
           case "step-start":
             if (!ctx.snapshot) ctx.snapshot = yield* snapshot.track()
@@ -632,44 +639,110 @@ const layer = Layer.effect(
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
-        return yield* Effect.gen(function* () {
-          yield* Effect.gen(function* () {
-            ctx.currentText = undefined
-            ctx.reasoningMap = {}
-            yield* status.set(ctx.sessionID, { type: "busy" })
-            const stream = llm.stream(streamInput)
+        // Broad auto-recovery: classify the stream failure via MessageV2 and
+        // retry by sending a "continue" user message for anything except the
+        // explicitly terminal cases. HTTP API errors (status codes) are kept
+        // on the existing halt path — a 4xx/5xx response is a deterministic
+        // request result, not a stream interruption, and the retry policy
+        // already handles transient 5xx/rate-limit cases. This covers AI SDK
+        // JSONParseError, plain gateway stream errors (e.g. "upstream stream
+        // error: error decoding response body"), and other transient
+        // decode/transport failures without enumerating strings.
+        const isRecoverableStreamError = (error: unknown) => {
+          if (error instanceof Error && error.name === "ProviderError") return false
+          const parsed = parse(error)
+          if (SessionV1.AbortedError.isInstance(parsed)) return false
+          if (SessionV1.AuthError.isInstance(parsed)) return false
+          if (SessionV1.ContextOverflowError.isInstance(parsed)) return false
+          if (SessionV1.OutputLengthError.isInstance(parsed)) return false
+          if (SessionV1.ContentFilterError.isInstance(parsed)) return false
+          if (SessionV1.StructuredOutputError.isInstance(parsed)) return false
+          if (SessionV1.APIError.isInstance(parsed)) return false
+          return true
+        }
 
-            yield* stream.pipe(
-              Stream.tap((event) => handleEvent(event)),
-              Stream.takeUntil(() => ctx.needsCompaction),
-              Stream.runDrain,
-            )
-          }).pipe(
+        let streamRecoveries = 0
+        const STREAM_RECOVERY_LIMIT = 3
+
+        const streamTurn = Effect.fn("SessionProcessor.streamTurn")(function* () {
+          ctx.currentText = undefined
+          ctx.reasoningMap = {}
+          yield* status.set(ctx.sessionID, { type: "busy" })
+          const stream = llm.stream(streamInput)
+          yield* stream.pipe(
+            Stream.tap((event) => handleEvent(event)),
+            Stream.takeUntil(() => ctx.needsCompaction),
+            Stream.runDrain,
+          )
+        })
+
+        const retryPolicy = SessionRetry.policy({
+          provider: input.model.providerID,
+          parse,
+          set: (info) => {
+            return status.set(ctx.sessionID, {
+              type: "retry",
+              attempt: info.attempt,
+              message: info.message,
+              action: info.action,
+              next: info.next,
+            })
+          },
+        })
+
+        // Re-run the LLM turn with a "continue" user message appended when the
+        // AI SDK fails to parse the provider's (empty/truncated) response body.
+        const runWithRecovery = (): Effect.Effect<void, unknown> =>
+          streamTurn().pipe(
+            Effect.catchCauseIf(
+              (cause) => !Cause.hasInterruptsOnly(cause),
+              (cause) => Effect.fail(Cause.squash(cause)),
+            ),
+            Effect.retry(retryPolicy),
+            Effect.catchIf(
+              (error) => isRecoverableStreamError(error) && streamRecoveries < STREAM_RECOVERY_LIMIT,
+              (error) =>
+                Effect.gen(function* () {
+                  streamRecoveries++
+                  // Finalize any partially emitted text part so it doesn't dangle.
+                  if (ctx.currentText) {
+                    const end = Date.now()
+                    ctx.currentText.time = { start: ctx.currentText.time?.start ?? end, end }
+                    yield* session.updatePart(ctx.currentText)
+                    ctx.currentText = undefined
+                  }
+                  yield* Effect.logWarning("llm stream interruption; recovering by sending continue", {
+                    "session.id": input.sessionID,
+                    messageID: input.assistantMessage.id,
+                    providerID: input.model.providerID,
+                    modelID: input.model.id,
+                    attempt: streamRecoveries,
+                    error: errorMessage(error),
+                    text:
+                      error instanceof Error && "text" in error
+                        ? JSON.stringify((error as { text?: unknown }).text)
+                        : undefined,
+                    cause:
+                      error instanceof Error && error.cause instanceof Error
+                        ? error.cause.message
+                        : error instanceof Error
+                          ? String(error.cause)
+                          : undefined,
+                  })
+                  streamInput.messages.push({ role: "user", content: "continue" })
+                  return runWithRecovery()
+                }),
+            ),
+          )
+
+        return yield* Effect.gen(function* () {
+          yield* runWithRecovery().pipe(
             Effect.onInterrupt(() =>
               Effect.gen(function* () {
                 aborted = true
                 if (!ctx.assistantMessage.error) {
                   yield* halt(new DOMException("Aborted", "AbortError"))
                 }
-              }),
-            ),
-            Effect.catchCauseIf(
-              (cause) => !Cause.hasInterruptsOnly(cause),
-              (cause) => Effect.fail(Cause.squash(cause)),
-            ),
-            Effect.retry(
-              SessionRetry.policy({
-                provider: input.model.providerID,
-                parse,
-                set: (info) => {
-                  return status.set(ctx.sessionID, {
-                    type: "retry",
-                    attempt: info.attempt,
-                    message: info.message,
-                    action: info.action,
-                    next: info.next,
-                  })
-                },
               }),
             ),
             Effect.catch(halt),

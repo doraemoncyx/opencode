@@ -1,6 +1,5 @@
 import { Effect, Stream } from "effect"
 import os from "os"
-import { createWriteStream } from "node:fs"
 import * as Tool from "./tool"
 import path from "path"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -13,6 +12,7 @@ import { fileURLToPath } from "url"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Shell } from "@opencode-ai/core/shell"
+import { decodeShellOutput } from "@opencode-ai/core/util/encoding"
 import { ShellID } from "./shell/id"
 
 import * as Truncate from "./truncate"
@@ -74,11 +74,6 @@ type Scan = {
   dirs: Set<string>
   patterns: Set<string>
   always: Set<string>
-}
-
-type Chunk = {
-  text: string
-  size: number
 }
 
 const resolveWasm = (asset: string) => {
@@ -436,41 +431,12 @@ export const ShellTool = Tool.define(
       ctx: Tool.Context,
     ) {
       const limits = yield* trunc.limits()
-      const keep = limits.maxBytes * 2
-      let full = ""
+      let fullBytes = Buffer.alloc(0)
       let last = ""
-      const list: Chunk[] = []
-      let used = 0
       let file = ""
-      let sink: ReturnType<typeof createWriteStream> | undefined
       let cut = false
       let expired = false
       let aborted = false
-
-      const closeSink = Effect.fnUntraced(function* () {
-        const stream = sink
-        if (!stream) return
-        sink = undefined
-        if (stream.destroyed || stream.closed) return
-        yield* Effect.promise(
-          () =>
-            new Promise<void>((resolve) => {
-              let settled = false
-              const done = () => {
-                if (settled) return
-                settled = true
-                stream.off("close", done)
-                stream.off("error", done)
-                stream.off("finish", done)
-                resolve()
-              }
-              stream.once("close", done)
-              stream.once("error", done)
-              stream.once("finish", done)
-              stream.end(done)
-            }),
-        ).pipe(Effect.catch(() => Effect.void))
-      })
 
       yield* ctx.metadata({
         metadata: {
@@ -480,53 +446,12 @@ export const ShellTool = Tool.define(
 
       const code: number | null = yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* Effect.addFinalizer(closeSink)
           const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
 
           yield* Effect.forkScoped(
-            Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {
-              const size = Buffer.byteLength(chunk, "utf-8")
-              list.push({ text: chunk, size })
-              used += size
-              while (used > keep && list.length > 1) {
-                const item = list.shift()
-                if (!item) break
-                used -= item.size
-                cut = true
-              }
-
-              last = preview(last + chunk)
-
-              if (file) {
-                sink?.write(chunk)
-              } else {
-                full += chunk
-                if (Buffer.byteLength(full, "utf-8") > limits.maxBytes) {
-                  return trunc.write(full).pipe(
-                    Effect.andThen((next) =>
-                      Effect.sync(() => {
-                        file = next
-                        cut = true
-                        sink = createWriteStream(next, { flags: "a" })
-                        full = ""
-                      }),
-                    ),
-                    Effect.andThen(
-                      ctx.metadata({
-                        metadata: {
-                          output: last,
-                        },
-                      }),
-                    ),
-                  )
-                }
-              }
-
-              return ctx.metadata({
-                metadata: {
-                  output: last,
-                },
-              })
+            Stream.runForEach(handle.all, (chunk) => {
+              fullBytes = Buffer.concat([fullBytes, Buffer.from(chunk)])
+              return Effect.void
             }),
           )
 
@@ -565,10 +490,10 @@ export const ShellTool = Tool.define(
         )
       }
       if (aborted) meta.push("User aborted the command")
-      const raw = list.map((item) => item.text).join("")
+      const raw = decodeShellOutput(fullBytes)
       const end = tail(raw, limits.maxLines, limits.maxBytes)
       if (end.cut) cut = true
-      if (!file && end.cut) {
+      if (end.cut) {
         file = yield* trunc.write(raw)
       }
 
@@ -582,10 +507,11 @@ export const ShellTool = Tool.define(
       if (meta.length > 0) {
         output += "\n\n<shell_metadata>\n" + meta.join("\n") + "\n</shell_metadata>"
       }
+      last = preview(output)
       return {
         title: input.command,
         metadata: {
-          output: last || preview(output),
+          output: last,
           exit: code,
           truncated: cut,
           ...(cut && file ? { outputPath: file } : {}),

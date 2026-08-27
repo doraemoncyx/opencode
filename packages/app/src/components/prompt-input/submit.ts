@@ -399,6 +399,17 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     }
 
     let session = input.info()
+    if (!session && params.id) {
+      try {
+        session = await serverSync().session.resolve(params.id)
+      } catch (err) {
+        showToast({
+          title: language.t("prompt.toast.promptSendFailed.title"),
+          description: errorMessage(err),
+        })
+        return
+      }
+    }
     if (!session && isNewSession) {
       const created = await sdk()
         .api.session.create({

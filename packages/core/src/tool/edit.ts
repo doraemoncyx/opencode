@@ -18,6 +18,7 @@ import { PermissionV2 } from "../permission"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { detectEncoding, decodeText, encodeText } from "../util/encoding"
 
 export const name = "edit"
 
@@ -39,17 +40,34 @@ export const Output = Schema.Struct({
 })
 export type Output = typeof Output.Type
 
-const normalizeLineEndings = (text: string) => text.replaceAll("\r\n", "\n")
-const detectLineEnding = (text: string): "\n" | "\r\n" => (text.includes("\r\n") ? "\r\n" : "\n")
-const convertToLineEnding = (text: string, ending: "\n" | "\r\n") =>
-  ending === "\n" ? normalizeLineEndings(text) : normalizeLineEndings(text).replaceAll("\n", "\r\n")
+type LineEnding = "\n" | "\r\n" | "\r"
+
+const normalizeLineEndings = (text: string) => text.replaceAll("\r\n", "\n").replaceAll("\r", "\n")
+
+// 统计 \r\n / 孤立 \r / 孤立 \n 的个数，取多数派作为文件行尾；全为 0 或平局时默认 \r\n
+const detectLineEnding = (text: string): LineEnding => {
+  const crlf = text.match(/\r\n/g)?.length ?? 0
+  const cr = (text.match(/\r/g)?.length ?? 0) - crlf
+  const lf = (text.match(/\n/g)?.length ?? 0) - crlf
+  if (crlf >= cr && crlf >= lf) return "\r\n"
+  if (cr >= lf) return "\r"
+  return "\n"
+}
+
+const convertToLineEnding = (text: string, ending: LineEnding) => {
+  const normalized = normalizeLineEndings(text)
+  if (ending === "\n") return normalized
+  return normalized.replaceAll("\n", ending)
+}
 
 const splitBom = (text: string) =>
   text.startsWith("\uFEFF") ? { bom: true, text: text.slice(1) } : { bom: false, text }
 const joinBom = (text: string, bom: boolean) => (bom ? `\uFEFF${text}` : text)
-const decodeUtf8 = (content: Uint8Array) => {
+const readFile = (content: Uint8Array) => {
+  const encoding = detectEncoding(content)
   const bom = content[0] === 0xef && content[1] === 0xbb && content[2] === 0xbf
-  return { bom, content, text: new TextDecoder().decode(bom ? content.slice(3) : content) }
+  const bytes = bom ? content.slice(3) : content
+  return { bom, encoding, content, text: decodeText(bytes, encoding) }
 }
 
 const countOccurrences = (content: string, search: string) => {
@@ -158,7 +176,7 @@ const layer = Layer.effectDiscard(
                     source: permissionSource,
                   }),
                 )
-                const source = decodeUtf8(yield* unableToEdit(fs.readFile(target.canonical)))
+                const source = readFile(yield* unableToEdit(fs.readFile(target.canonical)))
                 const ending = detectLineEnding(source.text)
                 const oldString = convertToLineEnding(input.oldString, ending)
                 const newString = convertToLineEnding(input.newString, ending)
@@ -192,7 +210,10 @@ const layer = Layer.effectDiscard(
                   files.writeIfUnchanged({
                     target,
                     expected: source.content,
-                    content: joinBom(next.text, source.bom || next.bom),
+                    content:
+                      source.encoding === "gbk"
+                        ? encodeText(joinBom(next.text, source.bom || next.bom), "gbk")
+                        : joinBom(next.text, source.bom || next.bom),
                   }),
                 )
                 return {

@@ -33,6 +33,7 @@ const promptInputs: unknown[] = []
 const sentCommands: unknown[] = []
 const commands: Array<{ name: string }> = []
 let serverSessionSyncs = 0
+let resolvedSession: { id: string; title?: string } | undefined
 
 let params: { id?: string } = {}
 let search: { draftId?: string } = {}
@@ -236,6 +237,10 @@ beforeAll(async () => {
     useServerSync: () => () => ({
       session: {
         remember: () => undefined,
+        resolve: async () => {
+          if (!resolvedSession) throw new Error("Session not found")
+          return resolvedSession
+        },
         set: () => undefined,
         sync: async () => {
           serverSessionSyncs++
@@ -301,6 +306,7 @@ beforeEach(() => {
   permissionServer = "server-a"
   createSessionGate = undefined
   serverSessionSyncs = 0
+  resolvedSession = undefined
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
 })
 
@@ -594,5 +600,33 @@ describe("prompt submit worktree selection", () => {
     expect(storedSessions["/repo/worktree-a"]).toHaveLength(1)
     expect(storedSessions["/repo/worktree-a"]?.[0]).toMatchObject({ id: "session-1", title: "New session 1" })
     expect(optimisticSeeded).toEqual([true])
+  })
+})
+
+describe("prompt submit session recovery", () => {
+  test("resolves an existing routed session when local cache is empty", async () => {
+    params = { id: "session-existing" }
+    resolvedSession = { id: "session-existing", title: "Existing session" }
+
+    const submit = createPromptSubmit({
+      prompt,
+      info: () => undefined,
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "shell",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+
+    expect(sentShell).toEqual([expect.objectContaining({ sessionID: "session-existing", command: "ls" })])
   })
 })
