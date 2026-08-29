@@ -198,6 +198,12 @@ function forceClose(state: ListenerState) {
 
 function serverLayer(opts: { port: number; hostname: string }) {
   const server = createServer()
+  // Drop idle keep-alive connections so a silently-disconnected client (e.g. a
+  // killed browser tab) doesn't leave a lingering CLOSE_WAIT/FIN_WAIT socket
+  // behind. SSE responses write continuously, so these idle timeouts never
+  // interfere with active streams.
+  server.keepAliveTimeout = 5_000
+  server.headersTimeout = 10_000
   const serverRef = { closeStarted: false, forceStop: false }
   const close = server.close.bind(server)
   // Keep shutdown owned by NodeHttpServer, but honor listener.stop(true) by

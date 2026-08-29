@@ -19,6 +19,15 @@ export const ServeCommand = effectCmd({
     const server = yield* Effect.promise(() => Server.listen(opts))
     console.log(`opencode server listening on http://${server.hostname}:${server.port}`)
 
+    // Graceful shutdown: close the listener (and force-close active SSE /
+    // WebSocket connections via stop(true)) instead of leaving orphaned
+    // sockets in the kernel's TCP table when the process is interrupted.
+    const shutdown = () => {
+      void server.stop(true).finally(() => process.exit(0))
+    }
+    process.once("SIGINT", shutdown)
+    process.once("SIGTERM", shutdown)
+
     yield* Effect.never
   }),
 })

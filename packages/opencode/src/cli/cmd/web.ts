@@ -43,6 +43,14 @@ export const WebCommand = effectCmd({
     const opts = yield* resolveNetworkOptions(args)
     const server = yield* Effect.promise(() => Server.listen(opts))
     UI.empty()
+
+    // Graceful shutdown: force-close active SSE / WebSocket connections so the
+    // OS TCP table doesn't retain orphaned sockets after the process exits.
+    const shutdown = () => {
+      void server.stop(true).finally(() => process.exit(0))
+    }
+    process.once("SIGINT", shutdown)
+    process.once("SIGTERM", shutdown)
     UI.println(UI.logo("  "))
     UI.empty()
 
