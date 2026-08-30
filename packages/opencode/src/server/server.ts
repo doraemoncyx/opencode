@@ -206,13 +206,36 @@ function serverLayer(opts: { port: number; hostname: string }) {
   server.headersTimeout = 10_000
   const serverRef = { closeStarted: false, forceStop: false }
   const close = server.close.bind(server)
+  // Track upgraded sockets (WebSocket/upgrade requests) explicitly.
+  // server.closeAllConnections() does NOT close upgraded connections (see
+  // nodejs/node#53536): they never enter the http ConnectionList. Closing the
+  // server without destroying them leaves CLOSE_WAIT sockets behind that keep
+  // the listening port busy (EADDRINUSE on the next bind) even after the
+  // process exits. Keep a side set so stop(true) can destroy them directly.
+  const upgraded = new Set<import("node:stream").Duplex>()
+  server.on("upgrade", (request, socket) => {
+    upgraded.add(socket)
+    socket.on("close", () => upgraded.delete(socket))
+  })
+  // closeAllConnections was added in Node 18.2; guard it so an older runtime
+  // can't throw mid-shutdown and silently leave sockets open (a thrown error
+  // here would be swallowed by the .pipe(Effect.ignore) callers upstream).
+  const destroyAllConnections = () => {
+    try {
+      if (typeof server.closeAllConnections === "function") server.closeAllConnections()
+    } catch {
+      // best-effort; upstream shutdown handlers ignore errors anyway
+    }
+    for (const socket of upgraded) socket.destroy()
+    upgraded.clear()
+  }
   // Keep shutdown owned by NodeHttpServer, but honor listener.stop(true) by
   // force-closing active HTTP sockets when its finalizer calls server.close().
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- Node's overloads don't preserve a monkey-patched method assignment.
   server.close = ((callback?: Parameters<typeof server.close>[0]) => {
     serverRef.closeStarted = true
     const result = close(callback)
-    if (serverRef.forceStop) server.closeAllConnections()
+    if (serverRef.forceStop) destroyAllConnections()
     return result
   }) as typeof server.close
 
@@ -222,7 +245,7 @@ function serverLayer(opts: { port: number; hostname: string }) {
       ListenerServerService.of({
         closeAll: Effect.sync(() => {
           serverRef.forceStop = true
-          if (serverRef.closeStarted) server.closeAllConnections()
+          destroyAllConnections()
         }),
       }),
     ),

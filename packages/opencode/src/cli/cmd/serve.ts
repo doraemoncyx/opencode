@@ -22,11 +22,22 @@ export const ServeCommand = effectCmd({
     // Graceful shutdown: close the listener (and force-close active SSE /
     // WebSocket connections via stop(true)) instead of leaving orphaned
     // sockets in the kernel's TCP table when the process is interrupted.
+    // stop(true) is wrapped in a timeout so a stuck force-close can never
+    // prevent the process from exiting — otherwise a lingering CLOSE_WAIT /
+    // LISTENING socket keeps the port busy (EADDRINUSE) after the process is
+    // supposed to be gone.
     const shutdown = () => {
-      void server.stop(true).finally(() => process.exit(0))
+      void server
+        .stop(true)
+        .catch(() => undefined)
+        .finally(() => process.exit(0))
+      // Hard deadline: if stop(true) hasn't settled in 3s, exit anyway so the
+      // port is released by the OS rather than stranded on a hung shutdown.
+      setTimeout(() => process.exit(0), 3_000).unref()
     }
     process.once("SIGINT", shutdown)
     process.once("SIGTERM", shutdown)
+    process.once("SIGHUP", shutdown)
 
     yield* Effect.never
   }),
