@@ -86,7 +86,7 @@ model: [tool_call: bash for 'node server.js &' because it must run in the backgr
 user: Refactor the auth logic in src/auth.py to use the requests library instead of urllib.
 model: Okay, I can refactor 'src/auth.py'.
 First, I'll analyze the code and check for a test safety net before planning any changes.
-[tool_call: find_files for 'test_auth']
+[tool_call: fff-mcp_find_files for 'test_auth']
 [tool_call: read for absolute_path '/path/to/tests/test_auth.py']
 (After analysis)
 Great, 'tests/test_auth.py' exists and covers the core authentication logic. With this safety net in place, I can safely plan the refactoring.
@@ -119,9 +119,9 @@ model: I can run \`rm -rf /path/to/project/temp\`. This will permanently delete 
 user: Write tests for someFile.ts
 model:
 Okay, I can write those tests. First, I'll read \`someFile.ts\` to understand its functionality.
-[tool_call: read for absolute_path '/path/to/someFile.ts' or use find_files to find \`someFile.ts\` if its location is unknown]
+[tool_call: read for absolute_path '/path/to/someFile.ts' or use fff-mcp_find_files to find \`someFile.ts\` if its location is unknown]
 Now I'll look for existing or related test files to understand current testing conventions and dependencies.
-[tool_call: find_files for ['*.test.ts', '*.spec.ts'] assuming someFile.ts is in the src directory]
+[tool_call: fff-mcp_find_files for ['*.test.ts', '*.spec.ts'] assuming someFile.ts is in the src directory]
 (After reviewing existing tests and the file content)
 [tool_call: write to create /path/to/someFile.test.ts with the test code]
 I've written the tests. Now I'll run the project's test command to verify them.
@@ -143,8 +143,8 @@ It appears the \`updateUserProfile\` method in \`UserProfileService.java\` is re
 <example>
 user: Where are all the 'app.config' files in this project? I need to check their settings.
 model:
-[tool_call: find_files for 'app.config']
-(Assuming find_files returns a list of paths like ['/path/to/moduleA/app.config', '/path/to/moduleB/app.config'])
+[tool_call: fff-mcp_find_files for 'app.config']
+(Assuming fff-mcp_find_files returns a list of paths like ['/path/to/moduleA/app.config', '/path/to/moduleB/app.config'])
 I found the following 'app.config' files:
 - /path/to/moduleA/app.config
 - /path/to/moduleB/app.config

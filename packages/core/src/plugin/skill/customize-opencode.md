@@ -410,7 +410,7 @@ rules last.
 `permission: "allow"` (a string at the top level) is shorthand for "allow
 everything" and is rarely what the user wants.
 
-Known permission keys: `read, edit, glob, grep, list, bash, task,
+Known permission keys: `read, edit, fff-mcp_find_files, fff-mcp_grep, fff-mcp_multi_grep, list, bash, task,
 external_directory, todowrite, question, webfetch, websearch, lsp, doom_loop,
 skill`. Some of these (`todowrite,
 question, webfetch, websearch, doom_loop`) only accept a flat

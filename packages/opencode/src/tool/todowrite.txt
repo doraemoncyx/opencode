@@ -33,7 +33,7 @@ Skip when:
 
 Use it:
 - "Add a dark mode toggle and run the tests" -> multi-step feature + explicit verification
-- "Rename getCwd -> getCurrentWorkingDirectory across the repo" -> grep reveals 15 occurrences in 8 files
+- "Rename getCwd -> getCurrentWorkingDirectory across the repo" -> fff-mcp_grep reveals 15 occurrences in 8 files
 - "Implement registration, catalog, cart, checkout" -> multiple complex features
 
 Skip it:

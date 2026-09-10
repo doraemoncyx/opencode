@@ -210,8 +210,8 @@ export function translationConfig(agent: string, model: string, targets: string[
         permission: {
           "*": "deny" as const,
           read: "allow" as const,
-          glob: "allow" as const,
-          grep: "allow" as const,
+          "fff-mcp_find_files": "allow" as const,
+          "fff-mcp_grep": "allow" as const,
           webfetch: "allow" as const,
           websearch: "allow" as const,
           edit: Object.fromEntries([["*", "deny"], ...targets.map((target) => [target, "allow"])]),

@@ -20,5 +20,5 @@ Requirements:
 - If maintained target-language corpora are sparse or disagree, choose conservative wording and identify the uncertain terms in the final response instead of inventing terminology.
 - Apply the locale glossary included in the request.
 - `ui.sessionTurn.diffs.changed.one` and `ui.sessionTurn.diffs.changed.other` are complete count phrases. Preserve `{{count}}` and translate the whole phrase naturally rather than composing translated fragments.
-- Use only read, glob, grep, webfetch, websearch, and edit tools. Do not run commands or delegate work.
+- Use only read, fff-mcp_find_files, fff-mcp_grep, webfetch, websearch, and edit tools. Do not run commands or delegate work.
 - Finish only when every requested key is synchronized and no other file has changed.

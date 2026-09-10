@@ -121,7 +121,7 @@ const layer = Layer.effect(
         if (fffStatus?.status !== "connected") {
           yield* Effect.die(
             `MCP server "fff-mcp" is not connected (status: ${fffStatus?.status ?? "not found"}). ` +
-              `File search tools (find_files, grep, multi_grep) are unavailable. ` +
+              `File search tools (fff-mcp_find_files, fff-mcp_grep, fff-mcp_multi_grep) are unavailable. ` +
               `Please check your MCP configuration to ensure fff-mcp is running.`,
           )
         }
