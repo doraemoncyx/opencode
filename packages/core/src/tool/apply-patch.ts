@@ -13,6 +13,7 @@ import { PermissionV2 } from "../permission"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { detectEncoding, decodeText, encodeText } from "../util/encoding"
 
 export const name = "apply_patch"
 
@@ -51,7 +52,7 @@ type Prepared =
   | (Extract<Patch.Hunk, { readonly type: "update" }> & {
       readonly target: LocationMutation.Target
       readonly source: Uint8Array
-      readonly content: string
+      readonly content: string | Uint8Array
       readonly before: string
       readonly after: string
     })
@@ -137,18 +138,24 @@ const layer = Layer.effectDiscard(
                     }
                     if ((yield* fs.stat(target.canonical)).type !== "File") yield* fail(hunk.path)
                     const source = yield* fs.readFile(target.canonical)
-                    const original = new TextDecoder("utf-8", { ignoreBOM: true }).decode(source)
-                    const before = original.replace(/^\uFEFF/, "")
+                    const encoding = detectEncoding(source)
+                    const before = decodeText(source, encoding).replace(/^\uFEFF/, "")
                     if (hunk.type === "delete") {
                       prepared.push({ ...hunk, target, before, after: "" })
                       return
                     }
-                    const update = Patch.derive(hunk.path, hunk.chunks, original)
+                    const update = Patch.derive(
+                      hunk.path,
+                      hunk.chunks,
+                      decodeText(source, encoding),
+                    )
                     prepared.push({
                       ...hunk,
                       target,
                       source,
-                      content: Patch.joinBom(update.content, update.bom),
+                      content: encoding === "gbk"
+                        ? encodeText(Patch.joinBom(update.content, update.bom), "gbk")
+                        : Patch.joinBom(update.content, update.bom),
                       before,
                       after: update.content,
                     })

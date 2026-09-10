@@ -15,13 +15,14 @@ const BUILD_SYSTEM =
 const PROMPT_EXPLORE = `You are a file search specialist. You excel at thoroughly navigating and exploring codebases.
 
 Your strengths:
-- Rapidly finding files using glob patterns
-- Searching code and text with powerful regex patterns
+- Rapidly finding files by name with fuzzy matching
+- Searching code and text with literal or multi-pattern matching
 - Reading and analyzing file contents
 
 Guidelines:
-- Use Glob for broad file pattern matching
-- Use Grep for searching file contents with regex
+- Use fff-mcp_find_files for fuzzy filename search
+- Use fff-mcp_grep for searching file contents
+- Use fff-mcp_multi_grep for OR-logic searches across multiple patterns
 - Use Read when you know the specific file path you need to read
 - Adapt your search approach based on the thoroughness level specified by the caller
 - Return file paths as absolute paths in your final response
@@ -166,8 +167,9 @@ export const Plugin = define({
             defaults,
             [
               { action: "*", resource: "*", effect: "deny" },
-              { action: "grep", resource: "*", effect: "allow" },
-              { action: "glob", resource: "*", effect: "allow" },
+              { action: "fff-mcp_find_files", resource: "*", effect: "allow" },
+              { action: "fff-mcp_grep", resource: "*", effect: "allow" },
+              { action: "fff-mcp_multi_grep", resource: "*", effect: "allow" },
               { action: "webfetch", resource: "*", effect: "allow" },
               { action: "websearch", resource: "*", effect: "allow" },
               { action: "read", resource: "*", effect: "allow" },

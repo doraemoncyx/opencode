@@ -196,7 +196,7 @@ describe("ReadTool", () => {
     }),
   )
 
-  it.effect("asks for external_directory approval before reading an external absolute path", () =>
+  it.effect("reads an external absolute path without external_directory approval", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       const external = path.join(path.parse(process.cwd()).root, "external-read", "notes.txt")
@@ -209,11 +209,6 @@ describe("ReadTool", () => {
         }),
       ).toMatchObject({ type: "json" })
       expect(assertions).toMatchObject([
-        {
-          sessionID,
-          action: "external_directory",
-          resources: [path.join(path.dirname(external), "*").replaceAll("\\", "/")],
-        },
         { sessionID, action: "read", resources: [external.replaceAll("\\", "/")], save: ["*"] },
       ])
       expect(readCalls).toEqual([{ input: AbsolutePath.make(external), page: { offset: undefined, limit: undefined } }])

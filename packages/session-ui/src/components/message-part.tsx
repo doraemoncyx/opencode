@@ -1651,6 +1651,13 @@ PART_MAPPING["compaction"] = function CompactionPartDisplay() {
   return <MessageDivider label={i18n.t("ui.messagePart.compaction")} />
 }
 
+// 估算文本 token 数：CJK 字符约 1 token/字符，其余约 4 字符/token（与 TUI 一致）。
+function estimateTokens(text: string) {
+  if (!text) return 0
+  const cjk = (text.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) ?? []).length
+  return cjk + Math.ceil((text.length - cjk) / 4)
+}
+
 PART_MAPPING["text"] = function TextPartDisplay(props) {
   const data = useData()
   const i18n = useI18n()
@@ -1689,6 +1696,50 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
     })
   })
 
+  const tokenStats = createMemo(() => {
+    if (props.message.role !== "assistant") return ""
+    const message = props.message as AssistantMessage
+    const created = message.time?.created
+    if (typeof created !== "number") return ""
+    const now = Date.now()
+    const parts = data.store.part?.[props.message.id] ?? []
+    const completed = message.time?.completed
+    const done = typeof completed === "number" && completed > created
+    const aPart: PartType | undefined = parts.find(
+      (item): item is TextPart | ReasoningPart => item.type === "text" || item.type === "reasoning",
+    )
+    const start = aPart?.type === "reasoning" ? aPart.time?.start : aPart?.type === "text" ? aPart.time?.start : undefined
+    let ttft: string | undefined
+    if (typeof start === "number" && start >= created) {
+      const total = Math.round((start - created) / 1000)
+      if (total > 0) ttft = i18n.t("ui.message.tokens.ttft", { value: numfmt().format(total) })
+    }
+
+    let genMs = 0
+    for (const item of parts) {
+      if (item.type !== "text" && item.type !== "reasoning") continue
+      const itemStart = (item.type === "reasoning" ? item.time?.start : item.time?.start) ?? 0
+      const itemEnd = (item.type === "reasoning" ? item.time?.end : item.time?.end) as number | undefined
+      genMs += typeof itemEnd === "number" && itemEnd > itemStart ? itemEnd - itemStart : Math.max(0, now - itemStart)
+    }
+    if (genMs <= 0) genMs = done ? completed - created : Math.max(0, now - created)
+
+    const gen = done
+      ? (message.tokens?.output ?? 0) + (message.tokens?.reasoning ?? 0)
+      : parts.reduce((sum, item) => {
+          if (item.type !== "text" && item.type !== "reasoning") return sum
+          return sum + estimateTokens(readPartText(data.store.part_text_accum_delta, item))
+        }, 0)
+
+    let tps: string | undefined
+    if (gen > 0 && genMs > 0) {
+      const value = gen / (genMs / 1000)
+      if (value > 0) tps = i18n.t("ui.message.tokens.tps", { value: value.toFixed(1) })
+    }
+
+    return [ttft, tps].filter((x): x is string => !!x).join(" \u00B7 ")
+  })
+
   const meta = createMemo(() => {
     if (props.message.role !== "assistant") return ""
     const agent = (props.message as AssistantMessage).agent
@@ -1696,6 +1747,7 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
       agent ? agent[0]?.toUpperCase() + agent.slice(1) : "",
       model(),
       duration(),
+      tokenStats(),
       interrupted() ? i18n.t("ui.message.interrupted") : "",
     ]
     return items.filter((x) => !!x).join(" \u00B7 ")
@@ -1734,6 +1786,11 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
         <div data-slot="text-part-body">
           <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} />
         </div>
+        <Show when={streaming() && props.message.role === "assistant" && isLastTextPart() && tokenStats()}>
+          <div data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
+            {tokenStats()}
+          </div>
+        </Show>
         <Show when={showCopy()}>
           <div data-slot="text-part-copy-wrapper" data-interrupted={interrupted() ? "" : undefined}>
             <MessageActionButton

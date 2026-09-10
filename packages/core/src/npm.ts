@@ -11,7 +11,6 @@ import { makeGlobalNode } from "./effect/app-node"
 import { filesystem } from "./effect/app-node-platform"
 import { LayerNode } from "./effect/layer-node"
 import { makeRuntime } from "./effect/runtime"
-import { NpmConfig } from "./npm-config"
 
 export class InstallFailedError extends Schema.TaggedErrorClass<InstallFailedError>()("NpmInstallFailedError", {
   add: Schema.Array(Schema.String).pipe(Schema.optional),
@@ -60,15 +59,6 @@ const resolveEntryPoint = (name: string, dir: string): EntryPoint => {
   }
 }
 
-interface ArboristNode {
-  name: string
-  path: string
-}
-
-interface ArboristTree {
-  edgesOut: Map<string, { to?: ArboristNode }>
-}
-
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -77,40 +67,34 @@ const layer = Layer.effect(
     const fs = yield* FileSystem.FileSystem
     const flock = yield* EffectFlock.Service
     const directory = (pkg: string) => path.join(global.cache, "packages", sanitize(pkg))
+    const initPkgJson = (dir: string) =>
+      Effect.gen(function* () {
+        const pj = path.join(dir, "package.json")
+        if (!(yield* afs.existsSafe(pj))) {
+          yield* fs.writeFile(pj, JSON.stringify({ private: true }))
+        }
+      })
     const reify = (input: { dir: string; add?: string[] }) =>
       Effect.gen(function* () {
         yield* flock.acquire(`npm-install:${input.dir}`)
-        const { Arborist } = yield* Effect.promise(() => import("@npmcli/arborist"))
         const add = input.add ?? []
-        const npmOptions = yield* NpmConfig.load(input.dir)
-        const arborist = new Arborist({
-          ...npmOptions,
-          path: input.dir,
-          binLinks: true,
-          progress: false,
-          savePrefix: "",
-          ignoreScripts: true,
+        yield* initPkgJson(input.dir)
+        const { spawn } = yield* Effect.promise(() => import("child_process"))
+        yield* Effect.async<void, InstallFailedError>((resume) => {
+          const child = spawn(
+            "npm",
+            ["install", ...add, "--no-audit", "--no-fund", "--ignore-scripts", "--prefer-offline"],
+            { cwd: input.dir, stdio: "ignore", env: { ...process.env } },
+          )
+          child.on("error", (err) =>
+            resume(Effect.fail(new InstallFailedError({ cause: err, add, dir: input.dir }))),
+          )
+          child.on("close", (code) => {
+            if (code === 0) resume(Effect.succeed(undefined))
+            else resume(Effect.fail(new InstallFailedError({ add, dir: input.dir })))
+          })
         })
-        return yield* Effect.tryPromise({
-          try: () =>
-            arborist.reify({
-              ...npmOptions,
-              add,
-              save: true,
-              saveType: "prod",
-            }),
-          catch: (cause) =>
-            new InstallFailedError({
-              cause,
-              add,
-              dir: input.dir,
-            }),
-        }) as Effect.Effect<ArboristTree, InstallFailedError>
-      }).pipe(
-        Effect.withSpan("Npm.reify", {
-          attributes: input,
-        }),
-      )
+      }).pipe(Effect.withSpan("Npm.reify", { attributes: input }))
 
     const add = Effect.fn("Npm.add")(function* (pkg: string) {
       const dir = directory(pkg)
@@ -126,14 +110,10 @@ const layer = Layer.effect(
         return resolveEntryPoint(name, path.join(dir, "node_modules", name))
       }
 
-      const tree = yield* reify({ dir, add: [pkg] })
-      const first = tree.edgesOut.values().next().value?.to
-      if (!first) {
-        const result = resolveEntryPoint(name, path.join(dir, "node_modules", name))
-        if (result.entrypoint) return result
-        return yield* new InstallFailedError({ add: [pkg], dir })
-      }
-      return resolveEntryPoint(first.name, first.path)
+      yield* reify({ dir, add: [pkg] })
+      const result = resolveEntryPoint(name, path.join(dir, "node_modules", name))
+      if (result.entrypoint) return result
+      return yield* new InstallFailedError({ add: [pkg], dir })
     }, Effect.scoped)
 
     const install: Interface["install"] = Effect.fn("Npm.install")(function* (dir, input) {

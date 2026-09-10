@@ -1,0 +1,47 @@
+/* OpenCode send-button 三态高亮 (v2)。基于 data-action="prompt-submit" 锚定，不依赖具体 class。 */
+button[data-action="prompt-submit"] {
+  background-image: none !important;
+  border-radius: 8px !important;
+}
+
+/* 禁用（空白输入，不可发送） */
+button[data-action="prompt-submit"]:disabled {
+  opacity: 0.32 !important;
+  cursor: not-allowed !important;
+  color: #596068 !important;
+  background-color: rgba(88, 94, 102, 0.18) !important;
+  box-shadow: none !important;
+  filter: grayscale(1);
+}
+
+/* 可发送（有内容，arrow-up / arrow-undo-down） */
+button[data-action="prompt-submit"]:not(:disabled)[data-icon="arrow-up"],
+button[data-action="prompt-submit"]:not(:disabled)[data-icon="arrow-undo-down"] {
+  color: #0b1016 !important;
+  background-color: #3b82f6 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35) !important;
+  cursor: pointer !important;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+button[data-action="prompt-submit"]:not(:disabled)[data-icon="arrow-up"]:hover,
+button[data-action="prompt-submit"]:not(:disabled)[data-icon="arrow-undo-down"]:hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+}
+
+/* 执行中（stop，点击停止） */
+button[data-action="prompt-submit"][data-icon="stop"]:not(:disabled) {
+  color: #ffffff !important;
+  background-color: #ef4444 !important;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.45), 0 1px 3px rgba(0, 0, 0, 0.35) !important;
+  cursor: pointer !important;
+  animation: oc-send-stop-pulse 1.4s ease-in-out infinite;
+}
+button[data-action="prompt-submit"][data-icon="stop"]:not(:disabled):hover {
+  filter: brightness(1.1);
+}
+
+@keyframes oc-send-stop-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.45), 0 1px 3px rgba(0, 0, 0, 0.35); }
+  50%      { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.22), 0 1px 3px rgba(0, 0, 0, 0.35); }
+}

@@ -7,6 +7,7 @@ import { FileSystem } from "../filesystem"
 import { FSUtil } from "../fs-util"
 import { makeLocationNode } from "../effect/app-node"
 import { AbsolutePath, PositiveInt, RelativePath } from "../schema"
+import { detectEncoding, decodeText, gbkTextDecoder } from "../util/encoding"
 
 export const MAX_READ_LINES = 2_000
 export const MAX_READ_BYTES = 50 * 1024
@@ -158,8 +159,6 @@ const decodeUtf8 = (resource: string, decoder: TextDecoder, bytes?: Uint8Array) 
       throw error
     },
   })
-const decodeChunk = (resource: string, decoder: TextDecoder, bytes: Uint8Array) =>
-  bytes.includes(0) ? Effect.fail(new BinaryFileError({ resource })) : decodeUtf8(resource, decoder, bytes)
 
 export const inspect = Effect.fn("ReadTool.inspect")(function* (fs: FSUtil.Interface, input: string) {
   const info = yield* fs.stat(input)
@@ -214,18 +213,28 @@ export const read = Effect.fn("ReadTool.read")(function* (
       const paged = info.size > MAX_READ_BYTES || page.offset !== undefined || page.limit !== undefined
       if (!paged) {
         if (binary(resource, first)) return yield* Effect.fail(new BinaryFileError({ resource }))
-        const decoder = new TextDecoder("utf-8", { fatal: true })
-        const text = [yield* decodeUtf8(resource, decoder, first)]
+        const chunks: Buffer[] = [Buffer.from(first)]
+        let total = first.length
         while (true) {
           const chunk = yield* file.readAlloc(64 * 1024)
           if (Option.isNone(chunk)) break
-          text.push(yield* decodeChunk(resource, decoder, chunk.value))
+          if (chunk.value.includes(0)) return yield* Effect.fail(new BinaryFileError({ resource }))
+          chunks.push(Buffer.from(chunk.value))
+          total += chunk.value.length
         }
-        text.push(yield* decodeUtf8(resource, decoder))
+        const all = Buffer.concat(chunks, total)
+        const encoding = detectEncoding(all)
+        const content = yield* Effect.try({
+          try: () => decodeText(all, encoding),
+          catch: (error) => {
+            if (error instanceof TypeError) return new MalformedUtf8Error({ resource })
+            throw error
+          },
+        })
         return {
           uri: pathToFileURL(real).href,
           name: path.basename(real),
-          content: text.join(""),
+          content,
           encoding: "utf8" as const,
           mime: FSUtil.mimeType(real),
         }
@@ -233,7 +242,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
       const offset = page.offset ?? 1
       const limit = Math.min(page.limit ?? MAX_READ_LINES, MAX_READ_LINES)
       const lines: string[] = []
-      const decoder = new TextDecoder("utf-8", { fatal: true })
+      const decoder = detectEncoding(first) === "gbk" ? gbkTextDecoder() : new TextDecoder("utf-8", { fatal: true })
       let pending = ""
       let discard = false
       let line = 1

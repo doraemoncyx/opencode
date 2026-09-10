@@ -1582,7 +1582,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   disabled={!working() && blank()}
                   tabIndex={store.mode === "normal" ? undefined : -1}
                   icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
-                  variant="primary"
+                  variant={!working() && blank() ? "ghost" : stopping() ? "secondary" : "primary"}
                   class="size-8"
                   aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
                 />

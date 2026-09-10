@@ -8,7 +8,7 @@ import type {
 } from "@opencode-ai/sdk/v2/client"
 import { showToast } from "@/utils/toast"
 import { getFilename } from "@opencode-ai/core/util/path"
-import { type Accessor, batch, createMemo, getOwner, onCleanup, onMount, untrack } from "solid-js"
+import { type Accessor, batch, createEffect, createMemo, getOwner, onCleanup, onMount, untrack } from "solid-js"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useLanguage } from "@/context/language"
 import type { InitError } from "../pages/error"
@@ -385,6 +385,23 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
     global: {
       provider: globalStore.provider,
     },
+  })
+
+  // Cache the server-resolved project names into each directory's persisted
+  // projectMeta, so the home/sidebar can render the custom name on the first
+  // paint of the next startup, before the async project list arrives. The
+  // server remains the source of truth once its data loads.
+  createEffect(() => {
+    for (const project of globalStore.project) {
+      if (!project.id || project.id === "global") continue
+      const name = project.name
+      const directories = [project.worktree, ...(project.sandboxes ?? [])]
+      for (const directory of directories) {
+        const [childStore] = children.ensureChild(directory)
+        if (childStore.projectMeta?.name === (name ?? "")) continue
+        children.projectMeta(directory, { name })
+      }
+    }
   })
 
   async function loadSessions(directory: string, options?: { limit?: number }) {

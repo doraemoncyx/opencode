@@ -1,4 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
+import iconv from "iconv-lite"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Effect, Layer } from "effect"
 import path from "path"
@@ -168,6 +169,35 @@ describe("tool.write", () => {
 
         expect(result.metadata).toHaveProperty("filepath", filepath)
         expect(result.metadata).toHaveProperty("exists", true)
+      }),
+    )
+
+    it.instance("keeps an existing GBK file in GBK when overwriting", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "gbk.txt")
+        yield* Effect.promise(() => fs.writeFile(filepath, Buffer.from(iconv.encode("这是中文\n第二行", "gbk"))))
+
+        yield* run({ filePath: filepath, content: "换成新内容 123\n新增一行" })
+
+        const written = yield* Effect.promise(() => fs.readFile(filepath))
+        expect(Buffer.from(written).equals(Buffer.from(iconv.encode("换成新内容 123\n新增一行", "gbk")))).toBe(true)
+      }),
+    )
+
+    it.instance("does not strip a real GBK file when its bytes look like UTF-8", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "lookalike.txt")
+        // 0xC2 0x80 是合法 UTF-8 序列，同时是 GBK 汉字 "聙" —— 旧启发式会误判成 utf-8 并转码损坏
+        yield* Effect.promise(() =>
+          fs.writeFile(filepath, Buffer.concat([Buffer.from("// note: "), iconv.encode("聙", "gbk")])),
+        )
+
+        yield* run({ filePath: filepath, content: "// note: 聙\n// 中文注释" })
+
+        const written = yield* Effect.promise(() => fs.readFile(filepath))
+        expect(Buffer.from(written).equals(Buffer.from(iconv.encode("// note: 聙\n// 中文注释", "gbk")))).toBe(true)
       }),
     )
   })

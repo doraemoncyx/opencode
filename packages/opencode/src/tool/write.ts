@@ -44,7 +44,7 @@ export const WriteTool = Tool.define(
           yield* assertExternalDirectoryEffect(ctx, filepath)
 
           const exists = yield* fs.existsSafe(filepath)
-          const source = exists ? yield* Bom.readFile(fs, filepath) : { bom: false, text: "" }
+          const source = exists ? yield* Bom.readFile(fs, filepath) : { bom: false, text: "", encoding: "utf-8" as const }
           const next = Bom.split(params.content)
           const desiredBom = source.bom || next.bom
           const contentOld = source.text
@@ -61,8 +61,9 @@ export const WriteTool = Tool.define(
             },
           })
 
-          yield* fs.writeWithDirs(filepath, Bom.join(contentNew, desiredBom))
-          if (yield* format.file(filepath)) {
+          yield* fs.writeWithDirs(filepath, Bom.writeFileEncoded(Bom.join(contentNew, desiredBom), source.encoding))
+          // GBK 文件不跑 formatter：格式化工具按 UTF-8 读入会得到乱码再写回，损坏原编码
+          if (source.encoding !== "gbk" && (yield* format.file(filepath))) {
             yield* Bom.syncFile(fs, filepath, desiredBom)
           }
           yield* events.publish(FileSystem.Event.Edited, { file: filepath })

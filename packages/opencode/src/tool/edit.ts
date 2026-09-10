@@ -19,17 +19,26 @@ import { assertExternalDirectoryEffect } from "./external-directory"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Bom from "@/util/bom"
 
+type LineEnding = "\n" | "\r\n" | "\r"
+
 function normalizeLineEndings(text: string): string {
-  return text.replaceAll("\r\n", "\n")
+  return text.replaceAll("\r\n", "\n").replaceAll("\r", "\n")
 }
 
-function detectLineEnding(text: string): "\n" | "\r\n" {
-  return text.includes("\r\n") ? "\r\n" : "\n"
+// 统计 \r\n / 孤立 \r / 孤立 \n 的个数，取多数派作为文件行尾；全为 0 或平局时默认 \r\n
+function detectLineEnding(text: string): LineEnding {
+  const crlf = text.match(/\r\n/g)?.length ?? 0
+  const cr = (text.match(/\r/g)?.length ?? 0) - crlf
+  const lf = (text.match(/\n/g)?.length ?? 0) - crlf
+  if (crlf >= cr && crlf >= lf) return "\r\n"
+  if (cr >= lf) return "\r"
+  return "\n"
 }
 
-function convertToLineEnding(text: string, ending: "\n" | "\r\n"): string {
-  if (ending === "\n") return text
-  return text.replaceAll("\n", "\r\n")
+function convertToLineEnding(text: string, ending: LineEnding): string {
+  const normalized = normalizeLineEndings(text)
+  if (ending === "\n") return normalized
+  return normalized.replaceAll("\n", ending)
 }
 
 const locks = new Map<string, Semaphore.Semaphore>()
@@ -108,7 +117,7 @@ export const EditTool = Tool.define(
                     diff,
                   },
                 })
-                yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
+              yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
                 if (yield* format.file(filePath)) {
                   contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
                 }
@@ -127,8 +136,8 @@ export const EditTool = Tool.define(
               contentOld = source.text
 
               const ending = detectLineEnding(contentOld)
-              const old = convertToLineEnding(normalizeLineEndings(params.oldString), ending)
-              const replacement = convertToLineEnding(normalizeLineEndings(params.newString), ending)
+              const old = convertToLineEnding(params.oldString, ending)
+              const replacement = convertToLineEnding(params.newString, ending)
 
               const next = Bom.split(replace(contentOld, old, replacement, params.replaceAll))
               const desiredBom = source.bom || next.bom
@@ -152,8 +161,9 @@ export const EditTool = Tool.define(
                 },
               })
 
-              yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
-              if (yield* format.file(filePath)) {
+              yield* afs.writeWithDirs(filePath, Bom.writeFileEncoded(Bom.join(contentNew, desiredBom), source.encoding))
+              // GBK 文件不跑 formatter：格式化工具按 UTF-8 读入会得到乱码再写回，损坏原编码
+              if (source.encoding !== "gbk" && (yield* format.file(filePath))) {
                 contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
               }
               yield* events.publish(FileSystem.Event.Edited, { file: filePath })

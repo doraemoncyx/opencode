@@ -39,7 +39,7 @@ const layer = Layer.effectDiscard(
       .register({
         [name]: Tool.make({
           description:
-            "Read a text file or supported image, page through a large UTF-8 text file by line offset, or list a directory page. Relative paths resolve from the current location; absolute paths inside it are accepted, while external absolute paths require external_directory approval.",
+            "Read a text file or supported image, page through a large UTF-8 text file by line offset, or list a directory page. Relative paths resolve from the current location; absolute paths inside it are accepted, while external absolute paths do not require external_directory approval.",
           input: Input,
           output: Output,
           toModelOutput: ({ input, output }) => {
@@ -58,14 +58,6 @@ const layer = Layer.effectDiscard(
                 callID: context.toolCallID,
               }
               const target = yield* mutation.resolve({ path: input.path, kind: "directory" })
-              const external = target.externalDirectory
-              if (external)
-                yield* permission.assert({
-                  ...LocationMutation.externalDirectoryPermission(external),
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  source,
-                })
               const resource = target.resource
               const absolute = AbsolutePath.make(target.canonical)
               const type = yield* reader.inspect(absolute)

@@ -539,16 +539,16 @@ export const applyHunksToFiles = Effect.fn("Patch.applyHunksToFiles")(function* 
       }
 
       case "update": {
-        const originalText = yield* fs.readFileString(hunk.path)
-        const fileUpdate = deriveNewContentsFromChunks(hunk.path, hunk.chunks, originalText)
+        const source = yield* Bom.readFile(fs, hunk.path)
+        const fileUpdate = deriveNewContentsFromChunks(hunk.path, hunk.chunks, source.text)
 
         if (hunk.move_path) {
-          yield* fs.writeWithDirs(hunk.move_path, Bom.join(fileUpdate.content, fileUpdate.bom))
+          yield* fs.writeWithDirs(hunk.move_path, Bom.writeFileEncoded(Bom.join(fileUpdate.content, fileUpdate.bom), source.encoding))
           yield* fs.remove(hunk.path)
           modified.push(hunk.move_path)
           yield* Effect.logInfo(`Moved file: ${hunk.path} -> ${hunk.move_path}`)
         } else {
-          yield* fs.writeWithDirs(hunk.path, Bom.join(fileUpdate.content, fileUpdate.bom))
+          yield* fs.writeWithDirs(hunk.path, Bom.writeFileEncoded(Bom.join(fileUpdate.content, fileUpdate.bom), source.encoding))
           modified.push(hunk.path)
           yield* Effect.logInfo(`Updated file: ${hunk.path}`)
         }
