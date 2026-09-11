@@ -159,8 +159,10 @@ function currentDeltaFragment(event: CurrentDelta) {
   return event.type === "session.compaction.delta" ? event.data.text : event.data.delta
 }
 
-export function resumeStreamAfterPageShow(event: PageTransitionEvent, start: () => unknown) {
-  if (!event.persisted) return
+export function resumeStreamAfterPageShow(_event: PageTransitionEvent, start: () => unknown) {
+  // `pagehide` stops the stream unconditionally, so every `pageshow` must ensure it runs again.
+  // Restoring only on bfcache (`persisted`) left webview background/suspend, mobile app switches,
+  // and recreated tabs permanently disconnected until a manual refresh. `start()` is idempotent.
   start()
 }
 
@@ -218,6 +220,9 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
   const FLUSH_FRAME_MS = 16
   const STREAM_YIELD_MS = 8
   const RECONNECT_DELAY_MS = 250
+  const STREAM_IDLE_CHECK_MS = 5_000
+  // The server sends a heartbeat every 10-15s; silence for 30s means the connection is dead.
+  const STREAM_IDLE_TIMEOUT_MS = 30_000
 
   let queue: Queued[] = []
   let buffer: Queued[] = []
@@ -271,6 +276,14 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
           attempt?.abort()
         }
         abort.signal.addEventListener("abort", onAbort)
+        // A proxy or half-open socket can sever the stream silently: neither end closes it, so the
+        // for-await hangs forever and the loop never reconnects. The idle watchdog aborts after a
+        // missing heartbeat window so the retry path below takes over.
+        let lastEventAt = Date.now()
+        const idleCheck = setInterval(() => {
+          if (Date.now() - lastEventAt < STREAM_IDLE_TIMEOUT_MS) return
+          attempt?.abort()
+        }, STREAM_IDLE_CHECK_MS)
         try {
           const kind = await protocol
           const events =
@@ -279,6 +292,7 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
               : eventApi.event.subscribe({ signal: attempt.signal })
           let yielded = Date.now()
           for await (const event of events) {
+            lastEventAt = Date.now()
             streamErrorLogged = false
             const legacy = "payload" in event
             if (legacy && event.payload.type === "sync") continue
@@ -300,6 +314,7 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
             })
           }
         } finally {
+          clearInterval(idleCheck)
           abort.signal.removeEventListener("abort", onAbort)
           attempt = undefined
         }
