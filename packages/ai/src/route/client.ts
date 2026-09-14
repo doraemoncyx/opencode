@@ -362,11 +362,16 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
   const decodeEvent = (route: string) => (frame: Frame) =>
     decodeEventEffect(frame).pipe(
       Effect.mapError((cause) =>
+        // A frame that cannot be decoded means the byte stream did not arrive
+        // intact. Classify it separately from a cleanly-terminated stream so the
+        // runner can retry it (and continue a partial response) without treating
+        // it as a terminal provider failure.
         ProviderShared.eventError(
           input.id,
           `Invalid ${route} stream event`,
           typeof frame === "string" ? frame : ProviderShared.encodeJson(frame),
           cause,
+          "invalid-frame",
         ),
       ),
     )

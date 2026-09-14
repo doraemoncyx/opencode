@@ -40,7 +40,7 @@ export function isRetryable(error: AIError) {
     case "Transport":
       return error.reason.delivery !== "accepted" && error.reason.delivery !== "rejected"
     case "InvalidProviderOutput":
-      return error.reason.classification === "incomplete-stream"
+      return error.reason.classification === "incomplete-stream" || error.reason.classification === "invalid-frame"
     // Unrecognized failures retry: classification records affirmative
     // deterministic evidence, and transient failures are exactly the ones
     // that arrive in shapes no classifier anticipates.
@@ -62,6 +62,12 @@ export function isRetryable(error: AIError) {
 
 /** Bound provider-requested delays so a hostile or buggy retry-after cannot stall a session for hours. */
 const RETRY_AFTER_MAX = Duration.toMillis("15 minutes")
+
+/** A malformed stream frame is transient, but repeated malformed frames are terminal after a few tries. */
+const FRAME_RETRY_LIMIT = 3
+
+const isInvalidFrame = (cause: AIError) =>
+  cause.reason._tag === "InvalidProviderOutput" && cause.reason.classification === "invalid-frame"
 
 const retryAfter = (input: Input) => {
   if (input.cause.reason._tag === "RateLimit" || input.cause.reason._tag === "ProviderInternal")
@@ -85,8 +91,10 @@ export const policy = (sessionID: SessionSchema.ID) =>
   Effect.gen(function* () {
     const step = yield* Schedule.toStep(schedule)
     let attempt = 1
+    let frameAttempts = 0
     return (input: Input) =>
       Effect.gen(function* () {
+        if (isInvalidFrame(input.cause) && frameAttempts >= FRAME_RETRY_LIMIT) return { retry: false as const }
         const now = yield* Clock.currentTimeMillis
         const next = yield* step(now, input).pipe(Pull.catchDone(() => Effect.succeed(undefined)))
         if (!next) return { retry: false as const }
@@ -103,6 +111,7 @@ export const policy = (sessionID: SessionSchema.ID) =>
         }
         yield* input.hook(event)
         if (!event.decision.retry) return event.decision
+        if (isInvalidFrame(input.cause)) frameAttempts++
         const normalized =
           Number.isFinite(event.decision.delay) && event.decision.delay >= 0 ? Math.ceil(event.decision.delay) : delay
         return { retry: true as const, attempt, delay: normalized }

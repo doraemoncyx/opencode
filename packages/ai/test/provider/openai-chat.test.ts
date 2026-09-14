@@ -1735,6 +1735,10 @@ describe("OpenAI Chat route", () => {
       const error = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)), Effect.flip)
 
       expect(error.message).toContain("Invalid openai/openai-chat stream event")
+      expect(error.reason).toMatchObject({
+        _tag: "InvalidProviderOutput",
+        classification: "invalid-frame",
+      })
     }),
   )
 

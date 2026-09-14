@@ -103,9 +103,15 @@ export const sumTokens = (...values: ReadonlyArray<number | undefined>): number 
   return values.reduce((acc: number, value) => acc + (value ?? 0), 0)
 }
 
-export const eventError = (route: string, message: string, body?: string, cause?: unknown) =>
+export const eventError = (
+  route: string,
+  message: string,
+  body?: string,
+  cause?: unknown,
+  classification?: InvalidProviderOutputError["classification"],
+) =>
   new AIError({
-    reason: new InvalidProviderOutputError({ route, message, body, cause }),
+    reason: new InvalidProviderOutputError({ route, message, body, cause, classification }),
   })
 
 export const parseJson = (route: string, input: string, message: string) =>

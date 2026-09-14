@@ -266,7 +266,8 @@ export const make = Effect.gen(function* () {
 })
 
 const isInterruptedStream = (failure: AIError) => {
-  if (failure.reason._tag === "InvalidProviderOutput") return failure.reason.classification === "incomplete-stream"
+  if (failure.reason._tag === "InvalidProviderOutput")
+    return failure.reason.classification === "incomplete-stream" || failure.reason.classification === "invalid-frame"
   if (failure.reason._tag === "Transport") return failure.reason.operation === "read"
   return false
 }

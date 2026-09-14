@@ -635,6 +635,14 @@ const incompleteStream = () =>
     }),
   })
 
+const invalidFrame = () =>
+  new AIError({
+    reason: new InvalidProviderOutputError({
+      classification: "invalid-frame",
+      message: "Invalid deepseek-local/openai-compatible-chat stream event",
+    }),
+  })
+
 const INCOMPLETE_STREAM_CONTINUATION =
   "The previous response was interrupted. Continue from where you left off without repeating completed content."
 
@@ -5150,6 +5158,60 @@ describe("SessionRunnerLLM", () => {
     expect(yield* recordedEventTypes(sessionID)).toContain("session.retry.scheduled.1")
     yield* replaySessionProjection(sessionID)
     expect(yield* s.context).toMatchObject(context)
+  })
+
+  scenario("continues after an invalid stream frame", function* (s) {
+    const failure = invalidFrame()
+    yield* s.admit("Continue invalid frame")
+    yield* s.llm.push(
+      TestLLM.failAfter(
+        failure,
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "invalid-frame-partial" }),
+        LLMEvent.textDelta({ id: "invalid-frame-partial", text: "Partial" }),
+      ),
+    )
+    yield* s.llm.push(TestLLM.text(" continuation", "invalid-frame-continuation"))
+
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Queue.take(scheduled)
+    yield* TestClock.adjust("2400 millis")
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(2)
+    expect(yield* recordedEventTypes(sessionID)).toContain("session.retry.scheduled.1")
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Continue invalid frame"),
+      Expected.assistant({ finish: "error", error: { type: "provider.invalid-output" } }, [Expected.text("Partial")]),
+      { type: "synthetic", text: INCOMPLETE_STREAM_CONTINUATION },
+      Expected.assistant({ finish: "stop" }, [Expected.text(" continuation")]),
+    ])
+  })
+
+  scenario("bounds invalid stream frame continuations to three retries", function* (s) {
+    yield* s.admit("Exhaust invalid frames")
+    const failure = invalidFrame()
+    yield* s.llm.always(
+      TestLLM.failAfter(
+        failure,
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "invalid-frame-exhaustion" }),
+        LLMEvent.textDelta({ id: "invalid-frame-exhaustion", text: "Partial" }),
+      ),
+    )
+
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    for (const delay of [2_400, 4_800, 9_600]) {
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust(delay)
+    }
+    expect(yield* Fiber.join(run).pipe(Effect.flip)).toBe(failure)
+    expect(s.requests).toHaveLength(4)
+    const context = yield* s.context
+    expect(context.filter((message) => message.type === "assistant")).toHaveLength(4)
+    expect(context.filter((message) => message.type === "synthetic")).toHaveLength(3)
   })
 
   scenario("continues an unknown finish after observable text", function* (s) {
