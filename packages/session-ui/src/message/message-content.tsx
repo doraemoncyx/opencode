@@ -28,6 +28,7 @@ import type {
 } from "@opencode/client/promise"
 import type { SessionUserActions, SessionUserComment } from "../actions"
 import { typeLabel } from "../components/message-file"
+import { computeTokenStats } from "./token-stats"
 
 export async function writeClipboard(text: string): Promise<boolean> {
   const body = typeof document === "undefined" ? undefined : document.body
@@ -499,12 +500,32 @@ export function AssistantTextContent(props: {
       seconds: numfmt().format(total % 60),
     })
   })
+  const streaming = () => typeof props.message.time.completed !== "number"
+  const isLastTextPart = createMemo(() => {
+    const ordinals = { text: 0 }
+    let last: string | undefined
+    for (const item of props.message.content) {
+      if (item.type !== "text") continue
+      last = `${props.message.id}:text:${ordinals.text++}`
+    }
+    return last === props.id
+  })
+  const tokenStats = createMemo(() => {
+    const stats = computeTokenStats(props.message, Date.now())
+    return [
+      stats.ttft ? i18n.t("ui.message.tokens.ttft", { value: numfmt().format(stats.ttft) }) : "",
+      stats.tps ? i18n.t("ui.message.tokens.tps", { value: stats.tps.toFixed(1) }) : "",
+    ]
+      .filter(Boolean)
+      .join(" \u00B7 ")
+  })
   const meta = createMemo(() => {
     const agent = props.message.agent
     return [
       agent ? agent[0]?.toUpperCase() + agent.slice(1) : "",
       model(),
       duration(),
+      tokenStats(),
       interrupted() ? i18n.t("ui.message.interrupted") : "",
     ]
       .filter(Boolean)
@@ -521,12 +542,13 @@ export function AssistantTextContent(props: {
     <Show when={props.text}>
       <div data-component="text-part" data-timeline-part-id={props.id}>
         <div data-slot="text-part-body">
-          <PacedMarkdown
-            text={props.text}
-            cacheKey={props.id}
-            streaming={typeof props.message.time.completed !== "number"}
-          />
+          <PacedMarkdown text={props.text} cacheKey={props.id} streaming={streaming()} />
         </div>
+        <Show when={streaming() && isLastTextPart() && tokenStats()}>
+          <div data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
+            {tokenStats()}
+          </div>
+        </Show>
         <Show when={props.showCopy}>
           <div data-slot="text-part-copy-wrapper" data-interrupted={interrupted() ? "" : undefined}>
             <MessageActionButton

@@ -1,7 +1,7 @@
 export * as Git from "./git.js"
 
 import path from "path"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schedule, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { AbsolutePath, RelativePath } from "./schema.js"
 import { FSUtil } from "@opencode/util/fs-util"
@@ -169,6 +169,11 @@ const layer = Layer.effect(
     const locks = KeyedMutex.makeUnsafe<string>()
     const locked = <A, E, R>(repository: Repository, effect: Effect.Effect<A, E, R>) =>
       locks.withLock(repository.gitDirectory)(effect)
+
+    // Git index locks are usually a brief concurrent-write race; retry a couple
+    // times before handing the failure to the caller's best-effort handling.
+    const captureWithRetry = <A>(effect: Effect.Effect<A, OperationError>) =>
+      effect.pipe(Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 2 }))
 
     const discover = Effect.fn("Git.repo.discover")(function* (input: AbsolutePath) {
       const dotgit = yield* fs.up({ targets: [".git"], start: input, mode: "first" }).pipe(
@@ -480,10 +485,12 @@ const layer = Layer.effect(
       }) =>
         locked(
           input.repository,
-          Effect.gen(function* () {
-            yield* Effect.forEach(input.scopes, (scope) => refresh({ ...input, scope }), { discard: true })
-            return yield* writeTree(input.repository)
-          }),
+          captureWithRetry(
+            Effect.gen(function* () {
+              yield* Effect.forEach(input.scopes, (scope) => refresh({ ...input, scope }), { discard: true })
+              return yield* writeTree(input.repository)
+            }),
+          ),
         ),
     )
 

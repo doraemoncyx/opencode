@@ -17,6 +17,7 @@ import { createStore } from "solid-js/store"
 import { Collapsible } from "@opencode/ui/collapsible"
 import type { IconProps } from "@opencode/ui/icon"
 import { TextShimmer } from "@opencode/ui/text-shimmer"
+import { Markdown } from "./markdown"
 
 export type TriggerTitle = {
   title: string
@@ -370,13 +371,22 @@ function args(input: Record<string, unknown> | undefined) {
     .slice(0, 3)
 }
 
+function hasInput(input: Record<string, unknown> | undefined): input is Record<string, unknown> {
+  return !!input && Object.keys(input).length > 0
+}
+
 export function GenericTool(props: {
   tool: string
   status?: string
   hideDetails?: boolean
   input?: Record<string, unknown>
+  output?: string
 }) {
   const i18n = useI18n()
+  const params = createMemo(() => {
+    if (!hasInput(props.input)) return ""
+    return JSON.stringify(props.input, null, 2)
+  })
 
   return (
     <BasicTool
@@ -388,6 +398,30 @@ export function GenericTool(props: {
         args: args(props.input),
       }}
       hideDetails={props.hideDetails}
-    />
+    >
+      <Show when={params()}>
+        <div
+          data-component="tool-input"
+          data-scrollable
+          tabIndex={0}
+          role="region"
+          aria-label={i18n.t("ui.basicTool.parameters")}
+        >
+          <span data-slot="tool-input-label">{i18n.t("ui.basicTool.parameters")}</span>
+          <pre data-slot="tool-input-json">{params()}</pre>
+        </div>
+      </Show>
+      <Show when={props.output}>
+        <div
+          data-component="tool-output"
+          data-scrollable
+          tabIndex={0}
+          role="region"
+          aria-label={i18n.t("ui.scrollView.ariaLabel")}
+        >
+          <Markdown text={props.output!} />
+        </div>
+      </Show>
+    </BasicTool>
   )
 }

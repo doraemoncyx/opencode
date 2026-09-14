@@ -203,6 +203,7 @@ const source = {
   "ui.tool.skill": "Skill",
 
   "ui.basicTool.called": "Called `{{tool}}`",
+  "ui.basicTool.parameters": "Parameters",
   "ui.toolErrorCard.failed": "Failed",
   "ui.toolErrorCard.copyError": "Copy error",
 
@@ -241,6 +242,8 @@ const source = {
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ui.message.interrupted": "Interrupted",
+  "ui.message.tokens.ttft": "ttft {{value}}s",
+  "ui.message.tokens.tps": "avg {{value}} tps",
   "ui.sessionTimeline.notice.model": "Model",
   "ui.sessionTimeline.notice.modelSwitched": "Switched to {{model}}",
   "ui.sessionTimeline.notice.agentChanged": "Agent changed",

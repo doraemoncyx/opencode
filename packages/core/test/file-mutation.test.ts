@@ -1,5 +1,6 @@
 import fs from "fs/promises"
 import path from "path"
+import iconv from "iconv-lite"
 import { describe, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer } from "effect"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
@@ -85,6 +86,38 @@ describe("FileMutation", () => {
 
         expect(yield* Effect.promise(() => fs.readFile(preservedPath, "utf8"))).toBe("\uFEFFafter")
         expect(yield* Effect.promise(() => fs.readFile(created.absolute, "utf8"))).toBe("\uFEFFcreated")
+      }).pipe(provide(directory)),
+    ),
+  )
+
+  it.live("keeps an existing GBK file in GBK on text write", () =>
+    withTempDir(({ path: directory }) =>
+      Effect.gen(function* () {
+        const targetPath = path.join(directory, "gbk.txt")
+        yield* Effect.promise(() => fs.writeFile(targetPath, iconv.encode("这是中文\n第二行", "gbk")))
+        const access = yield* FileAccess.Service
+        const target = yield* access.resolve({ path: "gbk.txt" })
+
+        yield* (yield* FileMutation.Service).writeTextPreservingBom({ target, content: "改成英文内容 123" })
+
+        const written = yield* Effect.promise(() => fs.readFile(targetPath))
+        expect(Buffer.from(written).equals(Buffer.from(iconv.encode("改成英文内容 123", "gbk")))).toBe(true)
+      }).pipe(provide(directory)),
+    ),
+  )
+
+  it.live("does not prepend a BOM '?' to a GBK file when content carries a BOM char", () =>
+    withTempDir(({ path: directory }) =>
+      Effect.gen(function* () {
+        const targetPath = path.join(directory, "gbk.txt")
+        yield* Effect.promise(() => fs.writeFile(targetPath, iconv.encode("原始", "gbk")))
+        const access = yield* FileAccess.Service
+        const target = yield* access.resolve({ path: "gbk.txt" })
+
+        yield* (yield* FileMutation.Service).writeTextPreservingBom({ target, content: "\uFEFF新内容" })
+
+        const written = yield* Effect.promise(() => fs.readFile(targetPath))
+        expect(Buffer.from(written).equals(Buffer.from(iconv.encode("新内容", "gbk")))).toBe(true)
       }).pipe(provide(directory)),
     ),
   )

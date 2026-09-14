@@ -35,6 +35,7 @@ import { PluginSupervisor } from "@opencode/core/plugin/supervisor"
 import { Shell } from "@opencode/core/shell"
 import { ShellSelect } from "@opencode/core/shell/select"
 import { ID } from "@opencode/schema/shell"
+import { decodeShellOutput } from "@opencode/util/encoding"
 import { ShellTool } from "@opencode/core/tool/plugin/shell"
 import { ToolOutput } from "@opencode/core/tool-output"
 import { Tool } from "@opencode/core/tool"
@@ -201,6 +202,17 @@ const progressOverflowCommand = (bytes: number, release: string) =>
   isWindows
     ? `[Console]::Out.Write(('x' * ${bytes})); while (!(Test-Path -LiteralPath '${release}')) { Start-Sleep -Milliseconds 50 }`
     : `head -c ${bytes} /dev/zero | tr '\\0' 'x'; while [ ! -e '${release}' ]; do sleep 0.05; done`
+// 中文 is D6 D0 CE C4 in GBK and E4 B8 AD E6 96 87 in UTF-8; both are written as raw bytes so the
+// shell's own output encoding cannot interfere with the encoding under test.
+const gbkCommand = isWindows
+  ? "[Console]::OpenStandardOutput().Write([byte[]]@(0xd6,0xd0,0xce,0xc4), 0, 4); Start-Sleep -Milliseconds 100"
+  : "printf '\\326\\320\\316\\304'; sleep 0.1"
+const utf8Command = isWindows
+  ? "[Console]::OpenStandardOutput().Write([System.Text.Encoding]::UTF8.GetBytes('中文'), 0, 6); Start-Sleep -Milliseconds 100"
+  : "printf '中文'; sleep 0.1"
+const gbkOverflowCommand = isWindows
+  ? "$bytes = [byte[]]@(0xd6,0xd0,0xce,0xc4) * 30000; [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length); Start-Sleep -Milliseconds 100"
+  : "i=0; while [ $i -lt 30000 ]; do printf '\\326\\320\\316\\304'; i=$((i+1)); done; sleep 0.1"
 
 const withSession = <A, E, R>(directory: string, body: (registry: Tool.Interface) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
@@ -1049,6 +1061,144 @@ describe("ShellTool", () => {
               const output = mixed.content?.[0]?.type === "text" ? mixed.content[0].text : ""
               expect(output).toContain("stdout")
               expect(output).toContain("stderr")
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  it.live(
+    "decodes GBK command output in the tool result and keeps the capture file as raw GBK",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const observed = yield* Deferred.make<string>()
+              const settled = yield* executeTool(registry, {
+                ...call({ command: gbkCommand }, "call-gbk"),
+                progress: (update) =>
+                  typeof update.shellID === "string"
+                    ? Deferred.succeed(observed, update.shellID).pipe(Effect.asVoid)
+                    : Effect.void,
+              })
+              expect(settled.metadata).toMatchObject({ exit: 0, truncated: false })
+              expect(settled.content?.[0]).toEqual({ type: "text", text: "中文" })
+
+              const shell = yield* Shell.Service
+              const info = yield* shell.get(ID.make(yield* Deferred.await(observed)))
+              const bytes = new Uint8Array(yield* Effect.promise(() => Bun.file(info.file).arrayBuffer()))
+              expect(decodeShellOutput(bytes)).toBe("中文")
+              expect([...bytes]).toEqual([0xd6, 0xd0, 0xce, 0xc4])
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  it.live(
+    "decodes a GBK page that starts inside a character without corruption",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const observed = yield* Deferred.make<string>()
+              yield* executeTool(registry, {
+                ...call({ command: gbkCommand }, "call-gbk-page"),
+                progress: (update) =>
+                  typeof update.shellID === "string"
+                    ? Deferred.succeed(observed, update.shellID).pipe(Effect.asVoid)
+                    : Effect.void,
+              })
+              const shell = yield* Shell.Service
+              const id = ID.make(yield* Deferred.await(observed))
+              const first = yield* shell.output(id, { cursor: 1, limit: 3 })
+              expect(first.output).toBe("中文")
+              expect(first.output).not.toContain("\uFFFD")
+              const next = yield* shell.output(id, { cursor: first.cursor, limit: 3 })
+              expect(next.output).toBe("")
+              expect(first.cursor).toBe(4)
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  it.live(
+    "decodes a truncated GBK preview and its saved output file",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const observed = yield* Deferred.make<string>()
+              const settled = yield* executeTool(registry, {
+                ...call({ command: gbkOverflowCommand }, "call-gbk-overflow"),
+                progress: (update) =>
+                  typeof update.shellID === "string"
+                    ? Deferred.succeed(observed, update.shellID).pipe(Effect.asVoid)
+                    : Effect.void,
+              })
+              expect(settled.metadata).toMatchObject({ exit: 0, truncated: true })
+              const content = settled.content?.[0]
+              if (!content || content.type !== "text") throw new Error("Expected text content")
+              expect(content.text).toContain("中文")
+              expect(content.text).not.toContain("\uFFFD")
+              expect(content.text).toContain("output truncated; full output saved to:")
+
+              const shell = yield* Shell.Service
+              const info = yield* shell.get(ID.make(yield* Deferred.await(observed)))
+              const saved = decodeShellOutput(
+                new Uint8Array(yield* Effect.promise(() => Bun.file(info.file).arrayBuffer())),
+              )
+              expect(saved.startsWith("中文")).toBe(true)
+              expect(saved).not.toContain("\uFFFD")
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  it.live(
+    "keeps UTF-8 command output unchanged",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const observed = yield* Deferred.make<string>()
+              const settled = yield* executeTool(registry, {
+                ...call({ command: utf8Command }, "call-utf8"),
+                progress: (update) =>
+                  typeof update.shellID === "string"
+                    ? Deferred.succeed(observed, update.shellID).pipe(Effect.asVoid)
+                    : Effect.void,
+              })
+              expect(settled.metadata).toMatchObject({ exit: 0, truncated: false })
+              expect(settled.content?.[0]).toEqual({ type: "text", text: "中文" })
+
+              const shell = yield* Shell.Service
+              const info = yield* shell.get(ID.make(yield* Deferred.await(observed)))
+              const bytes = new Uint8Array(yield* Effect.promise(() => Bun.file(info.file).arrayBuffer()))
+              expect([...bytes]).toEqual([0xe4, 0xb8, 0xad, 0xe6, 0x96, 0x87])
+              expect(decodeShellOutput(bytes)).toBe("中文")
             }),
           )
         },

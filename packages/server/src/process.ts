@@ -16,6 +16,7 @@ import {
   HttpServerResponse,
 } from "effect/unstable/http"
 import { createServer } from "node:http"
+import type { Duplex } from "node:stream"
 import { ServerAuth } from "./auth"
 import { isAllowedCorsOrigin } from "./cors"
 import { authorizedRequest } from "./middleware/authorization"
@@ -89,7 +90,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   yield* Effect.addFinalizer(() =>
     status.beginStopping.pipe(
       Effect.andThen(Ref.set(application, Option.none())),
-      Effect.andThen(Effect.sync(() => bound.server.closeAllConnections())),
+      Effect.andThen(Effect.sync(() => bound.destroyAllConnections())),
     ),
   )
 
@@ -159,10 +160,35 @@ function bind(hostname: string, port: number) {
     const parentScope = yield* Scope.Scope
     const serverScope = yield* Scope.fork(parentScope)
     const server = createServer()
+    // Drop idle keep-alive connections so a silently-disconnected client (for
+    // example a killed browser tab) cannot leave a lingering CLOSE_WAIT socket
+    // behind. SSE responses write continuously, so these idle timeouts never
+    // interrupt active streams.
+    server.keepAliveTimeout = 5_000
+    server.headersTimeout = 10_000
+    // server.closeAllConnections() does not close upgraded (WebSocket) sockets
+    // because they never enter the http ConnectionList. Track them so forced
+    // shutdown can destroy them directly; otherwise a restart can strand
+    // CLOSE_WAIT sockets and collide with the listener port (EADDRINUSE).
+    const upgraded = new Set<Duplex>()
+    server.on("upgrade", (_request, socket) => {
+      upgraded.add(socket)
+      socket.on("close", () => upgraded.delete(socket))
+    })
+    const destroyAllConnections = () => {
+      try {
+        if (typeof server.closeAllConnections === "function") server.closeAllConnections()
+      } catch {
+        // Best effort: upstream shutdown handlers already ignore errors, but a
+        // thrown close here would otherwise skip destroying upgraded sockets.
+      }
+      for (const socket of upgraded) socket.destroy()
+      upgraded.clear()
+    }
     return yield* Effect.gen(function* () {
       const http = yield* NodeHttpServer.make(() => server, { port, host: hostname })
-      yield* Effect.addFinalizer(() => Effect.sync(() => server.closeAllConnections()))
-      return { http, server, scope: serverScope }
+      yield* Effect.addFinalizer(() => Effect.sync(() => destroyAllConnections()))
+      return { http, server, scope: serverScope, destroyAllConnections }
     }).pipe(
       Effect.provideService(Scope.Scope, serverScope),
       Effect.onError((cause) => Scope.close(serverScope, Exit.failCause(cause))),

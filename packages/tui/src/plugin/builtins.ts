@@ -1,4 +1,5 @@
 import HomeFooter from "../feature-plugins/home/footer"
+import PromptActivity from "../feature-plugins/prompt/activity"
 import PromptFooter from "../feature-plugins/prompt/footer"
 import SidebarContext from "../feature-plugins/sidebar/context"
 import SidebarFooter from "../feature-plugins/sidebar/footer"
@@ -14,6 +15,7 @@ import Merman from "@opencode/merman/plugin"
 export const builtins = [
   HomeFooter,
   PromptFooter,
+  PromptActivity,
   SidebarContext,
   SidebarMcp,
   SidebarFooter,

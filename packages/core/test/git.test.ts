@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import { $ } from "bun"
 import fs from "fs/promises"
 import path from "path"
-import { Effect } from "effect"
+import { Effect, Fiber } from "effect"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Git } from "@opencode/core/git"
 import { AbsolutePath, RelativePath } from "@opencode/core/schema"
@@ -291,6 +291,56 @@ describe("Git trees", () => {
       expect(yield* read(path.join(root.path, "scope", "tracked.txt"))).toBe("one\n")
       expect(yield* read(path.join(root.path, "scope", "added.txt"))).toBe("added\n")
       expect(yield* read(path.join(root.path, "outside.txt"))).toBe("changed outside\n")
+    }),
+  )
+
+  it.live("retries capture when a transient index lock is released", () =>
+    Effect.gen(function* () {
+      const root = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      yield* Effect.promise(async () => {
+        await initRepo(root.path)
+        await Bun.write(path.join(root.path, "tracked.txt"), "one\n")
+      })
+      const git = yield* Git.Service
+      const repository = yield* git.repo.discover(AbsolutePath.make(root.path))
+      if (!repository) throw new Error("Repository not found")
+
+      const lock = path.join(repository.gitDirectory, "index.lock")
+      yield* Effect.promise(() => Bun.write(lock, ""))
+      const release = yield* Effect.forkChild(
+        Effect.gen(function* () {
+          yield* Effect.sleep("500 millis")
+          yield* Effect.promise(() => fs.rm(lock, { force: true }))
+        }),
+      )
+
+      expect(yield* git.tree.capture({ repository, scopes: [RelativePath.make(".")] })).toBeString()
+      yield* Fiber.join(release)
+    }),
+  )
+
+  it.live("surfaces a persistent index lock as a capture failure", () =>
+    Effect.gen(function* () {
+      const root = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      yield* Effect.promise(async () => {
+        await initRepo(root.path)
+        await Bun.write(path.join(root.path, "tracked.txt"), "one\n")
+      })
+      const git = yield* Git.Service
+      const repository = yield* git.repo.discover(AbsolutePath.make(root.path))
+      if (!repository) throw new Error("Repository not found")
+
+      yield* Effect.promise(() => Bun.write(path.join(repository.gitDirectory, "index.lock"), ""))
+      const error = yield* git.tree.capture({ repository, scopes: [RelativePath.make(".")] }).pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(Git.OperationError)
+      expect(error.message).toContain("index.lock")
     }),
   )
 })

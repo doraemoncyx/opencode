@@ -3,6 +3,7 @@ export * as ReadToolFileSystem from "./read-filesystem.js"
 import path from "path"
 import { pathToFileURL } from "url"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
+import { decodeText, detectEncoding, gbkTextDecoder, type FileEncoding } from "@opencode/util/encoding"
 import { Context, Effect, Layer, Schema } from "effect"
 import { lookup } from "mime-types"
 import { Environment } from "../environment/index.js"
@@ -148,6 +149,9 @@ export const read = Effect.fn("ReadTool.read")(function* (
     }
   }
 
+  const encoding = detectEncoding(
+    first.bytes.length >= first.info.size ? first.bytes : dropIncompleteUtf8Tail(first.bytes),
+  )
   const paged = first.info.size > MAX_READ_BYTES || page.offset !== undefined || page.limit !== undefined
   if (!paged) {
     if (first.bytes.includes(0)) return yield* new BinaryFileError({ resource })
@@ -155,14 +159,14 @@ export const read = Effect.fn("ReadTool.read")(function* (
       type: "file" as const,
       uri: pathToFileURL(input).href,
       name: path.basename(input),
-      content: new TextDecoder().decode(first.bytes),
+      content: decodeText(first.bytes, encoding),
       encoding: "utf8" as const,
       mime: mimeType(input),
     }
   }
 
   if (first.bytes.length >= first.info.size) {
-    const result = textPage(first.bytes, true, page)
+    const result = textPage(first.bytes, true, page, encoding)
     if (result === undefined) return yield* Effect.die("Read page did not settle for a complete first chunk")
     return yield* makeTextPage(input, resource, result, first.bytes.subarray(0, result.consumed).includes(0))
   }
@@ -187,7 +191,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
           return [leaf.bytes.subarray(Math.max(0, start - leafStart))]
         }),
       )
-      const result = textPage(selected, eof, { limit })
+      const result = textPage(selected, eof, { limit }, encoding)
       if (result !== undefined) {
         const translated = {
           ...result,
@@ -281,10 +285,27 @@ const list = (items: ReadonlyArray<Environment.DirEntry>, page: PageInput) => {
   })
 }
 
-const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput) => {
+// A chunk read from a large file can end mid-character. Dropping the
+// incomplete UTF-8 tail keeps a chopped multi-byte sequence from being mistaken
+// for GBK; GBK lead/trail bytes are unaffected because a matching prefix still
+// carries the surrounding CJK text. Newline (0x0A) never occurs inside a UTF-8
+// or GBK character, so line boundaries stay byte-safe.
+const dropIncompleteUtf8Tail = (bytes: Uint8Array) => {
+  for (let length = 1; length <= Math.min(4, bytes.length); length++) {
+    const byte = bytes[bytes.length - length]
+    if (byte < 0x80) break
+    if (byte >= 0xc0) {
+      const width = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : 2
+      return length < width ? bytes.subarray(0, bytes.length - length) : bytes
+    }
+  }
+  return bytes
+}
+
+const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput, encoding: FileEncoding) => {
   const offset = page.offset || 1
   const limit = Math.min(page.limit || MAX_READ_LINES, MAX_READ_LINES)
-  const decoded = new TextDecoder().decode(bytes)
+  const decoded = (encoding === "gbk" ? gbkTextDecoder() : new TextDecoder()).decode(bytes)
   const split = decoded.split("\n")
   const complete = eof ? (split.at(-1) === "" ? split.slice(0, -1) : split) : split.slice(0, -1)
   const available = complete.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line))

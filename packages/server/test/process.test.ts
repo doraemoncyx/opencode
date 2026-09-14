@@ -1,6 +1,7 @@
 import { expect } from "bun:test"
-import { Effect } from "effect"
-import { HttpServer, HttpServerError, HttpServerResponse } from "effect/unstable/http"
+import { createConnection, type Socket } from "node:net"
+import { Effect, Exit, Scope } from "effect"
+import { HttpServer, HttpServerError, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { it } from "../../core/test/lib/effect"
 import { ServerProcess } from "../src/process"
 
@@ -162,6 +163,130 @@ it.live("authenticates API and frontend requests while allowing browser prefligh
     )
   }),
 )
+
+// Idle keep-alive connections are dropped, and an upgraded WebSocket socket is
+// force-closed on shutdown, so the listener port can be rebound immediately.
+it.live(
+  "reclaims idle connections and force-closes upgraded sockets so the port can be rebound",
+  () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.Scope
+      const firstScope = yield* Scope.fork(scope)
+      const captured: Array<{ keepAliveTimeout: number; headersTimeout: number }> = []
+      const upgradedReady: Array<boolean> = []
+      const first = yield* ServerProcess.start<never, never>(
+        {
+          hostname: "127.0.0.1",
+          port: 0,
+          password: "secret",
+          app: { version: "test-version" },
+          database: { path: ":memory:" },
+        },
+        undefined,
+        (api) =>
+          Effect.gen(function* () {
+            const request = yield* HttpServerRequest.HttpServerRequest
+            const server = (
+              request.source as {
+                socket?: { server?: { keepAliveTimeout: number; headersTimeout: number } }
+              }
+            ).socket?.server
+            if (server)
+              captured.push({ keepAliveTimeout: server.keepAliveTimeout, headersTimeout: server.headersTimeout })
+            // A ticketed PTY connect URL skips auth because browsers cannot set
+            // headers on a WebSocket handshake. The upgrade stays open until
+            // forced shutdown destroys the underlying socket.
+            if (new URL(request.url, "http://localhost").pathname === "/api/pty/test/connect") {
+              const socket = yield* Effect.orDie(request.upgrade)
+              upgradedReady.push(true)
+              // The request fiber is uninterruptible, so drain the socket and let
+              // it complete when shutdown closes the connection.
+              yield* Effect.orDie(socket.run(() => Effect.void))
+              return HttpServerResponse.empty()
+            }
+            return yield* api
+          }),
+      ).pipe(Effect.provideService(Scope.Scope, firstScope))
+
+      const base = HttpServer.formatAddress(first.address)
+      const port = new URL(base).port
+
+      const socket = yield* openUpgrade(new URL(base), "/api/pty/test/connect?ticket=1")
+      yield* waitFor(() => captured.length > 0 && upgradedReady.length > 0).pipe(
+        Effect.timeoutOrElse({
+          duration: "2 seconds",
+          orElse: () => Effect.die(new Error("server never upgraded the connection")),
+        }),
+      )
+      expect(captured.at(-1)).toEqual({ keepAliveTimeout: 5_000, headersTimeout: 10_000 })
+
+      yield* Scope.close(firstScope, Exit.void).pipe(
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () => Effect.die(new Error("server shutdown did not settle")),
+        }),
+      )
+      yield* waitFor(() => socket.destroyed).pipe(
+        Effect.timeoutOrElse({
+          duration: "3 seconds",
+          orElse: () => Effect.die(new Error("upgraded socket survived shutdown")),
+        }),
+      )
+
+      const secondScope = yield* Scope.fork(scope)
+      const second = yield* ServerProcess.start<never, never>({
+        hostname: "127.0.0.1",
+        port: Number(port),
+        password: "secret",
+        app: { version: "test-version" },
+        database: { path: ":memory:" },
+      }).pipe(Effect.provideService(Scope.Scope, secondScope))
+      expect(new URL(HttpServer.formatAddress(second.address)).port).toBe(port)
+      yield* Scope.close(secondScope, Exit.void).pipe(
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () => Effect.die(new Error("second server shutdown did not settle")),
+        }),
+      )
+    }),
+  20_000,
+)
+
+// Opens a TCP connection that speaks enough of the HTTP Upgrade handshake for
+// Node to emit `upgrade`. The socket is left open so shutdown must destroy it.
+function openUpgrade(origin: URL, path: string) {
+  return Effect.callback<Socket, Error>((resume) => {
+    const socket = createConnection({ host: origin.hostname, port: Number(origin.port) })
+    let settled = false
+    socket.on("error", (error) => {
+      if (settled) return
+      settled = true
+      resume(Effect.fail(error))
+    })
+    socket.once("connect", () => {
+      settled = true
+      socket.write(
+        [
+          `GET ${path} HTTP/1.1`,
+          `Host: ${origin.host}`,
+          "Connection: Upgrade",
+          "Upgrade: websocket",
+          "Sec-WebSocket-Version: 13",
+          `Sec-WebSocket-Key: ${Buffer.from("0123456789abcdef").toString("base64")}`,
+          "",
+          "",
+        ].join("\r\n"),
+      )
+      resume(Effect.succeed(socket))
+    })
+    return Effect.sync(() => socket.destroy())
+  })
+}
+
+const waitFor = (ready: () => boolean) =>
+  Effect.gen(function* () {
+    while (!ready()) yield* Effect.sleep("10 millis")
+  })
 
 async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, expected: string) {
   while (true) {

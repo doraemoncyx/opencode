@@ -56,6 +56,21 @@ story("renders every tool error outcome without leaking hidden tools", async ({ 
   for (const name of names) await expect(timeline.locator(`[data-timeline-part-id="tool_error_${name}"]`)).toBeVisible()
 })
 
+// Moved from packages/app/e2e/regression/session-timeline-projection.spec.ts
+story("renders generic tool parameters and output", async ({ mount }) => {
+  const timeline = await mount("current-session-research-agents--agent-research", { args: { scenario: "workflow" } })
+  const group = timeline.locator('[data-timeline-part-ids="tool_family_skill,tool_family_custom"]')
+  await group.getByRole("button").click()
+  const tool = timeline.locator('[data-timeline-part-id="tool_family_custom"]')
+  await expect(tool).toBeVisible()
+  await tool.locator('[data-slot="collapsible-trigger"]').click()
+  const input = tool.locator('[data-component="tool-input"]')
+  await expect(input).toBeVisible()
+  await expect(input.locator('[data-slot="tool-input-label"]')).toHaveText("Parameters")
+  await expect(input.locator('[data-slot="tool-input-json"]')).toContainText('"target": "timeline"')
+  await expect(tool.locator('[data-component="tool-output"]')).toContainText("Complete")
+})
+
 // Moved from packages/app/e2e/regression/session-timeline-tool-projection.spec.ts
 story("transitions shell and question through running error outcomes", async ({ mount }) => {
   const timeline = await mount("current-session-research-agents--agent-research", { args: { scenario: "transition" } })

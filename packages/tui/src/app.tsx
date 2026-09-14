@@ -103,8 +103,10 @@ import { SessionTerminalsProvider } from "./context/session-terminals"
 import { PanelProvider, usePanel } from "./context/panel"
 import { SessionFrame } from "./component/session-frame"
 import { createTuiClipboard } from "./clipboard"
+import { registerSpinner } from "opentui-spinner/solid"
 
 registerOpencodeSpinner()
+registerSpinner()
 
 const appGlobalBindingCommands = ["session.list", "session.new", "open.menu"] as const
 
@@ -288,6 +290,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         const mode = handoff?.mode ?? (await renderer.waitForThemeMode(1000)) ?? "dark"
         if (renderer.isDestroyed) return
 
+        registerSpinner()
         await render(() => {
           return (
             <LogProvider log={log}>

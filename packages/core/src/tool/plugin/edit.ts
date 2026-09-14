@@ -39,7 +39,24 @@ export const Output = Schema.Struct({
 })
 export type Output = typeof Output.Type
 
-const crlf = "\r\n"
+type LineEnding = "\n" | "\r\n" | "\r"
+
+const normalizeLineEndings = (text: string) => text.replaceAll("\r\n", "\n").replaceAll("\r", "\n")
+
+const detectLineEnding = (text: string): LineEnding => {
+  const crlf = text.match(/\r\n/g)?.length ?? 0
+  const cr = (text.match(/\r/g)?.length ?? 0) - crlf
+  const lf = (text.match(/\n/g)?.length ?? 0) - crlf
+  if (crlf >= cr && crlf >= lf) return "\r\n"
+  if (cr >= lf) return "\r"
+  return "\n"
+}
+
+const convertToLineEnding = (text: string, ending: LineEnding) => {
+  const normalized = normalizeLineEndings(text)
+  if (ending === "\n") return normalized
+  return normalized.replaceAll("\n", ending)
+}
 
 interface Match {
   readonly start: number
@@ -157,9 +174,9 @@ export const Plugin = {
                 ),
               )
               const source = original.text
-              const ending = source.includes(crlf) ? crlf : "\n"
-              const oldString = input.oldString.replaceAll(crlf, "\n").replaceAll("\n", ending)
-              const newString = input.newString.replaceAll(crlf, "\n").replaceAll("\n", ending)
+              const ending = detectLineEnding(source)
+              const oldString = convertToLineEnding(input.oldString, ending)
+              const newString = convertToLineEnding(input.newString, ending)
               const exact = findOccurrences(source, oldString)
               // These one-to-one mappings preserve offsets into the original source.
               const unicode =
@@ -196,15 +213,16 @@ export const Plugin = {
                   message: `Found ${replacements} matches for oldString, but expected exactly one. Add more surrounding context to make oldString unique, or set replaceAll to true to replace every occurrence.`,
                 })
               }
-              const replacementBom = replaced.startsWith("\uFEFF")
+              const bom = original.bom || replaced.startsWith("\uFEFF")
               const result = yield* fileMutation.write({
                 target,
-                content: Bom.join(replaced, original.bom || replacementBom),
+                content: Bom.writeFileEncoded(Bom.join(replaced, bom), original.encoding),
               })
-              const bom = original.bom || replacementBom
-              const formatted = (yield* formatter.file(target.absolute))
-                ? yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
-                : (yield* FileMutation.readText(environment.files, target.absolute)).text
+              // GBK files never reach the formatter: it reads as UTF-8 and would corrupt the encoding.
+              const formatted =
+                original.encoding !== "gbk" && (yield* formatter.file(target.absolute))
+                  ? yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
+                  : (yield* FileMutation.readText(environment.files, target.absolute)).text
               return {
                 files: [fileDiff(result.resource, source, formatted)],
                 replacements,

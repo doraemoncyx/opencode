@@ -82,6 +82,7 @@ import { WriteTool } from "../tool/plugin/write.js"
 import { AgentPlugin } from "./agent.js"
 import BrowserPlugin from "@opencode/plugin-browser"
 import { CommandPlugin } from "./command.js"
+import { FffMcpPlugin } from "./fff-mcp.js"
 import { PlanPlugin } from "./plan.js"
 import { ModelsDevPlugin } from "./models-dev.js"
 import { McpCodeModeExclusionPlugin } from "./mcp-codemode-exclusion.js"
@@ -226,6 +227,8 @@ const pre = [
 ] as const satisfies readonly InternalPlugin[]
 
 const post = [
+  // Runs after ConfigMcpPlugin (pre) so the direct fff-mcp binary replaces any configured wrapper.
+  FffMcpPlugin.Plugin,
   ConfigInstructionPlugin.Plugin,
   ConfigReferencePlugin.Plugin,
   ConfigAgentPlugin.Plugin,
