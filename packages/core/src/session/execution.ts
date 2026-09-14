@@ -102,7 +102,13 @@ export const layer = Layer.effect(
         Effect.tapCause((cause) =>
           Cause.hasInterruptsOnly(cause)
             ? Effect.void
-            : Effect.logError("Failed to drain Session", cause).pipe(Effect.annotateLogs({ sessionID })),
+            : Effect.gen(function* () {
+                yield* Effect.logError("Failed to drain Session", cause).pipe(Effect.annotateLogs({ sessionID }))
+                const failed = cause.reasons.find(Cause.isFailReason)?.error
+                const body = failed === undefined ? undefined : toSessionError(failed).body
+                if (body !== undefined)
+                  yield* Effect.logError("Provider response body", body).pipe(Effect.annotateLogs({ sessionID }))
+              }),
         ),
       )
       return yield* SessionRunner.DrainResult.$match(result, {

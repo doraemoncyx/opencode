@@ -680,7 +680,12 @@ export type SessionLogOutput =
             | undefined
           readonly data: {
             readonly sessionID: Session.ID
-            readonly error: { readonly type: string; readonly message: string; readonly status?: number | undefined }
+            readonly error: {
+              readonly type: string
+              readonly message: string
+              readonly status?: number | undefined
+              readonly body?: string | undefined
+            }
           }
         }
       | {
@@ -871,7 +876,12 @@ export type SessionLogOutput =
           readonly data: {
             readonly sessionID: Session.ID
             readonly assistantMessageID: SessionMessage.ID
-            readonly error: { readonly type: string; readonly message: string; readonly status?: number | undefined }
+            readonly error: {
+              readonly type: string
+              readonly message: string
+              readonly status?: number | undefined
+              readonly body?: string | undefined
+            }
             readonly finish?: "content-filter" | undefined
             readonly rawFinish?: string | undefined
             readonly providerState?: SessionMessage.ProviderState | undefined
@@ -1081,7 +1091,12 @@ export type SessionLogOutput =
             readonly sessionID: Session.ID
             readonly assistantMessageID: SessionMessage.ID
             readonly id: string
-            readonly error: { readonly type: string; readonly message: string; readonly status?: number | undefined }
+            readonly error: {
+              readonly type: string
+              readonly message: string
+              readonly status?: number | undefined
+              readonly body?: string | undefined
+            }
             readonly content?:
               | readonly [
                   (
@@ -1126,7 +1141,12 @@ export type SessionLogOutput =
             readonly assistantMessageID: SessionMessage.ID
             readonly attempt: number
             readonly at: number
-            readonly error: { readonly type: string; readonly message: string; readonly status?: number | undefined }
+            readonly error: {
+              readonly type: string
+              readonly message: string
+              readonly status?: number | undefined
+              readonly body?: string | undefined
+            }
           }
         }
       | {
@@ -1207,7 +1227,12 @@ export type SessionLogOutput =
           readonly data: {
             readonly sessionID: Session.ID
             readonly reason: "auto" | "manual"
-            readonly error: { readonly type: string; readonly message: string; readonly status?: number | undefined }
+            readonly error: {
+              readonly type: string
+              readonly message: string
+              readonly status?: number | undefined
+              readonly body?: string | undefined
+            }
             readonly inputID?: SessionMessage.ID | undefined
             readonly cost?: (number & Brand.Brand<"Money.USD">) | undefined
             readonly tokens?:
