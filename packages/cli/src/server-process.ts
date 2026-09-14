@@ -72,13 +72,17 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
         delete process.env.OPENCODE_PASSWORD
         delete process.env.OPENCODE_SERVER_PASSWORD
       }
+      // Managed (service) mode keeps its configured credential, stdio keeps the
+      // environment credential, and a foreground `serve` runs without authentication.
       const password =
         options.mode === "service"
           ? config.password || randomBytes(32).toString("base64url")
-          : environmentPassword
-            ? Redacted.value(environmentPassword)
-            : randomBytes(32).toString("base64url")
-      if (!password) return yield* Effect.fail(new Error("Missing server password"))
+          : options.mode === "stdio"
+            ? environmentPassword
+              ? Redacted.value(environmentPassword)
+              : randomBytes(32).toString("base64url")
+            : undefined
+      if (options.mode !== "default" && !password) return yield* Effect.fail(new Error("Missing server password"))
       const instanceID = randomUUID()
       const transform = yield* WebUi.handler()
       const server = yield* start(
@@ -121,7 +125,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
                 : !truthy(process.env.OPENCODE_DISABLE_FFF),
           },
         },
-        serviceOptions === undefined
+        serviceOptions === undefined || password === undefined
           ? undefined
           : {
               onListen: (address, shutdown) =>
@@ -158,7 +162,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
       if (server === undefined) return
       const url = HttpServer.formatAddress(server.address)
       console.log(options.mode === "stdio" ? JSON.stringify({ url }) : `server listening on ${url}`)
-      if (foreground && !environmentPassword) console.log(`server password ${password}`)
+      if (foreground && password !== undefined) console.log(`server password ${password}`)
       yield* Updater.Service.pipe(
         Effect.flatMap((updater) =>
           Updater.pollUpdates({

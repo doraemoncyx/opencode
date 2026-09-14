@@ -55,7 +55,6 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   transform?: Transform,
 ) {
   const password = options.password
-  if (!password) return yield* Effect.fail(new Error("Missing server password"))
   const hostname = options.hostname ?? "127.0.0.1"
   const port = Option.fromNullishOr(options.port)
   const shutdown = yield* Latch.make()
@@ -203,27 +202,26 @@ function addressInUse(error: unknown) {
 }
 
 function dispatch(
-  password: string,
+  password: string | undefined,
   status: Status.Interface,
   application: Ref.Ref<Option.Option<App>>,
   version: string,
   urls: () => ReadonlyArray<string>,
 ): App {
-  const auth = ServerAuth.Config.of({ password: Option.some(password), username: "opencode" })
+  const auth = ServerAuth.Config.of({ password: Option.fromNullishOr(password), username: "opencode" })
   return Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest
     const url = new URL(request.url, "http://localhost")
+    // Without a configured password authentication is disabled, matching the route layer.
+    const authorized = !ServerAuth.required(auth) || (yield* authorizedRequest(request, auth))
     if (request.method === "GET" && url.pathname === "/api/status") {
-      if (!(yield* authorizedRequest(request, auth))) return unauthorized()
+      if (!authorized) return unauthorized()
       return yield* statusResponse(status, version, urls)
     }
     const state = yield* status.current
     const app = yield* Ref.get(application)
     const ready = state.type === "ready" && Option.isSome(app)
-    if (
-      (!ready || (!hasPtyConnectTicketURL(url) && !hasPersistentPtyConnectTicketURL(url))) &&
-      !(yield* authorizedRequest(request, auth))
-    )
+    if ((!ready || (!hasPtyConnectTicketURL(url) && !hasPersistentPtyConnectTicketURL(url))) && !authorized)
       return unauthorized()
     if (ready) return yield* app.value
     return unavailable(state)
