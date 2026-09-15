@@ -19,7 +19,7 @@ import { createServer } from "node:http"
 import type { Duplex } from "node:stream"
 import { ServerAuth } from "./auth"
 import { isAllowedCorsOrigin } from "./cors"
-import { authorizedRequest } from "./middleware/authorization"
+import { authorizedRequest, localRequest } from "./middleware/authorization"
 import { withoutParentSpan } from "./request-tracing"
 import { createRoutes } from "./routes"
 import { ServerInfo } from "./server-info"
@@ -70,7 +70,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   // Request fibers may continue inbound trace context, but must not inherit the server startup parent.
   yield* bound.http
     .serve(
-      dispatch(password, status, application, options.app?.version ?? "unknown", urls).pipe(
+      dispatch(password, options.localAuth === true, status, application, options.app?.version ?? "unknown", urls).pipe(
         HttpMiddleware.cors({ allowedOrigins: (origin) => isAllowedCorsOrigin(origin, options), maxAge: 86_400 }),
       ),
       errorResponseLogger,
@@ -203,6 +203,7 @@ function addressInUse(error: unknown) {
 
 function dispatch(
   password: string | undefined,
+  localAuth: boolean,
   status: Status.Interface,
   application: Ref.Ref<Option.Option<App>>,
   version: string,
@@ -213,7 +214,10 @@ function dispatch(
     const request = yield* HttpServerRequest.HttpServerRequest
     const url = new URL(request.url, "http://localhost")
     // Without a configured password authentication is disabled, matching the route layer.
-    const authorized = !ServerAuth.required(auth) || (yield* authorizedRequest(request, auth))
+    const authorized =
+      !ServerAuth.required(auth) ||
+      (localAuth && localRequest(request)) ||
+      (yield* authorizedRequest(request, auth))
     if (request.method === "GET" && url.pathname === "/api/status") {
       if (!authorized) return unauthorized()
       return yield* statusResponse(status, version, urls)

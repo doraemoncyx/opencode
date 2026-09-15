@@ -96,6 +96,9 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           port,
           cors: options.cors ?? config.cors,
           password,
+          // The web UI is served from this listener, so the browser that opens it on
+          // this machine cannot supply credentials. Remote peers still authenticate.
+          localAuth: true,
           pty: { handoff },
           simulation: truthy(process.env.OPENCODE_SIMULATE),
           database: {
