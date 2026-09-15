@@ -59,6 +59,63 @@ test("adopts project metadata that arrives after the project settings open", asy
   await expect(name).toHaveValue("Settings demo")
 })
 
+test("renames a project added in this session without reloading", async ({ page }) => {
+  const added = "C:/Projects/added-project"
+  const addedProject = {
+    id: "proj_added",
+    canonical: added,
+    name: "Added project",
+    time: { created: 1700000000000, updated: 1700000000000 },
+    sandboxes: [],
+  }
+  const exists = { value: false }
+  await mockOpenCodeServer(page, {
+    directory: added,
+    project: addedProject,
+    provider: { all: [], connected: [], default: {} },
+    sessions: [],
+    pageMessages: () => ({ items: [] }),
+    // Resolving the location is what creates the project on the server, so the listing
+    // that runs first is what makes the project exist.
+    fileList: (path) => {
+      exists.value = true
+      return path === "C:/Projects" ? [{ path: "./", type: "directory", ignored: false }] : []
+    },
+  })
+  await page.route("**/api/project", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    if (!exists.value) return route.fulfill({ json: [] })
+    await route.fallback()
+  })
+  await page.addInitScript(() => {
+    localStorage.setItem("opencode.global.dat:server", JSON.stringify({ projects: { local: [] } }))
+  })
+  await page.goto("/")
+
+  await page.locator('[data-action="home-add-project-row"]').click()
+  const picker = page.getByRole("dialog", { name: "Open project", exact: true })
+  await picker.getByRole("button", { name: "Parent", exact: true }).click()
+  await picker.getByRole("treeitem", { name: "added-project", exact: true }).click()
+  await picker.getByRole("button", { name: "Select folder", exact: true }).click()
+  await expect(picker).toBeHidden()
+
+  await page.getByRole("button", { name: "Settings", exact: true }).click()
+  const settings = page.getByTestId("settings-screen")
+  await settings.getByRole("tab", { name: "Projects", exact: true }).click()
+  await settings.getByRole("button", { name: addedProject.name, exact: true }).click()
+  const name = settings.getByRole("textbox", { name: "Project name", exact: true })
+  await expect(name).toHaveValue(addedProject.name)
+
+  const saved = page.waitForRequest(
+    (request) =>
+      request.method() === "PATCH" && new URL(request.url()).pathname === `/api/project/${addedProject.id}`,
+  )
+  await name.fill("Renamed after add")
+  await name.blur()
+
+  expect((await saved).postDataJSON()).toEqual({ name: "Renamed after add" })
+})
+
 test("commits a project name when Enter is pressed", async ({ page }) => {
   await setup(page, false)
   const settings = await openProject(page, "Settings demo")

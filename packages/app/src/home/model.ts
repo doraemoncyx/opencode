@@ -112,7 +112,13 @@ export function createHomeController() {
               // TODO: Initialize empty directories when V2 exposes a native Git init API.
               return ctx.sdk.api.location.get({ location }).then((result) => result.project)
             })
-            .then((project) => ctx.sync.child(item, { bootstrap: false })[1]("project", project.id))
+            .then((project) => {
+              ctx.sync.child(item, { bootstrap: false })[1]("project", project.id)
+              // Resolving the directory created the project, but the global list still
+              // predates it. Reload the list so the entry has the project's id and
+              // metadata, instead of waiting for a manual reload.
+              ctx.sync.project.refresh()
+            })
             .catch(() => undefined)
           ctx.projects.open(item)
         })

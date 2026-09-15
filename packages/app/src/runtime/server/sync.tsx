@@ -258,6 +258,12 @@ export function createServerSyncContextInner(serverSDK: ServerSDK, data: Data) {
     icon(directory: string, value: string | undefined) {
       children.projectIcon(directory, value)
     },
+    // A directory can resolve to a project the global list has not loaded yet, such as one
+    // the user just added. Reload the list so the entry carries the project's id and
+    // metadata instead of only the folder name.
+    refresh() {
+      void bootstrap.refetch()
+    },
   }
 
   const updateConfigMutation = useMutation(() => ({
