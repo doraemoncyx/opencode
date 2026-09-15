@@ -12,10 +12,6 @@ const ACTION_PREFIX = `${SERVER}_`
 const ENV_BIN = "OPENCODE_FFF_MCP_BIN"
 const ENV_AUTO = "OPENCODE_FFF_MCP"
 
-const GREP_GUIDANCE =
-  "For content search in non-UTF-8 files (for example GBK-encoded text) or to match several alternative patterns in one call, use `fff-mcp_grep` (or `fff-mcp_multi_grep` for OR patterns) instead."
-const GLOB_GUIDANCE = "For fuzzy file-name search, use `fff-mcp_find_files` instead."
-
 export function make(env: NodeJS.ProcessEnv = process.env) {
   return define({
     id: "opencode.fff-mcp",
@@ -28,6 +24,7 @@ export function make(env: NodeJS.ProcessEnv = process.env) {
         return
       }
 
+      let registered = false
       yield* ctx.mcp.transform((editor) => {
         // This built-in runs after config-level MCP registration, so it overrides the command of a
         // configured `fff-mcp` server (for example a wrapper script) with the resolved GBK-capable
@@ -37,18 +34,16 @@ export function make(env: NodeJS.ProcessEnv = process.env) {
         const auto = env.NODE_ENV !== "test" || env[ENV_AUTO] === "1"
         if (!editor.get(SERVER) && !auto) return
         editor.set(SERVER, { type: "local", command: [command], codemode: false })
+        registered = true
       })
 
-      yield* ctx.tool.transform((editor) => {
-        editor.update(GrepTool.name, (tool) => {
-          if (tool.description.includes(GREP_GUIDANCE)) return
-          tool.description = `${tool.description}\n\n${GREP_GUIDANCE}`
+      // Built-in grep/glob remain only as a fallback for when fff-mcp was not registered: with a
+      // connected server the two search tools are removed so models use the fff-mcp equivalents.
+      if (registered)
+        yield* ctx.tool.transform((editor) => {
+          editor.remove(GrepTool.name)
+          editor.remove(GlobTool.name)
         })
-        editor.update(GlobTool.name, (tool) => {
-          if (tool.description.includes(GLOB_GUIDANCE)) return
-          tool.description = `${tool.description}\n\n${GLOB_GUIDANCE}`
-        })
-      })
 
       yield* ctx.permission.hook("evaluate", (event) => {
         if (event.action.startsWith(ACTION_PREFIX)) event.effect = "allow"
@@ -59,7 +54,7 @@ export function make(env: NodeJS.ProcessEnv = process.env) {
         if (event.status !== "error" || !event.tool.startsWith(ACTION_PREFIX)) return Effect.void
         if (!/not (available|connected)/i.test(event.error.message)) return Effect.void
         event.error = new ToolFailure({
-          message: `${SERVER} is not connected. Fall back to the built-in ${GrepTool.name}/${GlobTool.name} tools. (${event.error.message})`,
+          message: `${SERVER} is not connected. Check that the server process is running, or point ${ENV_BIN} at a working ${SERVER} binary. (${event.error.message})`,
         })
         return Effect.void
       })

@@ -110,11 +110,11 @@ function run(
 }
 
 describe("FffMcpPlugin registration", () => {
-  it.effect("registers fff-mcp and overrides a configured server of the same name", () =>
+  it.effect("overrides a configured server of the same name and removes the built-in search tools", () =>
     Effect.gen(function* () {
       const command = "C:\\tools\\fff-mcp.exe"
       const result = run({
-        env: { OPENCODE_FFF_MCP_BIN: command } as NodeJS.ProcessEnv,
+        env: { OPENCODE_FFF_MCP_BIN: command, NODE_ENV: "test" } as NodeJS.ProcessEnv,
         servers: { "fff-mcp": { type: "local", command: ["python", "wrapper.py"] } },
         tools: { grep: { description: "grep description" }, glob: { description: "glob description" } },
       })
@@ -122,9 +122,40 @@ describe("FffMcpPlugin registration", () => {
       yield* result.effect
 
       expect(result.servers["fff-mcp"]).toEqual({ type: "local", command: [command], codemode: false })
-      expect(result.tools["grep"]?.description).toContain("fff-mcp_grep")
-      expect(result.tools["grep"]?.description).toContain("fff-mcp_multi_grep")
-      expect(result.tools["glob"]?.description).toContain("fff-mcp_find_files")
+      expect(result.tools["grep"]).toBeUndefined()
+      expect(result.tools["glob"]).toBeUndefined()
+      expect(result.permission).toHaveLength(1)
+    }),
+  )
+
+  it.effect("registers by default and removes the built-in search tools", () =>
+    Effect.gen(function* () {
+      const command = "C:\\tools\\fff-mcp.exe"
+      const result = run({
+        env: { OPENCODE_FFF_MCP_BIN: command } as NodeJS.ProcessEnv,
+        tools: { grep: { description: "grep description" }, glob: { description: "glob description" } },
+      })
+
+      yield* result.effect
+
+      expect(result.servers["fff-mcp"]).toEqual({ type: "local", command: [command], codemode: false })
+      expect(result.tools["grep"]).toBeUndefined()
+      expect(result.tools["glob"]).toBeUndefined()
+    }),
+  )
+
+  it.effect("keeps the built-in search tools when auto-registration is skipped", () =>
+    Effect.gen(function* () {
+      const result = run({
+        env: { OPENCODE_FFF_MCP_BIN: "fff-mcp", NODE_ENV: "test" } as NodeJS.ProcessEnv,
+        tools: { grep: { description: "grep description" }, glob: { description: "glob description" } },
+      })
+
+      yield* result.effect
+
+      expect(result.servers).toEqual({})
+      expect(result.tools["grep"]?.description).toBe("grep description")
+      expect(result.tools["glob"]?.description).toBe("glob description")
     }),
   )
 
@@ -140,6 +171,7 @@ describe("FffMcpPlugin registration", () => {
 
         expect(result.servers).toEqual({})
         expect(result.tools["grep"]?.description).toBe("grep description")
+        expect(result.tools["glob"]?.description).toBe("glob description")
         expect(result.permission).toHaveLength(0)
       }),
     ),
@@ -164,7 +196,7 @@ describe("FffMcpPlugin registration", () => {
       }
       yield* hook(event)
 
-      expect(event.error.message).toContain("Fall back to the built-in grep/glob tools")
+      expect(event.error.message).toContain("OPENCODE_FFF_MCP_BIN")
     }),
   )
 })
