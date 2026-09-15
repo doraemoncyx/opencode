@@ -13,6 +13,7 @@ import { useServerCollectionController } from "@/servers/registry/controller"
 import { AddServerMenu } from "@/servers/wsl/settings"
 import { DialogServer } from "@/servers/connect/dialog"
 import { LocationProvider } from "@/workspaces/location"
+import { sameDirectory } from "@/workspaces/paths"
 import { SettingsGeneral } from "./general/general"
 import { SettingsAppearance } from "./appearance/appearance"
 import { SettingsExperimental } from "./experimental/experimental"
@@ -111,9 +112,11 @@ export function SettingsScreen() {
   const connection = (key: string) => servers().find((item) => item.key === key)
   const project = (server: ServerConnection.Any, directory: string) => {
     const context = global.ensureServerCtx(server)
+    // The view carries the directory the user opened, which can differ from the stored
+    // spelling by separator or case.
     const value =
-      context.projects.list().find((item) => item.worktree === directory) ??
-      context.sync.data.project.find((item) => item.worktree === directory)
+      context.projects.list().find((item) => sameDirectory(item.worktree, directory)) ??
+      context.sync.data.project.find((item) => sameDirectory(item.worktree, directory))
     return value ? { expanded: false, ...value } : undefined
   }
   const targetServer = createMemo(() => {

@@ -14,6 +14,7 @@ import { AppProcess } from "@opencode/util/process"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { Hash } from "@opencode/util/hash"
 import { ProjectSchema } from "./project/schema.js"
+import { ProjectIdentity } from "./project/identity.js"
 import { ProjectTable, upsertProject } from "./project/sql.js"
 import { WorktreeTable } from "./worktree/sql.js"
 
@@ -354,7 +355,7 @@ const layer = Layer.effect(
       }
 
       return yield* persist({
-        id: ID.make(Hash.fast(`directory:${directory}`)),
+        id: ProjectIdentity.fromDirectory(directory),
         directory,
         canonical: directory,
         vcs: undefined,
