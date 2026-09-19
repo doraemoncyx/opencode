@@ -3,6 +3,7 @@ import { createStore } from "solid-js/store"
 import { Collapsible } from "@opencode/ui/collapsible"
 import { Icon } from "@opencode/ui/icon"
 import { IconButton } from "@opencode/ui/icon-button"
+import { Select } from "@opencode/ui/select"
 import { Switch } from "@opencode/ui/switch"
 import { Tooltip } from "@opencode/ui/tooltip"
 import {
@@ -11,12 +12,15 @@ import {
   timelinePresets,
   type TimelineCategory,
   type TimelineDetail,
+  type TimelineExpansion,
   type TimelinePlacement,
 } from "@opencode/session-ui/timeline/detail"
 import { useLanguage } from "@/runtime/i18n/language"
 import "./timeline-detail.css"
 
 const presets = timelinePresets.toReversed()
+// Thinking is the only category where a middle detail level reads differently from collapsed.
+const thinkingDetails: TimelineExpansion[] = ["collapsed", "snippet", "expanded"]
 
 export function TimelineDetailControl(props: { value: TimelineDetail; onChange: (value: TimelineDetail) => void }) {
   const language = useLanguage()
@@ -33,6 +37,10 @@ export function TimelineDetailControl(props: { value: TimelineDetail; onChange: 
     const current = preset()
     return current ? language.t(`settings.timeline.preset.${current.id}`) : language.t("settings.timeline.custom")
   }
+  const setDetails = (category: TimelineCategory, details: TimelineExpansion) => {
+    props.onChange({ ...props.value, [category]: { ...props.value[category], details } })
+  }
+  const categoryLabel = (category: TimelineCategory) => language.t(`settings.timeline.category.${category}`)
 
   return (
     <div data-component="timeline-detail-control">
@@ -159,7 +167,7 @@ export function TimelineDetailControl(props: { value: TimelineDetail; onChange: 
                           }
                         >
                           {language.t("settings.timeline.grouped.label", {
-                            activity: language.t(`settings.timeline.category.${category}`),
+                            activity: categoryLabel(category),
                           })}
                         </Switch>
                       </Show>
@@ -174,22 +182,37 @@ export function TimelineDetailControl(props: { value: TimelineDetail; onChange: 
                             when={props.value[category].placement !== "hidden"}
                             fallback={<span data-slot="timeline-detail-unavailable" aria-hidden="true" />}
                           >
-                            <Switch
-                              data-category={category}
-                              data-field="details"
-                              hideLabel
-                              checked={props.value[category].details === "collapsed"}
-                              onChange={(checked) =>
-                                props.onChange({
-                                  ...props.value,
-                                  [category]: { ...props.value[category], details: checked ? "collapsed" : "expanded" },
-                                })
+                            <Show
+                              when={category === "thinking"}
+                              fallback={
+                                <Switch
+                                  data-category={category}
+                                  data-field="details"
+                                  hideLabel
+                                  checked={props.value[category].details === "collapsed"}
+                                  onChange={(checked) => setDetails(category, checked ? "collapsed" : "expanded")}
+                                >
+                                  {language.t("settings.timeline.collapsed.label", {
+                                    activity: categoryLabel(category),
+                                  })}
+                                </Switch>
                               }
                             >
-                              {language.t("settings.timeline.collapsed.label", {
-                                activity: language.t(`settings.timeline.category.${category}`),
-                              })}
-                            </Switch>
+                              <div data-category={category} data-field="details">
+                                <Select
+                                  aria-label={language.t("settings.timeline.details.label", {
+                                    activity: categoryLabel(category),
+                                  })}
+                                  options={thinkingDetails}
+                                  current={props.value.thinking.details}
+                                  value={(details) => details}
+                                  label={(details) => language.t(`settings.timeline.details.${details}`)}
+                                  onSelect={(details) => {
+                                    if (details) setDetails("thinking", details)
+                                  }}
+                                />
+                              </div>
+                            </Show>
                           </Show>
                         </>
                       ) : null}

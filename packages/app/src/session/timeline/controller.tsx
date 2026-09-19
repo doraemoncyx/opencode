@@ -115,12 +115,12 @@ export function createTimelineController(input: { session: TimelineSessionSource
       tools: { ...detail.tools },
     }
   })
-  const reasoningMode = (): ReasoningMode =>
-    timelineDetail().thinking.placement === "hidden"
-      ? "hidden"
-      : timelineDetail().thinking.details === "expanded"
-        ? "full"
-        : "compact"
+  const reasoningMode = (): ReasoningMode => {
+    const thinking = timelineDetail().thinking
+    if (thinking.placement === "hidden") return "hidden"
+    if (thinking.details === "snippet") return "snippet"
+    return thinking.details === "expanded" ? "full" : "compact"
+  }
   const shellToolPartsExpanded = () => timelineDetail().shell.details === "expanded"
   const editToolPartsExpanded = () => timelineDetail().edit.details === "expanded"
   const projection = createTimelineProjection({

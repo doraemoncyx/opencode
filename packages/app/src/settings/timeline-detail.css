@@ -156,7 +156,7 @@
   }
 
   [data-slot="timeline-detail-categories"] {
-    --timeline-detail-columns: minmax(0, 1fr) 72px 88px;
+    --timeline-detail-columns: minmax(0, 1fr) 72px 108px;
     display: flex;
     flex-direction: column;
     margin-top: 0;
@@ -170,6 +170,14 @@
     width: 24px;
     border-block-start: 1px solid var(--v2-icon-icon-muted);
     opacity: 0.5;
+  }
+
+  [data-slot="timeline-detail-expansion"] > [data-field="details"] {
+    width: 100%;
+  }
+
+  [data-slot="timeline-detail-expansion"] > [data-field="details"] [data-component="select-v2"] {
+    width: 100%;
   }
 
   [data-slot="timeline-detail-list"] {
@@ -299,7 +307,7 @@
 
 @container timeline-detail (max-width: 310px) {
   [data-component="timeline-detail-control"] [data-slot="timeline-detail-categories"] {
-    --timeline-detail-columns: minmax(0, 1fr) 64px 80px;
+    --timeline-detail-columns: minmax(0, 1fr) 64px 108px;
   }
 
   [data-component="timeline-detail-control"] [data-slot="timeline-detail-columns"],

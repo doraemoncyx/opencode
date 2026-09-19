@@ -43,6 +43,7 @@ export function SessionAssistantContent(props: {
   turnDurationMs?: number | null
   defaultOpen?: boolean
   reasoningDefaultOpen?: boolean
+  reasoningPreview?: boolean
   toolOpen?: boolean
   onToolOpenChange?: (open: boolean) => void
   onContentRendered?: () => void
@@ -67,6 +68,7 @@ export function SessionAssistantContent(props: {
             content={content()}
             streaming={false}
             defaultOpen={props.reasoningDefaultOpen}
+            preview={props.reasoningPreview}
             open={props.toolOpen}
             onOpenChange={props.onToolOpenChange}
             onContentRendered={props.onContentRendered}

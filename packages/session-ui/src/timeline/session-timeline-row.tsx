@@ -185,6 +185,7 @@ export function createSessionTimelineRowRenderer(input: {
               ? input.timelineDetail().thinking.details === "expanded"
               : input.reasoningMode() === "full"
           }
+          reasoningPreview={input.reasoningMode() === "snippet"}
           reasoningOpen={(id) => input.disclosure.value(id)}
           onReasoningOpenChange={(id, open) => input.disclosure.set(id, open)}
           toolDefaultOpen={(tool) => (input.timelineDetail ? contentDefaultOpen(tool) : false)}
@@ -271,6 +272,7 @@ export function createSessionTimelineRowRenderer(input: {
                 showAssistantCopyPartID={copyContentID(row().userMessageID)}
                 turnDurationMs={duration(row().userMessageID)}
                 defaultOpen={defaultOpen()}
+                reasoningPreview={input.reasoningMode() === "snippet"}
                 toolOpen={input.disclosure.value(disclosureKey()) ?? defaultOpen()}
                 onToolOpenChange={(open) => input.disclosure.set(disclosureKey(), open)}
                 onContentRendered={onSizeChange}
@@ -684,6 +686,7 @@ export function createSessionTimelineRowRenderer(input: {
                     id={current().ref.partID}
                     content={content()}
                     streaming
+                    preview={input.reasoningMode() === "snippet"}
                     defaultOpen={
                       input.timelineDetail
                         ? input.timelineDetail().thinking.details === "expanded"

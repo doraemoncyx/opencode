@@ -69,7 +69,7 @@ export function terminalFontFamily(font: string | undefined) {
 }
 
 const placementSchema = Schema.Literals(["separate", "grouped", "hidden"])
-const detailsSchema = Schema.Literals(["collapsed", "expanded"])
+const detailsSchema = Schema.Literals(["collapsed", "snippet", "expanded"])
 const activitySchema = Persistence.struct({ placement: placementSchema, details: detailsSchema })
 const placementOnlySchema = Persistence.struct({ placement: placementSchema })
 

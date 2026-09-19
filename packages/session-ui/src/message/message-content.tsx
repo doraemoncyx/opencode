@@ -1,4 +1,14 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, type ComponentProps, type JSX } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  Index,
+  onCleanup,
+  Show,
+  type ComponentProps,
+  type JSX,
+} from "solid-js"
 import { createStore } from "solid-js/store"
 import { useData } from "../context"
 import { useDialog } from "@opencode/ui/context/dialog"
@@ -16,7 +26,7 @@ import { Button } from "@opencode/ui/button"
 import { TextReveal } from "@opencode/ui/text-reveal"
 import { TextShimmer } from "@opencode/ui/text-shimmer"
 import { BasicTool } from "../components/basic-tool"
-import { reasoningHeading } from "../timeline/projection"
+import { reasoningLabel, reasoningSnippet } from "../timeline/projection"
 import { Card } from "@opencode/ui/card"
 import type {
   PromptAgentAttachment,
@@ -576,13 +586,21 @@ export function AssistantReasoningContent(props: {
   streaming: boolean
   defaultOpen?: boolean
   open?: boolean
+  /** Show the leading lines of a collapsed thought instead of only its label. */
+  preview?: boolean
   onOpenChange?: (open: boolean) => void
   onContentRendered?: () => void
 }) {
   const i18n = useI18n()
   const [state, setState] = createStore<{ open?: boolean }>({})
   const open = () => props.open ?? state.open ?? props.defaultOpen ?? false
-  const heading = createMemo(() => (props.streaming ? reasoningHeading(props.content.text) : ""))
+  // A thought keeps its label when collapsed so the row still says what it was about.
+  const label = createMemo(() => reasoningLabel(props.content.text) ?? "")
+  const preview = createMemo(() => {
+    if (!props.preview || open()) return []
+    const current = label()
+    return reasoningSnippet(props.content.text).filter((line) => line !== current)
+  })
   const duration = createMemo(() => {
     const time = props.content.time
     if (time?.completed === undefined) return undefined
@@ -618,19 +636,23 @@ export function AssistantReasoningContent(props: {
                   active={props.streaming}
                 />
               </span>
-              <Show
-                when={props.streaming && !open()}
-                fallback={
-                  <Show when={!props.streaming && duration()}>
-                    {(value) => <span data-slot="basic-tool-tool-subtitle">{value()}</span>}
-                  </Show>
-                }
-              >
-                <span data-slot="basic-tool-tool-subtitle">
-                  <TextReveal text={heading()} />
-                </span>
+              <Show when={!open() && label()}>
+                {(value) => (
+                  <span data-slot="basic-tool-tool-subtitle">
+                    {props.streaming ? <TextReveal text={value()} /> : value()}
+                  </span>
+                )}
+              </Show>
+              <Show when={!props.streaming && duration()}>
+                {(value) => <span data-slot="basic-tool-tool-subtitle">{value()}</span>}
               </Show>
             </div>
+            <Show when={preview().length > 0}>
+              <div data-slot="reasoning-preview">
+                {/* Index keeps duplicate preview lines distinct; For keys primitives by value. */}
+                <Index each={preview()}>{(line) => <span data-slot="reasoning-preview-line">{line()}</span>}</Index>
+              </div>
+            </Show>
           </div>
         }
       >

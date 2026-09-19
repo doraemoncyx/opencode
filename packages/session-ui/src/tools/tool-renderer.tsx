@@ -500,6 +500,7 @@ export function CurrentContextToolGroup(props: {
   onOpenChange: (open: boolean) => void
   onSizeChange?: () => void
   reasoningDefaultOpen?: boolean
+  reasoningPreview?: boolean
   reasoningOpen?: (id: string) => boolean | undefined
   onReasoningOpenChange?: (id: string, open: boolean) => void
   toolDefaultOpen?: (tool: SessionMessageAssistantTool) => boolean | undefined
@@ -674,6 +675,7 @@ export function CurrentContextToolGroup(props: {
                             content={part()}
                             streaming={part().streaming ?? false}
                             defaultOpen={props.reasoningDefaultOpen}
+                            preview={props.reasoningPreview}
                             open={props.reasoningOpen?.(part().id)}
                             onOpenChange={(open) => props.onReasoningOpenChange?.(part().id, open)}
                             onContentRendered={props.onSizeChange}

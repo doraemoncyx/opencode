@@ -280,6 +280,35 @@
   color: var(--v2-text-text-muted);
   line-height: var(--line-height-normal);
 
+  /* Preview lines stack under the label instead of sitting beside it. */
+  [data-slot="basic-tool-tool-info-structured"]:has([data-slot="reasoning-preview"]) {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: 2px;
+  }
+
+  [data-slot="reasoning-preview"] {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    max-width: 100%;
+    color: var(--v2-text-text-faint);
+    font-family: var(--v2-font-family-sans);
+    font-size: 13px;
+    font-weight: 440;
+    line-height: var(--line-height-compact);
+    letter-spacing: -0.04px;
+  }
+
+  [data-slot="reasoning-preview-line"] {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   [data-component="markdown"] {
     margin-top: 0;
     font-style: normal;
