@@ -213,6 +213,10 @@ const utf8Command = isWindows
 const gbkOverflowCommand = isWindows
   ? "$bytes = [byte[]]@(0xd6,0xd0,0xce,0xc4) * 30000; [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length); Start-Sleep -Milliseconds 100"
   : "i=0; while [ $i -lt 30000 ]; do printf '\\326\\320\\316\\304'; i=$((i+1)); done; sleep 0.1"
+// 同一个 call 先写 GBK 字节再写 UTF-8 字节：整页只判一次编码会让其中一行乱码
+const mixedEncodingCommand = isWindows
+  ? "$gbk = [byte[]]@(0xd6,0xd0,0xce,0xc4,0x0a); [Console]::OpenStandardOutput().Write($gbk, 0, $gbk.Length); $utf8 = [System.Text.Encoding]::UTF8.GetBytes('utf8 中文' + [char]10); [Console]::OpenStandardOutput().Write($utf8, 0, $utf8.Length); Start-Sleep -Milliseconds 100"
+  : "printf '\\326\\320\\316\\304\\n'; printf 'utf8 中文\\n'; sleep 0.1"
 
 const withSession = <A, E, R>(directory: string, body: (registry: Tool.Interface) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
@@ -1092,7 +1096,7 @@ describe("ShellTool", () => {
               const shell = yield* Shell.Service
               const info = yield* shell.get(ID.make(yield* Deferred.await(observed)))
               const bytes = new Uint8Array(yield* Effect.promise(() => Bun.file(info.file).arrayBuffer()))
-              expect(decodeShellOutput(bytes)).toBe("中文")
+              expect(decodeShellOutput(bytes).text).toBe("中文")
               expect([...bytes]).toEqual([0xd6, 0xd0, 0xce, 0xc4])
             }),
           )
@@ -1163,7 +1167,7 @@ describe("ShellTool", () => {
               const info = yield* shell.get(ID.make(yield* Deferred.await(observed)))
               const saved = decodeShellOutput(
                 new Uint8Array(yield* Effect.promise(() => Bun.file(info.file).arrayBuffer())),
-              )
+              ).text
               expect(saved.startsWith("中文")).toBe(true)
               expect(saved).not.toContain("\uFFFD")
             }),
@@ -1198,7 +1202,45 @@ describe("ShellTool", () => {
               const info = yield* shell.get(ID.make(yield* Deferred.await(observed)))
               const bytes = new Uint8Array(yield* Effect.promise(() => Bun.file(info.file).arrayBuffer()))
               expect([...bytes]).toEqual([0xe4, 0xb8, 0xad, 0xe6, 0x96, 0x87])
-              expect(decodeShellOutput(bytes)).toBe("中文")
+              expect(decodeShellOutput(bytes).text).toBe("中文")
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  it.live(
+    "decodes GBK and UTF-8 lines captured by the same command",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const observed = yield* Deferred.make<string>()
+              const settled = yield* executeTool(registry, {
+                ...call({ command: mixedEncodingCommand }, "call-mixed-encoding"),
+                progress: (update) =>
+                  typeof update.shellID === "string"
+                    ? Deferred.succeed(observed, update.shellID).pipe(Effect.asVoid)
+                    : Effect.void,
+              })
+              expect(settled.metadata).toMatchObject({ exit: 0, truncated: false })
+              expect(settled.content?.[0]).toEqual({ type: "text", text: "中文\nutf8 中文\n" })
+
+              const shell = yield* Shell.Service
+              const info = yield* shell.get(ID.make(yield* Deferred.await(observed)))
+              const bytes = new Uint8Array(yield* Effect.promise(() => Bun.file(info.file).arrayBuffer()))
+              expect([...bytes]).toEqual([
+                0xd6, 0xd0, 0xce, 0xc4, 0x0a, 0x75, 0x74, 0x66, 0x38, 0x20, 0xe4, 0xb8, 0xad, 0xe6, 0x96, 0x87, 0x0a,
+              ])
+
+              const page = yield* shell.output(info.id, { cursor: 0, limit: 5 })
+              expect(page.output).toBe("中文\nutf8")
+              expect(page.cursor).toBe(9)
             }),
           )
         },

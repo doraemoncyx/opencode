@@ -7,7 +7,7 @@ import { produce } from "immer"
 import { Shell } from "@opencode/schema/shell"
 import { AppProcess } from "@opencode/util/process"
 import { makeGlobalNode, makeLocationNode } from "@opencode/util/effect/app-node"
-import { decodeText, detectEncoding, type FileEncoding } from "@opencode/util/encoding"
+import { decodeShellOutput } from "@opencode/util/encoding"
 import { FSUtil } from "@opencode/util/fs-util"
 import { Bus } from "./bus.js"
 import { Environment } from "./environment/index.js"
@@ -33,44 +33,10 @@ const EXITED_LIMIT = 25
 export const RETENTION = Duration.days(7)
 export const DIRECTORY = "shell"
 
-// Captured command output may be GBK, whose bytes are not self-synchronizing: decoding from an
-// offset inside a multi-byte character shifts every following character. Page starts are therefore
-// snapped back to a byte that cannot be a GBK trail byte (ASCII controls and DEL are single-byte in
-// both UTF-8 and GBK), then the completed prefix is dropped after decoding.
-const characterSize = (bytes: Uint8Array, encoding: FileEncoding, offset: number) => {
-  const byte = bytes[offset]!
-  if (encoding === "utf-8") {
-    if (byte < 0xc0) return 1
-    if (byte < 0xe0) return 2
-    if (byte < 0xf0) return 3
-    return 4
-  }
-  // 0x80 is neither a GBK lead byte nor a single-byte character; keep it one byte so offsets stay aligned.
-  return byte < 0x81 ? 1 : 2
-}
-
-const completeBytes = (bytes: Uint8Array, encoding: FileEncoding) => {
-  let offset = 0
-  while (offset < bytes.length) {
-    const size = characterSize(bytes, encoding, offset)
-    if (offset + size > bytes.length) break
-    offset += size
-  }
-  return offset
-}
-
-const completeCharacters = (bytes: Uint8Array, encoding: FileEncoding, limit: number) => {
-  let offset = 0
-  let count = 0
-  while (offset < limit) {
-    const size = characterSize(bytes, encoding, offset)
-    if (offset + size > limit) break
-    offset += size
-    count += 1
-  }
-  return count
-}
-
+// Captured output can be GBK, whose bytes are not self-synchronizing: a page that starts inside a
+// multi-byte character would decode misaligned. Page starts are therefore snapped back to a byte that
+// cannot be a GBK trail byte (ASCII controls and DEL are single-byte in both UTF-8 and GBK); the
+// already-delivered prefix is dropped after decoding.
 type Info = Shell.Info
 type CreateInput = Shell.CreateInput & {
   shell?: string
@@ -273,13 +239,10 @@ const layer = () =>
         const bytes = yield* Effect.promise(() =>
           readRange(command.file, from, Math.min(command.size, pageEnd + 4)),
         )
-        const encoding = detectEncoding(bytes)
-        const complete = completeBytes(bytes, encoding)
-        const text = decodeText(bytes.subarray(0, complete), encoding)
-        const skipped = completeCharacters(bytes, encoding, start - from)
+        const page = decodeShellOutput(bytes, start - from)
         return {
-          output: text.slice(skipped),
-          cursor: Math.max(start, from + complete),
+          output: page.text,
+          cursor: Math.max(start, from + page.consumed),
           size: command.size,
           truncated: false,
         }

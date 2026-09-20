@@ -59,9 +59,74 @@ export function encodeText(text: string, encoding: FileEncoding): Uint8Array {
   return iconv.encode(text, "gbk")
 }
 
-// 解码 shell 工具收集的原始输出字节，按检测出的编码（UTF-8/GBK）还原为文本
-export function decodeShellOutput(bytes: Uint8Array): string {
-  return decodeText(bytes, detectEncoding(bytes))
+// 一段输出可能同时含两种编码：现代工具（python/node/git）写 UTF-8，Windows 原生工具（cmd、svn、
+// PowerShell 自己的报错信息）写 GBK。0x0a 在两种编码里都是单字节，不会出现在多字节字符内部，所以
+// 按行切分是安全的：每行各自判定编码，整流只用一个编码解会让少数派那些行整片乱码。
+//
+// `skip` 是窗口开头已被调用方交付过的字节数，对应字符会被丢弃；`consumed` 是本窗口被解码的字节数，
+// 供调用方推进字节游标。
+export function decodeShellOutput(bytes: Uint8Array, skip = 0): { text: string; consumed: number } {
+  const lines = []
+  for (let start = 0; start < bytes.length; ) {
+    const newline = bytes.indexOf(0x0a, start)
+    const end = newline === -1 ? bytes.length : newline + 1
+    const slice = bytes.subarray(start, end)
+    const encoding = detectEncoding(slice)
+    // 带换行的行必然完整；窗口末尾没有换行的那行可能被页边界从字符中间截断，只取完整字符，
+    // 尾部留给下一页重读。
+    const used = newline === -1 ? completeBytes(slice, encoding) : slice.length
+    lines.push({ start, encoding, used, text: decodeText(slice.subarray(0, used), encoding) })
+    start = end
+  }
+  let skipped = 0
+  for (const line of lines) {
+    const limit = Math.min(skip - line.start, line.used)
+    if (limit <= 0) break
+    skipped += completeCharacters(bytes.subarray(line.start, line.start + line.used), line.encoding, limit)
+  }
+  return {
+    text: lines
+      .map((line) => line.text)
+      .join("")
+      .slice(skipped),
+    consumed: lines.reduce((total, line) => total + line.used, 0),
+  }
+}
+
+// 页可能从字符中间开始读，而 GBK 不是自同步编码：从多字节字符内部偏移解码会错位其后所有字符。
+// 所以按字节步长推进，页边界要么落在完整字符上，要么就把尾巴留给下一页。
+const characterSize = (bytes: Uint8Array, encoding: FileEncoding, offset: number) => {
+  const byte = bytes[offset]!
+  if (encoding === "utf-8") {
+    if (byte < 0xc0) return 1
+    if (byte < 0xe0) return 2
+    if (byte < 0xf0) return 3
+    return 4
+  }
+  // 0x80 既不是 GBK 首字节也不是单字节字符；按 1 字节算以保持偏移对齐。
+  return byte < 0x81 ? 1 : 2
+}
+
+const completeBytes = (bytes: Uint8Array, encoding: FileEncoding) => {
+  let offset = 0
+  while (offset < bytes.length) {
+    const size = characterSize(bytes, encoding, offset)
+    if (offset + size > bytes.length) break
+    offset += size
+  }
+  return offset
+}
+
+const completeCharacters = (bytes: Uint8Array, encoding: FileEncoding, limit: number) => {
+  let offset = 0
+  let count = 0
+  while (offset < limit) {
+    const size = characterSize(bytes, encoding, offset)
+    if (offset + size > limit) break
+    offset += size
+    count += 1
+  }
+  return count
 }
 
 // 统计文本中的 CJK 字符（汉字 + 中文标点），供编码判定做对比

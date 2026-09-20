@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import iconv from "iconv-lite"
-import { decodeText, detectEncoding, encodeText } from "./encoding.js"
+import { decodeShellOutput, decodeText, detectEncoding, encodeText } from "./encoding.js"
 
 const gbkChinese = (text: string) => Buffer.from(iconv.encode(text, "gbk"))
 const utf8Chinese = (text: string) => Buffer.from(text, "utf-8")
@@ -55,6 +55,42 @@ describe("decodeText", () => {
 
   test("decodes GBK bytes", () => {
     expect(decodeText(gbkChinese("测试"), "gbk")).toBe("测试")
+  })
+})
+
+describe("decodeShellOutput", () => {
+  test("decodes UTF-8 and GBK lines in the same capture", () => {
+    const bytes = Buffer.concat([
+      gbkChinese("测试"),
+      Buffer.from("\n"),
+      utf8Chinese("utf8 中文"),
+      Buffer.from("\n"),
+    ])
+    const page = decodeShellOutput(bytes)
+    expect(page.text).toBe("测试\nutf8 中文\n")
+    expect(page.consumed).toBe(bytes.length)
+  })
+
+  test("decodes a GBK line that follows a UTF-8 line", () => {
+    const bytes = Buffer.concat([utf8Chinese("café\n"), gbkChinese("测试"), Buffer.from("\n")])
+    expect(decodeShellOutput(bytes).text).toBe("café\n测试\n")
+  })
+
+  test("drops the skipped prefix characters", () => {
+    const bytes = Buffer.concat([Buffer.from("abc\n"), gbkChinese("中文")])
+    const page = decodeShellOutput(bytes, 4)
+    expect(page.text).toBe("中文")
+    expect(page.consumed).toBe(bytes.length)
+  })
+
+  test("drops a trailing line cut in the middle of a character", () => {
+    const page = decodeShellOutput(gbkChinese("中文").subarray(0, 3))
+    expect(page.text).toBe("中")
+    expect(page.consumed).toBe(2)
+  })
+
+  test("decodes an empty capture", () => {
+    expect(decodeShellOutput(new Uint8Array())).toEqual({ text: "", consumed: 0 })
   })
 })
 
