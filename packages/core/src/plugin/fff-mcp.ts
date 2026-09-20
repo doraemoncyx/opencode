@@ -2,7 +2,9 @@ export * as FffMcpPlugin from "./fff-mcp.js"
 
 import { ToolFailure } from "@opencode/ai"
 import { define } from "@opencode/plugin/effect/plugin"
-import { Effect } from "effect"
+import { McpEvent } from "@opencode/schema/mcp-event"
+import { Event } from "@opencode/schema/plugin"
+import { Effect, Stream } from "effect"
 import { GlobTool } from "../tool/plugin/glob.js"
 import { GrepTool } from "../tool/plugin/grep.js"
 import { which } from "../util/which.js"
@@ -24,7 +26,6 @@ export function make(env: NodeJS.ProcessEnv = process.env) {
         return
       }
 
-      let registered = false
       yield* ctx.mcp.transform((editor) => {
         // This built-in runs after config-level MCP registration, so it overrides the command of a
         // configured `fff-mcp` server (for example a wrapper script) with the resolved GBK-capable
@@ -34,16 +35,39 @@ export function make(env: NodeJS.ProcessEnv = process.env) {
         const auto = env.NODE_ENV !== "test" || env[ENV_AUTO] === "1"
         if (!editor.get(SERVER) && !auto) return
         editor.set(SERVER, { type: "local", command: [command], codemode: false })
-        registered = true
       })
 
-      // Built-in grep/glob remain only as a fallback for when fff-mcp was not registered: with a
-      // connected server the two search tools are removed so models use the fff-mcp equivalents.
-      if (registered)
-        yield* ctx.tool.transform((editor) => {
-          editor.remove(GrepTool.name)
-          editor.remove(GlobTool.name)
-        })
+      // The built-in search tools are only the fallback for when fff-mcp is absent, so they are
+      // removed whenever the effective server set contains it. Plugin setup runs inside the
+      // activation batch, which defers both the transform callback above and the MCP reconcile
+      // behind it: a read here answers only for earlier activations, so it seeds the decision and
+      // is refreshed once the batch drains or a server status settles.
+      const hasServer = () =>
+        ctx.mcp
+          .list()
+          .pipe(
+            Effect.map((response) => response.data.some((server) => server.name === SERVER)),
+            Effect.orDie,
+          )
+      let present = yield* hasServer()
+      const refresh = Effect.gen(function* () {
+        const next = yield* hasServer()
+        if (next === present) return
+        present = next
+        yield* ctx.tool.reload()
+      })
+      yield* ctx.tool.transform((editor) => {
+        if (!present) return
+        editor.remove(GrepTool.name)
+        editor.remove(GlobTool.name)
+      })
+
+      yield* ctx.event.subscribe().pipe(
+        Stream.filter((event) => event.type === Event.Updated.type || event.type === McpEvent.StatusChanged.type),
+        Stream.runForEach(() => refresh),
+        Effect.ignore,
+        Effect.forkScoped({ startImmediately: true }),
+      )
 
       yield* ctx.permission.hook("evaluate", (event) => {
         if (event.action.startsWith(ACTION_PREFIX)) event.effect = "allow"

@@ -18,10 +18,13 @@ import { SessionTable } from "@opencode/core/session/sql"
 import { SessionStore } from "@opencode/core/session/store"
 import type { PermissionHooks } from "@opencode/plugin/effect/permission"
 import type { ToolEditor, ToolHooks } from "@opencode/plugin/effect/tool"
+import { ID } from "@opencode/schema/event"
+import { EventManifest } from "@opencode/schema/event-manifest"
 import type { Mcp } from "@opencode/schema/mcp"
+import { Event } from "@opencode/schema/plugin"
 import { SessionMessage } from "@opencode/schema/session-message"
 import { Tool } from "@opencode/schema/tool"
-import { Effect, Layer, type Types } from "effect"
+import { Effect, Layer, Stream, type Types } from "effect"
 import { location } from "../fixture/location"
 import { withTempDir } from "../fixture/tmpdir"
 import { it, testEffect } from "../lib/effect"
@@ -36,17 +39,49 @@ function run(
     readonly env?: NodeJS.ProcessEnv
     readonly servers?: Record<string, MutableServer>
     readonly tools?: Record<string, { description: string }>
+    /** Emitted to the plugin's event stream; simulates post-activation MCP updates. */
+    readonly events?: ReadonlyArray<EventManifest.ServerEvent>
+    /** Answers the first server read with an empty list, the way the activation batch does. */
+    readonly stale?: boolean
   } = {},
 ) {
   const servers = input.servers ?? {}
   const tools = input.tools ?? {}
+  const events = input.events ?? []
   const permission: Array<(event: PermissionEvent) => Effect.Effect<void>> = []
   const after: Array<(event: ToolHooks["execute.after"]) => Effect.Effect<void>> = []
+  const toolTransforms: Array<(editor: ToolEditor) => void> = []
+  let listReads = 0
+  let reloads = 0
   const base = host()
+  const toolEditor = (): ToolEditor => ({
+    list: () => Object.entries(tools).map(([id, tool]) => ({ ...tool, id }) as unknown as Tool.Info & { id: string }),
+    get: (id) => {
+      const tool = tools[id]
+      return tool && ({ ...tool, id } as unknown as Tool.Info & { id: string })
+    },
+    namespace: () => {},
+    add: () => {},
+    update: (id, update) => {
+      const tool = tools[id]
+      if (tool) update(tool as Types.Mutable<Tool.Info>)
+    },
+    remove: (id) => {
+      delete tools[id]
+    },
+  })
   const effect = FffMcpPlugin.make(input.env).effect(
     host({
       mcp: {
-        list: () => Effect.die("unused mcp.list"),
+        list: () =>
+          Effect.sync(() => {
+            listReads += 1
+            const names = input.stale === true && listReads === 1 ? [] : Object.keys(servers)
+            return {
+              location: { directory: AbsolutePath.make("/workspace") },
+              data: names.map((name): Mcp.Server => ({ name, status: { status: "pending" } })),
+            }
+          }),
         reload: () => Effect.die("unused mcp.reload"),
         transform: (transform) =>
           Effect.sync(() => {
@@ -67,6 +102,7 @@ function run(
             return { dispose: Effect.void }
           }),
       },
+      event: { subscribe: () => Stream.fromIterable(events) },
       permission: {
         ...base.permission,
         hook: (name, callback) => {
@@ -77,27 +113,15 @@ function run(
       tool: {
         transform: (transform) =>
           Effect.sync(() => {
-            const editor: ToolEditor = {
-              list: () =>
-                Object.entries(tools).map(([id, tool]) => ({ ...tool, id }) as unknown as Tool.Info & { id: string }),
-              get: (id) => {
-                const tool = tools[id]
-                return tool && ({ ...tool, id } as unknown as Tool.Info & { id: string })
-              },
-              namespace: () => {},
-              add: () => {},
-              update: (id, update) => {
-                const tool = tools[id]
-                if (tool) update(tool as Types.Mutable<Tool.Info>)
-              },
-              remove: (id) => {
-                delete tools[id]
-              },
-            }
-            transform(editor)
+            toolTransforms.push(transform as (editor: ToolEditor) => void)
+            transform(toolEditor())
             return { dispose: Effect.void }
           }),
-        reload: () => Effect.void,
+        reload: () =>
+          Effect.sync(() => {
+            reloads += 1
+            for (const transform of toolTransforms) transform(toolEditor())
+          }),
         hook: (name, callback) => {
           if (name === "execute.after")
             after.push(callback as unknown as (event: ToolHooks["execute.after"]) => Effect.Effect<void>)
@@ -106,7 +130,7 @@ function run(
       },
     }),
   )
-  return { effect, servers, tools, permission, after }
+  return { effect, servers, tools, permission, after, reloads: () => reloads }
 }
 
 describe("FffMcpPlugin registration", () => {
@@ -156,6 +180,29 @@ describe("FffMcpPlugin registration", () => {
       expect(result.servers).toEqual({})
       expect(result.tools["grep"]?.description).toBe("grep description")
       expect(result.tools["glob"]?.description).toBe("glob description")
+    }),
+  )
+
+  it.effect("removes the built-in search tools once the server set materializes after setup", () =>
+    Effect.gen(function* () {
+      const command = "C:\\tools\\fff-mcp.exe"
+      const result = run({
+        env: { OPENCODE_FFF_MCP_BIN: command } as NodeJS.ProcessEnv,
+        stale: true,
+        servers: { "fff-mcp": { type: "local", command: [command] } },
+        events: [{ id: ID.create(), type: Event.Updated.type, created: 0, data: {} }],
+        tools: { grep: { description: "grep description" }, glob: { description: "glob description" } },
+      })
+
+      yield* result.effect
+
+      // Setup runs inside the activation batch, so its read cannot see the server yet. The
+      // post-activation update is what removes the fallback.
+      for (let attempt = 0; attempt < 50 && result.reloads() === 0; attempt++) yield* Effect.yieldNow
+
+      expect(result.reloads()).toBe(1)
+      expect(result.tools["grep"]).toBeUndefined()
+      expect(result.tools["glob"]).toBeUndefined()
     }),
   )
 
@@ -250,7 +297,11 @@ describe("FffMcpPlugin permissions", () => {
       yield* FffMcpPlugin.make({ OPENCODE_FFF_MCP_BIN: "fff-mcp" }).effect(
         host({
           mcp: {
-            list: () => Effect.die("unused mcp.list"),
+            list: () =>
+              Effect.succeed({
+                location: { directory: AbsolutePath.make("/project") },
+                data: [],
+              }),
             reload: () => Effect.void,
             transform: () => Effect.succeed({ dispose: Effect.void }),
           },
