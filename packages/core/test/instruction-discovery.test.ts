@@ -21,6 +21,10 @@ import { host } from "./plugin/host"
 
 const it = testEffect(Layer.empty)
 
+// Windows drive letters are case-insensitive, so one directory reaches the plugin
+// as both `c:\repo` and `C:\repo`. Only Windows can produce that split.
+const itWindows = process.platform === "win32" ? it.live : it.live.skip
+
 const instructionLayer = (input: {
   config?: string
   home?: string
@@ -489,5 +493,47 @@ describe("ConfigInstructionPlugin.Plugin", () => {
       const repo = path.resolve("/repo")
       expect(observed.values).toEqual([{ targets: ["AGENTS.md"], start: repo, stop: repo }])
     }),
+  )
+
+  // `c:\repo` and `C:\repo` name one directory. Spelling the location and the
+  // project root differently must not send the ancestor walk to the drive root.
+  const swapDriveCase = (value: string) =>
+    value.replace(
+      /^([a-zA-Z]):/,
+      (_, drive: string) => `${drive === drive.toLowerCase() ? drive.toUpperCase() : drive.toLowerCase()}:`,
+    )
+
+  itWindows("resolves instructions when only drive-letter case differs", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) => {
+        const project = path.join(tmp.path, "repo")
+        const directory = path.join(project, "packages", "core")
+        return Effect.gen(function* () {
+          yield* Effect.promise(() => fs.mkdir(directory, { recursive: true }))
+          const discovery = yield* start()
+          // `readInitial` replays the initial no-history diff, so an unavailable
+          // source fails here exactly as it fails a live session drain.
+          expect((yield* readInitial(yield* discovery.load())).text).toBe("")
+        }).pipe(
+          Effect.provide(
+            instructionLayer({
+              config: path.join(tmp.path, "global"),
+              locationServiceLayer: Layer.succeed(
+                Location.Service,
+                Location.Service.of(
+                  location(
+                    { directory: AbsolutePath.make(swapDriveCase(directory)) },
+                    { projectDirectory: AbsolutePath.make(project) },
+                  ),
+                ),
+              ),
+            }),
+          ),
+        )
+      }),
+    ),
   )
 })

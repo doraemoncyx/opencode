@@ -102,6 +102,10 @@ export namespace FSUtil {
       const resolve = Effect.fn("FileSystem.resolve")(function* (input: string) {
         const resolved = path.resolve(windowsPath(input))
         return yield* fs.realPath(resolved).pipe(
+          // `realPath` returns the case the caller typed, so one directory reaches
+          // callers as both `h:\a` and `H:\A`. `normalizePath` restores the
+          // filesystem's own case so equal paths compare equal.
+          Effect.map(normalizePath),
           Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(resolved)),
           Effect.orDie,
         )
