@@ -55,13 +55,15 @@ type Tools = {
 export type Inventory = {
   readonly tools: ReadonlyMap<string, Info>
   readonly namespaces?: ReadonlyMap<string, ToolNamespace>
+  /** Effective names the model calls directly, outside `execute`. */
+  readonly direct?: ReadonlySet<string>
 }
 
 // Invariant model-facing guidance; the changing tool catalog is delivered through Instructions.
 const description = [
   "Run JavaScript in a confined Code Mode runtime to orchestrate tool calls and compose their results.",
   "Imports, direct filesystem access, and timers are unavailable. Do not use `fetch`; all external access goes through `tools`.",
-  "Within `{ code }`, the only callable tools are those explicitly listed in the Code Mode catalog instructions or returned by the `search` function. Inside `{ code }`, ignore tools shown outside the Code Mode catalog. They are not available in the Code Mode runtime.",
+  "Within `{ code }`, the only callable tools are those listed in the Code Mode catalog instructions or returned by `search`. Other tools in your tool list, including direct tools such as `read`, `shell`, and `webfetch`, are not available inside `execute`: call those directly instead.",
   'Call tools through `tools` using only exact paths and signatures from the catalog. Do not infer or normalize tool names; preserve bracket notation such as `tools.<namespace>["tool-name"](input)`.',
   "Prefer an explicit `return`; if omitted, the final top-level expression becomes the result.",
   "Await every call whose completion matters; pending calls are interrupted when execution ends. Run independent calls concurrently with `Promise.all`.",
@@ -129,7 +131,7 @@ export const create = (
         const collected = (yield* Ref.get(files))
           .toSorted((left, right) => left.index - right.index)
           .flatMap((item) => item.files)
-        const output = formatResult(result)
+        const output = formatResult(result, inventory.direct)
         const value: typeof ExecuteOutput.Type = {
           output,
           toolCalls,
@@ -290,10 +292,10 @@ function displayInput(input: unknown): Record<string, typeof Schema.Json.Type> |
   return input as Record<string, typeof Schema.Json.Type>
 }
 
-function formatResult(result: CodeMode.Result) {
+function formatResult(result: CodeMode.Result, direct: ReadonlySet<string> | undefined) {
   const output = result.ok
     ? formatValue(result.value)
-    : [result.error.message, ...(result.error.suggestions ?? []).filter((hint) => !result.error.message.includes(hint))]
+    : [result.error.message, ...failureHints(result.error, direct).filter((hint) => !result.error.message.includes(hint))]
         .join("\n")
         .trim()
   const warnings =
@@ -302,6 +304,23 @@ function formatResult(result: CodeMode.Result) {
       : undefined
   const logs = result.logs && result.logs.length > 0 ? `Logs:\n${result.logs.join("\n")}` : undefined
   return [output, warnings, logs].filter((part) => part !== undefined && part !== "").join("\n\n")
+}
+
+// An unknown path is usually a direct tool or the `search` global written as `tools.search`; the
+// runtime's generic hint then points at a `search` that cannot find either. Name the real remedy.
+function failureHints(error: CodeMode.Diagnostic, direct: ReadonlySet<string> | undefined): ReadonlyArray<string> {
+  if (error.kind !== "UnknownTool") return error.suggestions ?? []
+  const fallback = error.suggestions ?? []
+  const path = /^Unknown tool '([^']+)'/.exec(error.message)?.[1]
+  const name = path?.split(".")[0]
+  const match =
+    name === undefined || direct === undefined
+      ? undefined
+      : Array.from(direct).find((tool) => tool.toLowerCase() === name.toLowerCase())
+  if (match !== undefined) return [`\`${match}\` is not a Code Mode tool. Call it directly, outside \`execute\`.`]
+  // `search` is a global function, not a member of `tools`.
+  if (path === "search") return ["`search` is a global function: call `search({ ... })`, not `tools.search`."]
+  return fallback
 }
 
 function formatValue(value: CodeMode.DataValue) {

@@ -14,7 +14,9 @@ ${hasMoreTools ? "The Code Mode catalog and `search` results are" : "This catalo
 
 Call \`search(...)\` to discover exact paths and signatures for additional tools:
 
-- ${searchSignature}` : ""}
+- ${searchSignature}
+
+\`search\` is a global function, not a \`tools.*\` entry: call \`search({ ... })\`, never \`tools.search(...)\`.` : ""}
 
 ## Available tools`
 
