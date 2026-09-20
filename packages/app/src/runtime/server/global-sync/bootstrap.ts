@@ -14,6 +14,7 @@ import { formatServerError } from "@/runtime/server/errors"
 import { QueryClient, queryOptions } from "@tanstack/solid-query"
 import type { ServerScope } from "@/runtime/server/scope"
 import { withWorktreeInventory, worktreeInventoryKey } from "@/workspaces/inventory"
+import { pathKey } from "@/workspaces/path-key"
 
 type GlobalStore = {
   path: Path
@@ -107,7 +108,11 @@ export async function bootstrapGlobal(input: {
 }
 
 function projectID(directory: string, projects: Project[]) {
-  return projects.find((project) => project.worktree === directory || project.sandboxes?.includes(directory))?.id
+  // The booting directory can spell the project's canonical directory differently by case or separator.
+  const key = pathKey(directory)
+  return projects.find(
+    (project) => pathKey(project.worktree) === key || project.sandboxes?.some((value) => pathKey(value) === key),
+  )?.id
 }
 
 export const loadPathQuery = (scope: ServerScope, directory: string | null, api: LocationApi) =>

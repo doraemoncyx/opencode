@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test"
 import { QueryClient } from "@tanstack/solid-query"
 import { OpenCode } from "@opencode/client/promise"
 import { createStore } from "solid-js/store"
-import { bootstrapGlobal, loadPathQuery, loadProjectsQuery } from "./bootstrap"
+import { bootstrapDirectory, bootstrapGlobal, loadPathQuery, loadProjectsQuery } from "./bootstrap"
 import { ServerScope } from "@/runtime/server/scope"
+import type { State } from "./types"
 import type { ServerApi } from "@/runtime/server/api"
 import type { ServerSync } from "@/runtime/server/sync"
 import { worktreeInventoryKey } from "@/workspaces/inventory"
@@ -62,6 +63,54 @@ test("bootstraps projects through the native store setter and preserves subseque
   } finally {
     queryClient.clear()
   }
+})
+
+test("seeds the tracked project when the booting directory differs only by case", async () => {
+  const requests: string[] = []
+  const api = OpenCode.make({
+    baseUrl: "http://localhost:3000",
+    fetch: Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(new Request(input, init).url)
+        requests.push(url.pathname)
+        return Response.json({
+          directory: "F:/repo",
+          project: { id: "resolved", directory: "F:/repo", canonical: "F:/repo" },
+        })
+      },
+      { preconnect() {} },
+    ),
+  })
+  const [store, setStore] = createStore({} as State)
+  setStore("config", {})
+
+  await bootstrapDirectory({
+    directory: "f:\\repo",
+    scope: ServerScope.local,
+    mcp: false,
+    api,
+    store,
+    setStore,
+    translate: (key) => key,
+    global: {
+      config: {},
+      path: { state: "", config: "", worktree: "", directory: "", home: "" },
+      project: [
+        {
+          id: "tracked",
+          worktree: "F:/repo",
+          worktrees: [{ directory: "F:/repo" }],
+          time: { created: 1, updated: 1 },
+          sandboxes: [],
+        },
+      ],
+    },
+    queryClient: new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+  })
+
+  // Seeded from the tracked project instead of resolving the location again.
+  expect(store.project).toBe("tracked")
+  expect(requests).toEqual([])
 })
 
 describe("query keys", () => {
