@@ -33,8 +33,6 @@ export type FileContent = {
   }
   encoding?: "base64"
   mimeType?: string
-  /** On-disk size when the bytes themselves are not retained. */
-  size?: number
 }
 
 export type Path = {

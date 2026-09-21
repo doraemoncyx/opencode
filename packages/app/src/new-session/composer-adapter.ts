@@ -48,8 +48,7 @@ export function createNewSessionComposerAdapter(props: {
     submitted: props.submitted,
     async start(selection, submission, message) {
       const draftID = props.draftID
-      const currentDirectory = location().directory
-      const projectDirectory = data.location.info({ directory: currentDirectory })?.project.canonical ?? currentDirectory
+      const projectDirectory = location().directory
       const worktree = props.worktree()
       const branch = props.branch()
       const mcp = props.mcp.capture()

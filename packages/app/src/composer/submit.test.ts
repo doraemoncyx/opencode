@@ -53,7 +53,6 @@ function submitInput(
   notify = { missingSelection() {}, failed(_kind: "shell" | "command" | "prompt", _error: unknown) {} },
   mode: "normal" | "shell" = "normal",
   commands: () => readonly { name: string }[] | undefined = () => [],
-  history: string[] = [],
 ) {
   return createComposerSubmit({
     adapter,
@@ -61,9 +60,7 @@ function submitInput(
     commands,
     editor: () => undefined,
     queueScroll() {},
-    addToHistory: (prompt) => history.push(`add:${prompt.map((part) => ("content" in part ? part.content : part.type)).join("")}`),
-    removeFromHistory: (prompt) =>
-      history.push(`remove:${prompt.map((part) => ("content" in part ? part.content : part.type)).join("")}`),
+    addToHistory() {},
     resetHistory() {},
     setMode() {},
     closePopover() {},
@@ -143,7 +140,7 @@ describe("Composer submission", () => {
         await committed.promise
       },
       command: async (request) => {
-        expect(request).toMatchObject({ name: "review", text: "changes", delivery: "steer" })
+        expect(request).toMatchObject({ command: "review", text: "changes", delivery: "steer" })
         expect(request).not.toHaveProperty("model")
         expect(request).not.toHaveProperty("agent")
         calls.push("command")
@@ -536,8 +533,12 @@ describe("Composer submission", () => {
       missingSelection() {},
       failed: () => (attempts.length === 2 ? first.resolve() : second.resolve()),
     }
-    const history: string[] = []
-    const submission = submitInput(adapter, notify, "normal", () => [], history)
+    const submission = submitInput(
+      adapter,
+      notify,
+      "normal",
+      () => [],
+    )
 
     await submission.submit(new Event("submit"))
     await first.promise
@@ -548,8 +549,6 @@ describe("Composer submission", () => {
     expect(new Set(attempts).size).toBe(1)
     expect(statuses).toEqual(["running", "idle", "running", "idle"])
     expect(state.current()).toMatchObject([{ type: "text", content: text }])
-    // The restored prompt is the draft again, so history does not also keep it (and its attachments).
-    expect(history).toEqual([`add:${text}`, `remove:${text}`, `add:${text}`, `remove:${text}`])
   })
 
   test("forwards structured mentions to custom commands", async () => {
@@ -636,7 +635,7 @@ describe("Composer submission", () => {
     expect(requests).toEqual([
       {
         sessionID: target.id,
-        name: "review",
+        command: "review",
         text: "https://github.com/example/repo/pull/1",
         files: [],
         agents: [],

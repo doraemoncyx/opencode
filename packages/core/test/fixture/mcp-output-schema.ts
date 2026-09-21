@@ -1,9 +1,10 @@
-import { Server } from "@modelcontextprotocol/server"
-import { StdioServerTransport } from "@modelcontextprotocol/server/stdio"
+import { Server } from "@modelcontextprotocol/sdk/server/index.js"
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
+import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 
 const server = new Server({ name: "output-schema", version: "1.0.0" }, { capabilities: { tools: {} } })
 
-server.setRequestHandler("tools/list", ({ params }) =>
+server.setRequestHandler(ListToolsRequestSchema, ({ params }) =>
   Promise.resolve(
     params?.cursor === "page-2"
       ? {

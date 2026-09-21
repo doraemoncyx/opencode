@@ -74,7 +74,7 @@ const appAssetsPlugin: BunPlugin = {
     }))
     build.onLoad({ filter: /^opencode-app-assets$/, namespace: "opencode" }, () => ({
       loader: "js",
-      contents: `export default ${appArchive}`,
+      contents: `export default ${JSON.stringify(appArchive)}`,
     }))
   },
 }
@@ -140,7 +140,6 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
       ...(executablePath ? { executablePath } : {}),
       outfile: path.join(outdir, name, "bin", binary),
       execArgv: [
-        "--smol",
         `--user-agent=opencode/${Script.channel}/${Script.version}/cli`,
         "--use-system-ca",
         "--no-warnings",

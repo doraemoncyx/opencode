@@ -553,9 +553,8 @@
     }
 
     &[data-value="open-file"],
-    &[data-value^="file://"],
-    &[data-value="browser"],
-    &[data-value^="browser:"] {
+    &[data-value^="file://"]
+    {
       gap: 8px;
       padding-inline-end: 4px;
 

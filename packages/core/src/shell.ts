@@ -7,6 +7,7 @@ import { produce } from "immer"
 import { Shell } from "@opencode/schema/shell"
 import { AppProcess } from "@opencode/util/process"
 import { makeGlobalNode, makeLocationNode } from "@opencode/util/effect/app-node"
+import { decodeShellOutput } from "@opencode/util/encoding"
 import { FSUtil } from "@opencode/util/fs-util"
 import { Bus } from "./bus.js"
 import { Environment } from "./environment/index.js"
@@ -32,6 +33,10 @@ const EXITED_LIMIT = 25
 export const RETENTION = Duration.days(7)
 export const DIRECTORY = "shell"
 
+// Captured output can be GBK, whose bytes are not self-synchronizing: a page that starts inside a
+// multi-byte character would decode misaligned. Page starts are therefore snapped back to a byte that
+// cannot be a GBK trail byte (ASCII controls and DEL are single-byte in both UTF-8 and GBK); the
+// already-delivered prefix is dropped after decoding.
 type Info = Shell.Info
 type CreateInput = Shell.CreateInput & {
   shell?: string
@@ -136,6 +141,33 @@ const layer = () =>
       const { createWriteStream, createReadStream } = yield* Effect.promise(() => import("fs"))
       yield* Effect.promise(() => mkdir(outputDir, { recursive: true }))
 
+      // Read an exclusive byte range, resolving an empty buffer on a missing or unreadable file.
+      const readRange = (source: string, start: number, end: number) =>
+        new Promise<Buffer>((resolve) => {
+          if (end <= start) return resolve(Buffer.alloc(0))
+          const stream = createReadStream(source, { start, end: end - 1 })
+          const chunks: Buffer[] = []
+          stream.on("data", (chunk: string | Buffer) => chunks.push(Buffer.from(chunk)))
+          stream.on("end", () => resolve(Buffer.concat(chunks)))
+          stream.on("error", () => resolve(Buffer.alloc(0)))
+        })
+
+      const boundaryBefore = async (source: string, start: number) => {
+        if (start <= 0) return 0
+        const window = 64 * 1024
+        for (let end = start; ; ) {
+          const from = Math.max(0, end - window)
+          const bytes = await readRange(source, from, end)
+          if (bytes.length === 0) return 0
+          for (let index = bytes.length - 1; index >= 0; index -= 1) {
+            const byte = bytes[index]!
+            if (byte <= 0x3f || byte === 0x7f) return from + index
+          }
+          if (from === 0) return 0
+          end = from
+        }
+      }
+
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
           for (const command of commands.values()) {
@@ -199,25 +231,18 @@ const layer = () =>
         const limit = input?.limit ?? 65536
         if (cursor >= command.size) return { output: "", cursor: command.size, size: command.size, truncated: false }
         const start = Math.max(0, cursor)
-        const length = Math.min(limit, command.size - start)
-        const buffer = Buffer.alloc(length)
-        const bytesRead = yield* Effect.promise(
-          () =>
-            new Promise<number>((resolve) => {
-              const stream = createReadStream(command.file, { start, end: start + length - 1 })
-              let offset = 0
-              stream.on("data", (chunk: string | Buffer) => {
-                const bytes = Buffer.from(chunk)
-                bytes.copy(buffer, offset)
-                offset += bytes.length
-              })
-              stream.on("end", () => resolve(offset))
-              stream.on("error", () => resolve(0))
-            }),
+        if (limit === 0) return { output: "", cursor: start, size: command.size, truncated: false }
+        const pageEnd = Math.min(command.size, start + limit)
+        // A page can start inside a character, so begin at the previous single-byte boundary and
+        // read a few trailing bytes past the page to complete any character straddling its end.
+        const from = yield* Effect.promise(() => boundaryBefore(command.file, start))
+        const bytes = yield* Effect.promise(() =>
+          readRange(command.file, from, Math.min(command.size, pageEnd + 4)),
         )
+        const page = decodeShellOutput(bytes, start - from)
         return {
-          output: buffer.subarray(0, bytesRead).toString("utf8"),
-          cursor: start + bytesRead,
+          output: page.text,
+          cursor: Math.max(start, from + page.consumed),
           size: command.size,
           truncated: false,
         }
@@ -257,7 +282,7 @@ const layer = () =>
         const invocation: ShellCreateBefore = {
           command: input.command,
           cwd: input.cwd ?? location.directory,
-          timeout: input.timeout ?? 0,
+          timeout: input.timeout,
           shell: input.shell ?? (yield* shell.resolve({ priority: "config" })),
           env: {
             ...(sessionEnvironment ?? process.env),

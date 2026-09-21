@@ -1,21 +1,20 @@
+import { toProgram } from "../data.js"
 import { fn } from "../interpreter/native.js"
 import { typeError } from "../interpreter/model.js"
 import {
   get,
   isWrapper,
-  type Native,
-  Arr,
-  Bytes,
-  DateObj,
-  ErrorObj,
-  MapObj,
-  RegExpObj,
-  SetObj,
-  URLObj,
-  URLSearchParamsObj,
-  HeadersObj,
+  type NativeFunction,
+  ProgramArray,
+  ProgramDate,
+  ProgramError,
+  ProgramMap,
+  ProgramRegExp,
+  ProgramSet,
+  ProgramURL,
+  ProgramURLSearchParams,
 } from "../interpreter/objects.js"
-import type { Interpreter } from "../interpreter/interpreter.js"
+import type { Runner } from "../interpreter/runner.js"
 
 export const compoundOperators = new Set(["+=", "-=", "*=", "/=", "%=", "**=", "&=", "|=", "^=", "<<=", ">>=", ">>>="])
 
@@ -23,15 +22,14 @@ export const compoundOperators = new Set(["+=", "-=", "*=", "/=", "%=", "**=", "
 export const coerceToString = (value: unknown): string => {
   if (value === null) return "null"
   if (value === undefined) return "undefined"
-  if (value instanceof DateObj) return Number.isFinite(value.time) ? new Date(value.time).toISOString() : "Invalid Date"
-  if (value instanceof RegExpObj) return `/${value.regex.source}/${value.regex.flags}`
-  if (value instanceof MapObj) return "[object Map]"
-  if (value instanceof SetObj) return "[object Set]"
-  if (value instanceof URLObj) return value.url.href
-  if (value instanceof URLSearchParamsObj) return value.params.toString()
-  if (value instanceof HeadersObj) return "[object Headers]"
-  if (value instanceof Bytes) return value.bytes.join(",")
-  if (value instanceof ErrorObj) {
+  if (value instanceof ProgramDate)
+    return Number.isFinite(value.time) ? new Date(value.time).toISOString() : "Invalid Date"
+  if (value instanceof ProgramRegExp) return `/${value.regex.source}/${value.regex.flags}`
+  if (value instanceof ProgramMap) return "[object Map]"
+  if (value instanceof ProgramSet) return "[object Set]"
+  if (value instanceof ProgramURL) return value.url.href
+  if (value instanceof ProgramURLSearchParams) return value.params.toString()
+  if (value instanceof ProgramError) {
     // Match Error.prototype.toString: "name: message", or just one when the other is empty.
     const name = get(value, "name")
     const message = get(value, "message")
@@ -41,7 +39,7 @@ export const coerceToString = (value: unknown): string => {
     if (shownName === "") return shownMessage
     return `${shownName}: ${shownMessage}`
   }
-  if (value instanceof Arr) {
+  if (value instanceof ProgramArray) {
     return value.items.map((item) => (item === null || item === undefined ? "" : coerceToString(item))).join(",")
   }
   if (typeof value === "object") return "[object Object]"
@@ -49,16 +47,15 @@ export const coerceToString = (value: unknown): string => {
 }
 
 export const coerceToNumber = (value: unknown): number => {
-  if (value instanceof DateObj) return value.time
-  if (value instanceof Bytes) return Number(coerceToString(value))
+  if (value instanceof ProgramDate) return value.time
   if (isWrapper(value)) return Number.NaN
-  if (value instanceof Arr) return Number(coerceToString(value))
+  if (value instanceof ProgramArray) return Number(coerceToString(value))
   return value !== null && typeof value === "object" ? Number.NaN : Number(value)
 }
 
 export type Coercion = "Number" | "String" | "Boolean" | "parseInt" | "parseFloat" | "isFinite" | "isNaN"
 
-const coerce = <R>(ctx: Interpreter<R>, name: Coercion, args: Array<unknown>): unknown => {
+const coerce = <R>(runner: Runner<R>, name: Coercion, args: Array<unknown>): unknown => {
   // Native: Number() is 0 and String() is "", unlike their undefined-argument forms; the
   // other coercers match native through the undefined-argument path below.
   if (args.length === 0) {
@@ -75,21 +72,24 @@ const coerce = <R>(ctx: Interpreter<R>, name: Coercion, args: Array<unknown>): u
     if (name === "parseInt") return parseInt(coerceToString(raw))
     return parseFloat(coerceToString(raw))
   }
-  if (name === "Number") return coerceToNumber(raw)
-  if (name === "Boolean") return Boolean(raw)
-  if (name === "isFinite") return Number.isFinite(coerceToNumber(raw))
-  if (name === "isNaN") return Number.isNaN(coerceToNumber(raw))
+  const value = toProgram(runner.prototypes, raw, `${name} input`)
+  if (name === "Number") return coerceToNumber(value)
+  if (name === "Boolean") return Boolean(value)
+  if (name === "isFinite") return Number.isFinite(coerceToNumber(value))
+  if (name === "isNaN") return Number.isNaN(coerceToNumber(value))
   if (name === "parseInt") {
     const radix = args[1]
     if (radix !== undefined && typeof radix !== "number") {
       throw typeError("parseInt expects a numeric radix.")
     }
-    return parseInt(coerceToString(raw), radix)
+    return parseInt(coerceToString(value), radix)
   }
-  if (name === "parseFloat") return parseFloat(coerceToString(raw))
-  return coerceToString(raw)
+  if (name === "parseFloat") return parseFloat(coerceToString(value))
+  return coerceToString(value)
 }
 
 /** A global coercion function such as `Number` or `parseInt`. */
-export const coercion = <R>(ctx: Interpreter<R>, name: Coercion, length = 1): Native<R> =>
-  fn(ctx.builtins, name, length, (_, args) => coerce(ctx, name, args))
+export const coercion = <R>(runner: Runner<R>, name: Coercion, length = 1): NativeFunction<R> =>
+  fn(runner.prototypes, name, length, (_, args) =>
+    toProgram(runner.prototypes, coerce(runner, name, args), `${name} result`),
+  )

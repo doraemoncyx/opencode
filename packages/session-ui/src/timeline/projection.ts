@@ -14,7 +14,7 @@ import { timelineCategory, timelineNoticeRequired, type TimelineDetail } from ".
 
 export { TimelineRow, type PartGroup, type PartRef, type TimelineRowMap }
 
-export type ReasoningMode = "hidden" | "compact" | "full"
+export type ReasoningMode = "hidden" | "compact" | "snippet" | "full"
 
 type Notice = Exclude<SessionMessageInfo, { type: "user" | "assistant" | "shell" | "idle" }>
 type Entry = { type: "assistant"; message: SessionMessageAssistant } | { type: "notice"; message: Notice }
@@ -685,6 +685,29 @@ function toolGroupType(
   if (currentContentDefaultOpen(content, shellExpanded, editExpanded) !== true) return "context"
   if (content.name === "patch" || content.name === "edit" || content.name === "write") return "file"
   return undefined
+}
+
+/** A one-line label for a thought: its heading, or the first line when the model wrote prose. */
+export function reasoningLabel(text: string): string | undefined {
+  const heading = reasoningHeading(text)
+  if (heading) return heading
+  const line = text
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .find((value) => value.trim())
+  if (!line) return undefined
+  const value = cleanHeading(line.replace(/^\s{0,3}#{1,6}[ \t]+/, "").replace(/^\s*[-*+]\s+/, ""))
+  return value ? value.slice(0, 200) : undefined
+}
+
+/** Leading body lines of a thought, with the heading block removed, for a collapsed preview. */
+export function reasoningSnippet(text: string, lines = 3): string[] {
+  const body = text.replace(/\r\n?/g, "\n").replace(/^\s*(?:\*\*|__)[^*_\n]+(?:\*\*|__)(?:\n+|$)/, "")
+  return body
+    .split("\n")
+    .map((value) => cleanHeading(value.replace(/^\s{0,3}#{1,6}[ \t]+/, "").replace(/^\s*[-*+]\s+/, "")))
+    .filter(Boolean)
+    .slice(0, lines)
 }
 
 export function reasoningHeading(text: string): string | undefined {

@@ -573,7 +573,7 @@ const layer = Layer.effectDiscard(
         .run()
         .pipe(Effect.orDie),
     )
-    yield* bus.project(SessionEvent.Permissions, (event) =>
+    yield* bus.project(SessionEvent.PermissionsUpdated, (event) =>
       db
         .update(SessionTable)
         .set({ permission: event.data.permissions, time_updated: event.created })

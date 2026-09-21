@@ -4,7 +4,7 @@ import { shellResultFailed } from "../message/current-tool-state"
 export const timelineCategories = ["shell", "edit", "thinking", "subagents", "notices", "tools"] as const
 export type TimelineCategory = (typeof timelineCategories)[number]
 export type TimelinePlacement = "separate" | "grouped" | "hidden"
-export type TimelineExpansion = "collapsed" | "expanded"
+export type TimelineExpansion = "collapsed" | "snippet" | "expanded"
 export type TimelineDetail = {
   shell: { placement: TimelinePlacement; details: TimelineExpansion }
   edit: { placement: TimelinePlacement; details: TimelineExpansion }

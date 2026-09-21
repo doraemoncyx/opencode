@@ -28,7 +28,6 @@ interface ActiveRecording {
 interface PendingRecordings {
   readonly promises: Set<Promise<void>>
   readonly errors: Array<unknown>
-  readonly sockets: Set<globalThis.WebSocket>
 }
 type Frame = string | Uint8Array
 
@@ -381,11 +380,6 @@ const makeRecordingWebSocketConstructor = (
     let failed = false
     let closed = false
     let queue = Promise.resolve()
-    // Registered before the close event so a connection still finishing its close
-    // handshake when the recording scope ends is awaited rather than dropped.
-    const completion = Promise.withResolvers<void>()
-    pending.promises.add(completion.promise)
-    pending.sockets.add(native)
     const appendEvent = (direction: "client" | "server", data: unknown) => {
       queue = queue.then(async () => {
         if (failed || closed) return
@@ -410,8 +404,7 @@ const makeRecordingWebSocketConstructor = (
       native.removeEventListener("message", onMessage)
       native.removeEventListener("error", onError)
       native.removeEventListener("close", onClose)
-      pending.sockets.delete(native)
-      const appended = queue.then(async () => {
+      const completion = queue.then(async () => {
         closed = true
         if (opened && !failed) {
           const request = redactor.request({ method: "WEBSOCKET", url, headers: {}, body: "" })
@@ -429,15 +422,12 @@ const makeRecordingWebSocketConstructor = (
           await Effect.runPromise(cassette.append(name, interaction, metadata).pipe(Effect.orDie))
         }
       })
-      void appended.then(
-        () => {
-          pending.promises.delete(completion.promise)
-          completion.resolve()
-        },
+      pending.promises.add(completion)
+      void completion.then(
+        () => pending.promises.delete(completion),
         (error) => {
-          pending.promises.delete(completion.promise)
+          pending.promises.delete(completion)
           pending.errors.push(error)
-          completion.resolve()
         },
       )
     }
@@ -587,17 +577,9 @@ export const layerWebSocketConstructor = (
         const redactor = make(options.redact)
         if ((yield* resolveAutoMode(cassette, name)) === "replay")
           return yield* makeReplayWebSocketConstructor(cassette, name, redactor)
-        const pending: PendingRecordings = { promises: new Set(), errors: [], sockets: new Set() }
+        const pending: PendingRecordings = { promises: new Set(), errors: [] }
         yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            for (const socket of pending.sockets)
-              if (
-                socket.readyState !== globalThis.WebSocket.CLOSING &&
-                socket.readyState !== globalThis.WebSocket.CLOSED
-              )
-                socket.close(1000)
-          }).pipe(
-            Effect.andThen(Effect.promise(() => Promise.all(pending.promises))),
+          Effect.promise(() => Promise.all(pending.promises)).pipe(
             Effect.flatMap(() => (pending.errors.length === 0 ? Effect.void : Effect.die(pending.errors[0]))),
           ),
         )

@@ -1,6 +1,8 @@
 export * as McpStdio from "./stdio.js"
 
-import { ReadBuffer, serializeMessage, type JSONRPCMessage, type Transport } from "@modelcontextprotocol/client"
+import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js"
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
+import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js"
 import { Cause, Duration, Effect, Queue, Scope, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import type { ChildProcessHandle } from "effect/unstable/process/ChildProcessSpawner"
@@ -148,7 +150,7 @@ export const make = Effect.fnUntraced(function* (options: Options) {
             }),
           ),
           Effect.ignore,
-          // stdout ending means the server is gone.
+          // stdout ending means the server is gone; the SDK transport reports that the same way.
           Effect.ensuring(
             Effect.gen(function* () {
               const unexpected = state.phase !== "closed"
@@ -159,7 +161,8 @@ export const make = Effect.fnUntraced(function* (options: Options) {
         ),
       )
 
-      // Drain stderr into the debug log so chatty servers cannot stall on a full pipe.
+      // StdioClientTransport pipes stderr into a stream nobody reads. Drain chunks into the debug
+      // log so chatty servers cannot stall and newline-free output is not buffered without bound.
       yield* Effect.forkScoped(
         handle.stderr.pipe(
           Stream.decodeText(),

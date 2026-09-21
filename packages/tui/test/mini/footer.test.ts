@@ -11,7 +11,6 @@ import type { MiniSettingChange, MiniSettings, RunAgent, RunTuiConfig, StreamCom
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 import { tmpdir } from "../fixture/fixture"
 import { createFooterApiFixture } from "./fixture/footer-api"
-import { getOpenCodeTheme } from "../../src/theme"
 
 function progress(input: Partial<StreamCommit> = {}): StreamCommit {
   return {
@@ -259,7 +258,7 @@ test.each([false, true])("command menu uses its full height on first open (mono=
     expect(frame).toContain("Show status")
     expect(frame).toContain("Compact session")
     expect(frame).toContain("New session")
-    expect(frame).toContain("Variant cycle")
+    expect(frame).toContain("Skills")
   } finally {
     app.footer.destroy()
     app.renderer.destroy()
@@ -371,10 +370,7 @@ test("explicit theme refresh reloads custom colors without a palette event", asy
     for (const color of ["#123456", "#abcdef"]) {
       await Bun.write(
         path.join(tmp.path, "themes", "mini-refresh.json"),
-        JSON.stringify({
-          base: { ...getOpenCodeTheme().base, text: { ...getOpenCodeTheme().base.text, base: color } },
-          dark: { hue: getOpenCodeTheme().dark.hue },
-        }),
+        JSON.stringify({ version: 2, dark: { text: { default: color } } }),
       )
       await app.footer.refreshTheme()
       await app.renderOnce()

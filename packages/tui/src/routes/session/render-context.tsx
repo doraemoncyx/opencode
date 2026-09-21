@@ -22,8 +22,6 @@ export const context = createContext<{
   diffWrapMode: () => "word" | "none"
   models: () => ModelInfo[]
   messageIndex: (messageID: string) => number | undefined
-  /** True when the session has no idle markers, so turn footers end at the next prompt. */
-  legacyTurns: () => boolean
   config: ReturnType<typeof useConfig>["data"]
   mutatePending: (action: PendingAction, inboxID: string) => Promise<boolean>
   pendingDelivery: (inboxID: string) => SessionInbox.Delivery | undefined

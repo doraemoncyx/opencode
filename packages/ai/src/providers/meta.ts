@@ -132,7 +132,7 @@ export const configure = (input: LanguageModelOptions = {}) => {
   const chat = (modelID: string | ModelID) =>
     configuredChat.model<OpenResponsesProviderOptionsInput>({
       id: modelID,
-      compatibility: { maxTokensField: "max_completion_tokens", supportsStore: false, supportsPromptCacheKey: true },
+      compatibility: { maxTokensField: "max_completion_tokens", supportsStore: false },
     })
   const messages = (modelID: string | ModelID) =>
     configuredMessages.model<MessagesOptionsInput>({

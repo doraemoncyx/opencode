@@ -1,5 +1,6 @@
 import { APICallError } from "@ai-sdk/provider"
 import type { LanguageModelV3, LanguageModelV3StreamPart } from "@ai-sdk/provider"
+import { createMistral } from "@ai-sdk/mistral"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { AISDK } from "@opencode/core/aisdk"
 import { SessionRunnerRetry } from "@opencode/core/session/runner/retry"
@@ -27,15 +28,14 @@ import { testEffect } from "./lib/effect"
 
 const it = testEffect(AISDK.locationLayer)
 
-const model = (packageName: string, settings: Provider.Settings = {}): Model.RuntimeInfo => ({
-  ...Model.Info.make({
+const model = (packageName: string, settings: Record<string, unknown> = {}) =>
+  Model.Info.make({
     ...Model.Info.default(Provider.ID.make("test-provider"), Model.ID.make("catalog-model")),
     modelID: Model.ID.make("api-model"),
     package: Provider.aisdk(packageName),
+    settings,
     limit: { context: 100, output: 20 },
-  }),
-  settings,
-})
+  })
 
 const streamModel = (events: ReadonlyArray<LanguageModelV3StreamPart>): LanguageModelV3 => ({
   specificationVersion: "v3",
@@ -156,18 +156,14 @@ it.effect("projects request settings, headers, and body overlays", () =>
   Effect.gen(function* () {
     const aisdk = yield* AISDK.Service
     let body: unknown
-    let options: Record<string, unknown> | undefined
     yield* aisdk.hook.sdk((event) => {
       body = event.options.body
-      options = event.options
       event.sdk = { languageModel: () => ({ provider: event.model.providerID }) }
     })
 
     const input = model("@ai-sdk/google", {
       apiKey: "secret",
       thinkingConfig: { thinkingBudget: 1024 },
-      compaction: { type: "native" },
-      transport: "websocket",
     })
     const resolved = yield* aisdk.model({
       ...input,
@@ -190,8 +186,6 @@ it.effect("projects request settings, headers, and body overlays", () =>
     })
     expect(prepared.body.headers).toEqual({ "x-test": "header" })
     expect(body).toEqual({ safety_setting: "strict" })
-    expect(options).not.toHaveProperty("compaction")
-    expect(options).not.toHaveProperty("transport")
   }),
 )
 
@@ -539,6 +533,118 @@ it.effect("normalizes file data across AI SDK prompt parts", () =>
   }),
 )
 
+it.effect("normalizes user and tool media through the real Mistral provider", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    let body: { messages?: unknown[] } | undefined
+    const mockFetch = Object.assign(
+      async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        body = JSON.parse(String(init?.body))
+        const chunks = [
+          {
+            id: "response-1",
+            created: 0,
+            model: "pixtral-large-latest",
+            choices: [{ index: 0, delta: { content: [{ type: "text", text: "I see it." }] } }],
+          },
+          {
+            id: "response-1",
+            created: 0,
+            model: "pixtral-large-latest",
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          },
+        ]
+        return new Response(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join(""), {
+          headers: { "Content-Type": "text/event-stream" },
+        })
+      },
+      { preconnect: fetch.preconnect },
+    )
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = createMistral({ apiKey: "test", fetch: mockFetch })
+    })
+
+    const resolved = yield* aisdk.model({
+      ...model("@ai-sdk/mistral"),
+      modelID: Model.ID.make("pixtral-large-latest"),
+    })
+    yield* LLMClient.generate(
+      LLM.request({
+        model: resolved,
+        messages: [
+          Message.user([
+            { type: "text", text: "Inspect the attachments." },
+            { type: "media", mediaType: "image/png", data: new Uint8Array([0, 1, 2, 3]) },
+            { type: "media", mediaType: "image/png", data: "AQID" },
+            { type: "media", mediaType: "image/png", data: "data:image/png;base64,BAUG" },
+            { type: "media", mediaType: "image/png", data: "http://example.com/image.png" },
+            { type: "media", mediaType: "application/pdf", data: "https://example.com/document.pdf" },
+          ]),
+          Message.assistant({ type: "tool-call", id: "call_1", name: "screenshot", input: {} }),
+          Message.tool({
+            type: "tool-result",
+            id: "call_1",
+            name: "screenshot",
+            result: {
+              type: "content",
+              value: [
+                { type: "text", text: "Screenshot captured" },
+                { type: "file", uri: "data:image/png;base64,AAAA", mime: "image/png", name: "screen.png" },
+                {
+                  type: "file",
+                  uri: "https://example.com/tool-document.pdf",
+                  mime: "application/pdf",
+                  name: "tool-document.pdf",
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+    ).pipe(Effect.provide(client))
+
+    expect(body?.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Inspect the attachments." },
+          { type: "image_url", image_url: "data:image/png;base64,AAECAw==" },
+          { type: "image_url", image_url: "data:image/png;base64,AQID" },
+          { type: "image_url", image_url: "data:image/png;base64,BAUG" },
+          { type: "image_url", image_url: "http://example.com/image.png" },
+          { type: "document_url", document_url: "https://example.com/document.pdf" },
+        ],
+      },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_1",
+            type: "function",
+            function: { name: "screenshot", arguments: "{}" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        name: "screenshot",
+        tool_call_id: "call_1",
+        content: '[{"type":"text","text":"Screenshot captured"}]',
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Attached media from tool result:" },
+          { type: "image_url", image_url: "data:image/png;base64,AAAA" },
+          { type: "document_url", document_url: "https://example.com/tool-document.pdf" },
+        ],
+      },
+    ])
+  }),
+)
+
 it.effect("does not treat SSE comment heartbeats as model progress", () =>
   Effect.gen(function* () {
     const aisdk = yield* AISDK.Service
@@ -811,12 +917,12 @@ it.effect("classifies retryable AI SDK failures with retry-after details", () =>
 it.effect("classifies data-only AI SDK provider codes", () =>
   Effect.gen(function* () {
     const data = {
-      error: { code: "rate_limit_error", metadata: { requestId: "data-request", retryable: true } },
+      error: { code: "api_error", metadata: { requestId: "data-request", retryable: true } },
       trace: { region: "test-region" },
     }
     const cause = apiCallError({ statusCode: 400, data })
     const error = yield* streamFailure(cause)
-    expect(error.reason).toMatchObject({ _tag: "RateLimit" })
+    expect(error.reason).toMatchObject({ _tag: "ProviderInternal" })
     expect(error.reason.http?.status).toBe(400)
     expect(SessionRunnerRetry.isRetryable(error)).toBeTrue()
     expect(error.reason.body).toBe(JSON.stringify(data))

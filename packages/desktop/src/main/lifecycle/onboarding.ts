@@ -8,10 +8,6 @@ import { getStore } from "../storage/store"
 const DEFAULT_PROJECT_DIR = "Default Project"
 
 export const initializeFirstLaunchOnboarding = Effect.fn("Onboarding.initialize")(function* (userDataPath: string) {
-  const store = getStore()
-  const current = store.get(FIRST_LAUNCH_ONBOARDING_COMPLETE_KEY)
-  if (typeof current === "boolean") return current
-
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const names = (yield* fs.exists(userDataPath)) ? yield* fs.readDirectory(userDataPath) : []
@@ -21,8 +17,11 @@ export const initializeFirstLaunchOnboarding = Effect.fn("Onboarding.initialize"
       const info = yield* fs.stat(path.join(userDataPath, name)).pipe(Effect.option)
       return { name, directory: Option.isSome(info) && info.value.type === "Directory" }
     }),
-    { concurrency: "unbounded" },
   )
+  const store = getStore()
+  const current = store.get(FIRST_LAUNCH_ONBOARDING_COMPLETE_KEY)
+  if (typeof current === "boolean") return current
+
   const complete = hasExistingAppState(entries)
   store.set(FIRST_LAUNCH_ONBOARDING_COMPLETE_KEY, complete)
   return complete

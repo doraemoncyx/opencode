@@ -1,20 +1,10 @@
 import { Effect, Schema } from "effect"
-import type { Extension } from "./extension.js"
 import { executeProgram } from "./interpreter/execute.js"
-import { extensionGlobals } from "./interpreter/extensions.js"
-import { globalNames } from "./interpreter/globals.js"
 import { type Services, type ToolDescription, ToolRuntime } from "./tool-runtime.js"
 import type { Tools } from "./tools.js"
 
 /** A tool call admitted during an execution. */
-export type {
-  CallResult,
-  ExtensionInvocation,
-  Hooks,
-  ToolCall,
-  ToolDescription,
-  ToolInvocation,
-} from "./tool-runtime.js"
+export type { ToolCall, ToolCallEnded, ToolCallHooks, ToolCallStarted, ToolDescription } from "./tool-runtime.js"
 /** Signature-construction helpers for host-owned catalog instructions. */
 export { searchSignature, toolExpression } from "./tool-runtime.js"
 
@@ -41,13 +31,9 @@ export type ResolvedExecutionLimits = {
 }
 
 /** Configuration shared by `CodeMode.make` and `CodeMode.execute`. */
-export type Options<Provided extends Record<string, unknown> = {}> = {
+export type Options<Provided extends Record<string, unknown> = {}> = ToolRuntime.ToolCallHooks<Services<Provided>> & {
   /** Explicit tools exposed to the program as `tools`. */
   tools?: Provided & Tools<Services<Provided>>
-  /** Hooks around every tool and extension call the program makes; see `Hooks`. */
-  hooks?: ToolRuntime.Hooks<Services<Provided>>
-  /** Host functions exposed as globals; see `Extension.make`. */
-  extensions?: ReadonlyArray<Extension>
   /** Resource limits enforced on each execution. */
   limits?: ExecutionLimits
 }
@@ -147,19 +133,8 @@ export const make = <const Provided extends Record<string, unknown> = {}>(
 ): Runtime<Services<Provided>> => {
   const prepared = ToolRuntime.prepare((options.tools ?? {}) as Tools<Services<Provided>>)
   const limits = resolveExecutionLimits(options.limits)
-  const extensions = options.extensions ?? []
-  const bound = new Set(globalNames)
-  for (const extension of extensions) {
-    for (const name of Object.keys(extension.globals)) {
-      if (bound.has(name)) throw new TypeError(`Extension "${extension.name}" global "${name}" is already defined.`)
-      bound.add(name)
-    }
-  }
   return {
-    get catalog() {
-      return prepared.catalog
-    },
-    execute: (code) =>
-      executeProgram(code, prepared, limits, options.hooks ?? {}, (ctx) => extensionGlobals(ctx, extensions)),
+    catalog: prepared.catalog,
+    execute: (code) => executeProgram(code, prepared, limits, options),
   }
 }

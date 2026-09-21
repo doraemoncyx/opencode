@@ -5,11 +5,10 @@ import type { SessionInboxInfo } from "@opencode/client/promise"
 import { SessionMessage } from "@opencode/schema/session-message"
 import type { ComposerDelivery } from "@/composer/adapter"
 import type { ComposerStateTarget } from "@/composer/submission-state"
-import type { ImageAttachmentPart, PathAttachmentPart, Prompt } from "@/composer/state"
-import { clonePrompt, isAttachment, promptLength } from "@/composer/prompt-parts"
+import type { ImageAttachmentPart, Prompt } from "@/composer/state"
+import { clonePrompt, promptLength } from "@/composer/prompt-parts"
 import { buildPromptRequest } from "@/composer/request"
-import { blobDataUrl, createLegacyBlobReference } from "@/runtime/persistence/drafts"
-import { readPromptPresentation } from "@/composer/comment-note"
+import { blobDataUrl } from "@/runtime/persistence/drafts"
 import { useData } from "@/runtime/server/current"
 import { useServerSDK } from "@/runtime/server/client"
 import { useWorkspaceLocation } from "@/workspaces/location"
@@ -131,9 +130,7 @@ export function createSessionQueue(input: {
   }
   const steer = (id: string) => {
     if (state.editing?.id === id) cancelEdit()
-    return server.api.session.inbox
-      .update({ sessionID: input.sessionID, inboxID: id, delivery: "steer" })
-      .catch(() => notify())
+    return server.api.session.inbox.steer({ sessionID: input.sessionID, inboxID: id }).catch(() => notify())
   }
   const remove = (id: string) => {
     if (state.editing?.id === id) cancelEdit()
@@ -162,10 +159,7 @@ export function createSessionQueue(input: {
     })
     const text = queuedPromptText(item)
     input.draft.mode.set("normal")
-    input.draft.set(
-      [{ type: "text", content: text, start: 0, end: text.length }, ...queuedPromptAttachments(item)],
-      text.length,
-    )
+    input.draft.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
     input.restoreFocus(text.length)
     return true
   }
@@ -185,15 +179,9 @@ export function createSessionQueue(input: {
     if (!editing || mutation.isPending) return
     const prompt = clonePrompt(input.draft.current())
     const text = prompt.map((part) => ("content" in part ? part.content : "")).join("")
-    const attachments = prompt.filter(isAttachment)
-    if (!text.trim() && !attachments.length) return cancelEdit()
+    if (!text.trim() && !prompt.some((part) => part.type === "image")) return cancelEdit()
     const item = queued().find((entry) => entry.id === editing.id)
-    const original = item ? queuedPromptAttachments(item) : []
-    const pristine =
-      item &&
-      text.trim() === queuedPromptText(item) &&
-      attachments.length === original.length &&
-      attachments.every((attachment, index) => attachment.id === original[index].id)
+    const pristine = item && text.trim() === queuedPromptText(item) && !prompt.some((part) => part.type === "image")
     if (pristine && delivery === "queue") return cancelEdit()
     mutation.mutate({
       type: "edit",
@@ -249,7 +237,7 @@ export function queuedPromptRows(items: QueuedPrompt[], replacement?: { original
     .map((item) => ({
       id: item.id,
       text: queuedPromptText(item),
-      attachments: (item.payload.files?.length ?? 0) + (readPromptPresentation(item.payload.metadata)?.attachments.length ?? 0),
+      attachments: item.payload.files?.length ?? 0,
     }))
 }
 
@@ -258,46 +246,12 @@ export function queuedPromptText(item: QueuedPrompt) {
   return typeof display === "string" && display.length > 0 ? display : item.payload.text
 }
 
-// Inline attachments are the files the composer added itself, so they return
-// to it as image parts that an edit can remove or extend, and path references
-// return as path parts. Mentions and `file://` context stay in the payload; see
-// editedPromptInput.
-export function queuedPromptAttachments(item: QueuedPrompt): (ImageAttachmentPart | PathAttachmentPart)[] {
-  return [
-    ...(item.payload.files ?? [])
-      .filter((file) => isComposerAttachment(file))
-      .map(
-        (file, index): ImageAttachmentPart => ({
-          type: "image",
-          id: `${item.id}:file:${index}`,
-          filename: file.name ?? "attachment",
-          mime: file.mime,
-          blob: createLegacyBlobReference(`data:${file.mime};base64,${file.data}`),
-        }),
-      ),
-    ...(readPromptPresentation(item.payload.metadata)?.attachments ?? []).map(
-      (file, index): PathAttachmentPart => ({
-        type: "path",
-        id: `${item.id}:path:${index}`,
-        filename: file.name,
-        mime: file.mime,
-        path: file.path,
-      }),
-    ),
-  ]
-}
-
-function isComposerAttachment(file: NonNullable<QueuedPrompt["payload"]["files"]>[number]) {
-  return !file.mention && file.source.type === "inline"
-}
-
 // Confirming an edit submits the current composer content as the replacement:
-// mentions and attachments are parsed like a normal submission, so removed
-// attachments drop and added ones join. Stored file mentions and context files
-// the composer cannot show are preserved, and the review-comment notes appended
-// to the original's model-visible text survive. Ambient composer context (open
-// review comments) stays out: it belongs to the next fresh prompt, not to a
-// queued edit.
+// mentions and images added during the edit are parsed like a normal
+// submission, the original's stored attachments are preserved, and the
+// review-comment notes appended to the original's model-visible text survive.
+// Ambient composer context (open review comments) stays out: it belongs to
+// the next fresh prompt, not to a queued edit.
 async function editedPromptInput(
   sessionID: string,
   directory: string,
@@ -343,18 +297,16 @@ async function editedPromptInput(
     sessionID,
     text: request.text + notes,
     files: [
-      ...(payload?.files
-        ?.filter((file) => !isComposerAttachment(file))
-        .map((file) => ({
-          uri: `data:${file.mime};base64,${file.data}`,
-          name: file.name,
-          description: file.description,
-          mention: mention(file.mention),
-        })) ?? []),
+      ...(payload?.files?.map((file) => ({
+        uri: `data:${file.mime};base64,${file.data}`,
+        name: file.name,
+        description: file.description,
+        mention: mention(file.mention),
+      })) ?? []),
       ...request.files.map((file) => ({ uri: file.uri, name: file.name, mention: file.mention })),
     ],
     agents: agents.map((agent) => ({ name: agent.name, mention: mention(agent.mention) })),
     skills: skills.map((skill) => ({ id: skill.id, mention: mention(skill.mention) })),
-    metadata: { ...payload?.metadata, displayText: request.displayText, attachments: request.attachments },
+    metadata: { ...payload?.metadata, displayText: request.displayText },
   }
 }

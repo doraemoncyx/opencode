@@ -79,13 +79,13 @@ export { permissionAlwaysLines }
 function permissionReply(
   sessionID: string,
   requestID: string,
-  decision: PermissionReply["decision"],
+  reply: PermissionReply["reply"],
   message?: string,
 ): PermissionReply {
   return {
     sessionID,
     requestID,
-    decision,
+    reply,
     ...(message && message.trim() ? { message: message.trim() } : {}),
   }
 }

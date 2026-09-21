@@ -22,7 +22,6 @@ export type Continuation = { readonly step: number }
 export type DrainResult = Data.TaggedEnum<{
   Complete: {}
   Moved: { readonly continuation?: Continuation }
-  Reloaded: { readonly force: boolean; readonly continuation?: Continuation }
 }>
 export const DrainResult = Data.taggedEnum<DrainResult>()
 

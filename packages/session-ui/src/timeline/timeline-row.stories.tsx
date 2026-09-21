@@ -593,7 +593,7 @@ export const Conversation = {
   argTypes: {
     scenario: { control: "select", options: Object.keys(conversationScenarios) },
     reasoning: { control: "select", options: ["none", "blank", "heading"] },
-    mode: { control: "select", options: ["hidden", "compact", "full"] },
+    mode: { control: "select", options: ["hidden", "compact", "snippet", "full"] },
   },
   render: (args: { scenario: string; mode: ReasoningMode; reasoning: string; tool: boolean; text: string }) => {
     if (args.scenario === "reasoning") return <AgentReasoningStory {...args} />

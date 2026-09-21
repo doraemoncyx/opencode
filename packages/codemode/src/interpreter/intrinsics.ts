@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { define, hidden, Native, Arr, ErrorObj, Obj } from "./objects.js"
+import { define, hidden, NativeFunction, ProgramArray, ProgramError, ProgramObject } from "./objects.js"
 
 export const errorTypes = [
   "Error",
@@ -29,10 +29,6 @@ const builtins = [
   "Set",
   "URL",
   "URLSearchParams",
-  "Headers",
-  "Uint8Array",
-  "TextEncoder",
-  "TextDecoder",
   "Promise",
   "Iterator",
   "AsyncIterator",
@@ -44,32 +40,24 @@ const builtins = [
  * The built-in prototype objects of one runtime, allocated empty in dependency order. The globals populate them
  * and attach their constructors when the runtime is built.
  */
-export type Builtins = Readonly<Record<(typeof builtins)[number] | ErrorType, Obj>>
+export type Prototypes = Readonly<Record<(typeof builtins)[number] | ErrorType, ProgramObject>>
 
-export const createErrorValue = (prototype: Obj, message: string | undefined): ErrorObj => {
-  const value = new ErrorObj(prototype)
+export const createErrorValue = (prototype: ProgramObject, message: string | undefined): ProgramError => {
+  const value = new ProgramError(prototype)
   if (message !== undefined) define(value, "message", message, hidden)
   return value
 }
 
-/** The prototype a primitive reads its methods from without being boxed; none for null, undefined, and symbols. */
-export const primitivePrototype = (builtins: Builtins, value: unknown): Obj | undefined => {
-  if (typeof value === "string") return builtins.String
-  if (typeof value === "number") return builtins.Number
-  if (typeof value === "boolean") return builtins.Boolean
-  return undefined
-}
-
-export const createBuiltins = (): Builtins => {
-  const object = new Obj(null)
+export const createPrototypes = (): Prototypes => {
+  const object = new ProgramObject(null)
   // Function.prototype is itself callable and returns undefined.
-  const fn = new Native(object, { name: "", call: () => Effect.undefined })
-  const plain = () => new Obj(object)
+  const fn = new NativeFunction(object, { name: "", call: () => Effect.undefined })
+  const plain = () => new ProgramObject(object)
   const error = plain()
   define(error, "name", "Error", hidden)
   define(error, "message", "", hidden)
   const derived = (type: ErrorType) => {
-    const proto = new Obj(error)
+    const proto = new ProgramObject(error)
     define(proto, "name", type, hidden)
     define(proto, "message", "", hidden)
     return proto
@@ -79,7 +67,7 @@ export const createBuiltins = (): Builtins => {
   return {
     Object: object,
     Function: fn,
-    Array: new Arr(object),
+    Array: new ProgramArray(object),
     String: plain(),
     Number: plain(),
     Boolean: plain(),
@@ -89,15 +77,11 @@ export const createBuiltins = (): Builtins => {
     Set: plain(),
     URL: plain(),
     URLSearchParams: plain(),
-    Headers: plain(),
-    Uint8Array: plain(),
-    TextEncoder: plain(),
-    TextDecoder: plain(),
     Promise: plain(),
     Iterator: iterator,
     AsyncIterator: asyncIterator,
-    Generator: new Obj(iterator),
-    AsyncGenerator: new Obj(asyncIterator),
+    Generator: new ProgramObject(iterator),
+    AsyncGenerator: new ProgramObject(asyncIterator),
     Error: error,
     TypeError: derived("TypeError"),
     RangeError: derived("RangeError"),

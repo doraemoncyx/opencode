@@ -423,7 +423,7 @@ test("executes a selected slash command after creating its worktree", async ({ p
     .toEqual([
       {
         sessionID: pending.sessionID,
-        body: { name: "review", text: "latest commit", files: [], agents: [], skills: [], delivery: "steer" },
+        body: { command: "review", text: "latest commit", files: [], agents: [], skills: [], delivery: "steer" },
       },
     ])
   await expect(pending.shimmer).toHaveCount(0)
@@ -491,8 +491,7 @@ async function openDraft(
     if (request.method() !== "POST") return
     const path = new URL(request.url()).pathname
     if (path === "/api/worktree") {
-      expect(new URL(request.url()).searchParams.has("location[directory]")).toBe(false)
-      expect(request.postDataJSON()).toMatchObject({ projectID })
+      expect(new URL(request.url()).searchParams.get("location[directory]")).toBe(directory)
       calls.push("worktree")
       worktreeRequests.push(request.postDataJSON())
     }

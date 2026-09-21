@@ -47,7 +47,7 @@ describe("Open Responses-compatible route", () => {
       })
       expect(prepared.body).toEqual({
         model: "example-model",
-        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Say hello." }] }],
+        input: [{ role: "user", content: [{ type: "input_text", text: "Say hello." }] }],
         instructions: "You are concise.",
         stream: true,
         store: false,
@@ -89,8 +89,8 @@ describe("Open Responses-compatible route", () => {
 
       expect(prepared.body.instructions).toBe("Initial instructions.")
       expect(prepared.body.input).toEqual([
-        { type: "message", role: "user", content: [{ type: "input_text", text: "Before." }] },
-        { type: "message", role: "developer", content: "Operator update." },
+        { role: "user", content: [{ type: "input_text", text: "Before." }] },
+        { role: "developer", content: "Operator update." },
         { type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "After." }] },
       ])
     }),
@@ -111,8 +111,8 @@ describe("Open Responses-compatible route", () => {
       )
 
       expect(prepared.body.input).toEqual([
-        { type: "message", role: "user", content: [{ type: "input_text", text: "Before." }] },
-        { type: "message", role: "user", content: [{ type: "input_text", text: "After." }] },
+        { role: "user", content: [{ type: "input_text", text: "Before." }] },
+        { role: "user", content: [{ type: "input_text", text: "After." }] },
       ])
     }),
   )
@@ -143,7 +143,6 @@ describe("Open Responses-compatible route", () => {
 
       expect(prepared.body.input).toEqual([
         {
-          type: "message",
           role: "user",
           content: [{ type: "input_file", filename: "input.pdf", file_data: pdf }],
         },
@@ -361,9 +360,9 @@ describe("Open Responses-compatible route", () => {
 
       expect(prepared.body.input).toEqual([
         items[0],
-        { type: "message", role: "user", content: [{ type: "input_text", text: JSON.stringify(items[1]) }] },
-        { type: "message", role: "user", content: [{ type: "input_text", text: JSON.stringify(items[2]) }] },
-        { type: "message", role: "user", content: [{ type: "input_text", text: JSON.stringify(items[3]) }] },
+        { role: "user", content: [{ type: "input_text", text: JSON.stringify(items[1]) }] },
+        { role: "user", content: [{ type: "input_text", text: JSON.stringify(items[2]) }] },
+        { role: "user", content: [{ type: "input_text", text: JSON.stringify(items[3]) }] },
       ])
     }),
   )

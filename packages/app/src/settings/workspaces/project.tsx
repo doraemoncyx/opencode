@@ -2,7 +2,7 @@ import { Icon } from "@opencode/ui/icon"
 import { ProjectAvatar, PROJECT_AVATAR_VARIANTS } from "@opencode/ui/project-avatar"
 import { Textarea } from "@opencode/ui/textarea"
 import { TextInput } from "@opencode/ui/text-input"
-import { For, Show, type Component } from "solid-js"
+import { For, Show, onCleanup, type Component } from "solid-js"
 import { useLanguage } from "@/runtime/i18n/language"
 import { getProjectAvatarVariant, type LocalProject } from "@/shell/state/layout"
 import { ServerConnection, serverName } from "@/runtime/server/registry"
@@ -22,6 +22,12 @@ export const SettingsProjectGeneral: Component<{
   const language = useLanguage()
   const model = createEditProjectModel(props)
   const servers = useSettingsServers()
+  // Losing focus is not guaranteed before this view unmounts, so flush text edits that
+  // are still pending instead of dropping them.
+  onCleanup(() => {
+    model.saveName()
+    model.saveStartup()
+  })
 
   return (
     <>
@@ -54,7 +60,13 @@ export const SettingsProjectGeneral: Component<{
                 value={model.store.name}
                 placeholder={model.folderName()}
                 aria-label={language.t("project.settings.name.title")}
-                onInput={(event) => model.setStore("name", event.currentTarget.value)}
+                onInput={(event) => model.setName(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  // Enter has no form to submit, so commit the value the way blur does.
+                  if (event.key !== "Enter") return
+                  event.preventDefault()
+                  event.currentTarget.blur()
+                }}
                 onBlur={model.saveName}
               />
             </div>
@@ -148,7 +160,7 @@ export const SettingsProjectGeneral: Component<{
               placeholder={language.t("dialog.project.edit.worktree.startup.placeholder")}
               aria-label={language.t("dialog.project.edit.worktree.startup")}
               spellcheck={false}
-              onInput={(event) => model.setStore("startup", event.currentTarget.value)}
+              onInput={(event) => model.setStartup(event.currentTarget.value)}
               onBlur={model.saveStartup}
             />
             <div class="project-settings-startup-hint flex flex-col">

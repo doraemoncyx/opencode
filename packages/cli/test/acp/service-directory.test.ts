@@ -236,7 +236,6 @@ describe("acp service directory behavior", () => {
       headers: [{ name: "Authorization", value: "Bearer x" }],
     }
     let created = 0
-    const mcp = "/api/experimental/mcp/"
     await using fixture = makeACPFixture({
       fetch(request) {
         if (request.method === "POST" && request.path === "/api/session") {
@@ -246,7 +245,7 @@ describe("acp service directory behavior", () => {
         if (request.method === "GET" && request.path === "/api/session/ses_1") {
           return Response.json({ data: makeSession("ses_1") })
         }
-        if (request.method === "PUT" && request.path.startsWith(mcp)) {
+        if (request.method === "PUT" && request.path.startsWith("/api/mcp/")) {
           return new Response(null, { status: 204 })
         }
         return undefined
@@ -258,9 +257,9 @@ describe("acp service directory behavior", () => {
     await fixture.service.resumeSession({ cwd: "/workspace", sessionId: "ses_1", mcpServers: [changed] })
     await fixture.service.newSession({ cwd: "/workspace", mcpServers: [local] })
 
-    const adds = fixture.requests.filter((request) => request.method === "PUT" && request.path.startsWith(mcp))
+    const adds = fixture.requests.filter((request) => request.method === "PUT" && request.path.startsWith("/api/mcp/"))
     expect(adds).toHaveLength(4)
-    expect(adds.filter((request) => request.path === `${mcp}tools`).map((request) => request.body)).toEqual([
+    expect(adds.filter((request) => request.path === "/api/mcp/tools").map((request) => request.body)).toEqual([
       {
         config: {
           type: "local",
@@ -283,7 +282,7 @@ describe("acp service directory behavior", () => {
         },
       },
     ])
-    expect(adds.find((request) => request.path === `${mcp}docs`)?.body).toEqual({
+    expect(adds.find((request) => request.path === "/api/mcp/docs")?.body).toEqual({
       config: {
         type: "remote",
         url: "https://example.com/mcp",

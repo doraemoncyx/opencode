@@ -1,6 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
+import iconv from "iconv-lite"
 import { Effect, Exit, Layer, Schema } from "effect"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { LayerNode } from "@opencode/util/effect/layer-node"
@@ -379,6 +380,32 @@ describe("PatchTool", () => {
         expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("FORMATTED\n")
       })
     }),
+  )
+
+  it.live("keeps a GBK file in GBK when patching and skips the formatter", () =>
+    withTempTool((directory, registry) =>
+      Effect.gen(function* () {
+        const target = path.join(directory, "gbk.txt")
+        let formatted = 0
+        formatFile = (file) =>
+          Effect.promise(async () => {
+            formatted++
+            await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace("value = 2", "value = 9"))
+            return true
+          })
+        yield* Effect.promise(() => fs.writeFile(target, iconv.encode("// 中文注释\nconst value = 1\n", "gbk")))
+        const settled = yield* executeTool(
+          registry,
+          call("*** Begin Patch\n*** Update File: gbk.txt\n@@\n-const value = 1\n+const value = 2\n*** End Patch"),
+        )
+        expect(settled.status).toBe("completed")
+        expect(formatted).toBe(0)
+        const written = yield* Effect.promise(() => fs.readFile(target))
+        expect(
+          Buffer.from(written).equals(Buffer.from(iconv.encode("// 中文注释\nconst value = 2\n", "gbk"))),
+        ).toBe(true)
+      }),
+    ),
   )
 
   it.live("moves and updates a file", () =>

@@ -27,14 +27,11 @@ const referenced = (value: unknown) => sql`
 
 export function createDraftStore(
   db: Database,
-  input: { delay?: number; collectDelay?: number; onError?: (error: unknown) => void; now?: () => number } = {},
+  input: { delay?: number; onError?: (error: unknown) => void; now?: () => number } = {},
 ) {
   const now = input.now ?? Date.now
-  // Orphans left by an earlier session are collected once the window is up rather than before it:
-  // the scan walks every stored document, and the usual grace keeps anything a renderer has
-  // uploaded in the meantime.
-  const startup = setTimeout(() => collectBlobs(db, now() - blobGrace), input.collectDelay ?? 10_000)
-  startup.unref()
+  // Nothing outside this process can hold a blob id at startup, so no grace applies.
+  collectBlobs(db, Infinity)
   let collected = now()
   let orphans = false
   const byKey = eq(document.key, sql.placeholder("key"))
@@ -101,16 +98,11 @@ export function createDraftStore(
       orphans = true
       return id
     },
-    getBlob(id: string): Uint8Array<ArrayBuffer> | null {
-      const data = db.select({ data: blobs.data }).from(blobs).where(eq(blobs.id, id)).get()?.data
-      // node:sqlite allocates a dedicated ArrayBuffer per BLOB column value.
-      return data ? (data as Uint8Array<ArrayBuffer>) : null
+    getBlob(id: string): Uint8Array | null {
+      return db.select({ data: blobs.data }).from(blobs).where(eq(blobs.id, id)).get()?.data ?? null
     },
     flush: writer.flush,
-    close() {
-      clearTimeout(startup)
-      writer.close()
-    },
+    close: writer.close,
   }
 }
 

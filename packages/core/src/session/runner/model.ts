@@ -64,7 +64,7 @@ export const resolved = (
     readonly cost: Model.Info["cost"]
     readonly limit: Model.Info["limit"]
     readonly compaction?: Provider.Compaction
-    readonly transport?: Provider.Transport
+    readonly websocket?: boolean
   },
 ): Resolved => ({
   model,
@@ -77,7 +77,7 @@ export const resolved = (
   cost: options.cost,
   limit: options.limit,
   compaction: options.compaction,
-  transport: options.transport,
+  websocket: options.websocket ?? false,
 })
 
 const layer = Layer.effect(

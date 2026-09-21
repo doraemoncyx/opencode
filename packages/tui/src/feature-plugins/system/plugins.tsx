@@ -98,14 +98,14 @@ export function PluginsDialog(props: {
         footer: updating(entry) ? "updating" : footer(entry),
         footerColor:
           status(entry) === "failed"
-            ? props.context.theme.text.feedback.error.base
+            ? props.context.theme.text.feedback.error.default
             : outdated(entry)
-              ? props.context.theme.text.feedback.info.base
-              : props.context.theme.text.muted,
+              ? props.context.theme.text.feedback.info.default
+              : props.context.theme.text.subdued,
         gutter: updating(entry)
           ? (color) => <Spinner color={color} />
           : status(entry) === "failed"
-            ? () => <text fg={props.context.theme.text.feedback.error.base}>x</text>
+            ? () => <text fg={props.context.theme.text.feedback.error.default}>x</text>
             : undefined,
       }),
     ),
@@ -249,10 +249,10 @@ export function PluginsDialog(props: {
             footer={
               <Show when={pluginError(focusedEntry()) && !focusedTui()}>
                 <text>
-                  <span style={{ fg: props.context.theme.text.base }}>
+                  <span style={{ fg: props.context.theme.text.default }}>
                     <b>enter</b>
                   </span>
-                  <span style={{ fg: props.context.theme.text.muted }}> view error</span>
+                  <span style={{ fg: props.context.theme.text.subdued }}> view error</span>
                 </text>
               </Show>
             }

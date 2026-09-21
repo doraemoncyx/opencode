@@ -1,6 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
+import iconv from "iconv-lite"
 import { Effect, Layer } from "effect"
 import { FileMutation } from "@opencode/core/file-mutation"
 import { Formatter } from "@opencode/core/formatter"
@@ -225,6 +226,58 @@ describe("WriteTool", () => {
               expect(yield* Effect.promise(() => fs.readFile(deduplicated, "utf8"))).toBe("\uFEFFafter")
             }),
           ),
+        ),
+      )
+    }),
+  )
+
+  it.live("keeps an existing GBK file in GBK when overwriting and skips the formatter", () =>
+    withTempDir((tmp) => {
+      const fixture = makeWriteFixture()
+      const target = path.join(tmp.path, "gbk.txt")
+      let formatted = 0
+      fixture.formatFile = (file) =>
+        Effect.promise(async () => {
+          formatted++
+          await fs.writeFile(file, (await fs.readFile(file, "utf8")).toUpperCase())
+          return true
+        })
+      return Effect.promise(() => fs.writeFile(target, iconv.encode("这是中文\n第二行", "gbk"))).pipe(
+        Effect.andThen(
+          withTool(tmp.path, fixture, (registry) =>
+            executeTool(registry, call({ path: "gbk.txt", content: "换成新内容 123\n新增一行" })),
+          ),
+        ),
+        Effect.andThen((settled) =>
+          Effect.gen(function* () {
+            expect(settled.status).toBe("completed")
+            expect(formatted).toBe(0)
+            const written = yield* Effect.promise(() => fs.readFile(target))
+            expect(Buffer.from(written).equals(Buffer.from(iconv.encode("换成新内容 123\n新增一行", "gbk")))).toBe(true)
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.live("does not strip a GBK file whose bytes look like UTF-8", () =>
+    withTempDir((tmp) => {
+      const fixture = makeWriteFixture()
+      const target = path.join(tmp.path, "lookalike.txt")
+      // 0xC2 0x8F 既是合法 UTF-8（U+008F 控制符）又是 GBK 汉字「聫」，旧启发式会误判为 UTF-8 并转码损坏。
+      const original = Buffer.concat([Buffer.from("// note: "), iconv.encode("聫", "gbk")])
+      return Effect.promise(() => fs.writeFile(target, original)).pipe(
+        Effect.andThen(
+          withTool(tmp.path, fixture, (registry) =>
+            executeTool(registry, call({ path: "lookalike.txt", content: "// note: 聫\n// 中文注释" })),
+          ),
+        ),
+        Effect.andThen((settled) =>
+          Effect.gen(function* () {
+            expect(settled.status).toBe("completed")
+            const written = yield* Effect.promise(() => fs.readFile(target))
+            expect(Buffer.from(written).equals(Buffer.from(iconv.encode("// note: 聫\n// 中文注释", "gbk")))).toBe(true)
+          }),
         ),
       )
     }),

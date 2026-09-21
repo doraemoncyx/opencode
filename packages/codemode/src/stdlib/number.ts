@@ -1,14 +1,14 @@
 import { constructor, constants, methods } from "../interpreter/native.js"
 import { rangeError, typeError } from "../interpreter/model.js"
-import type { Interpreter } from "../interpreter/interpreter.js"
+import type { Runner } from "../interpreter/runner.js"
 import { coercion, coerceToString } from "./value.js"
 
-export const numberGlobal = <R>(ctx: Interpreter<R>) => {
-  const builtins = ctx.builtins
-  const number = constructor<R>(builtins, builtins.Number, {
+export const numberGlobal = <R>(runner: Runner<R>) => {
+  const protos = runner.prototypes
+  const number = constructor<R>(protos, protos.Number, {
     name: "Number",
     length: 1,
-    call: coercion(ctx, "Number").call,
+    call: coercion(runner, "Number").call,
   })
   constants(number, {
     MAX_SAFE_INTEGER: Number.MAX_SAFE_INTEGER,
@@ -20,7 +20,7 @@ export const numberGlobal = <R>(ctx: Interpreter<R>) => {
     POSITIVE_INFINITY: Number.POSITIVE_INFINITY,
     NEGATIVE_INFINITY: Number.NEGATIVE_INFINITY,
   })
-  methods(builtins, number, [
+  methods(protos, number, [
     ["isInteger", 1, (_, args) => Number.isInteger(args[0])],
     ["isFinite", 1, (_, args) => Number.isFinite(args[0])],
     ["isNaN", 1, (_, args) => Number.isNaN(args[0])],
@@ -48,9 +48,8 @@ export const numberGlobal = <R>(ctx: Interpreter<R>) => {
     if (typeof arg !== "number") throw typeError(`Number.${name} expects a number argument.`)
     return arg
   }
-  methods(builtins, builtins.Number, [
+  methods(protos, protos.Number, [
     ["toFixed", 1, (thisValue, args) => self(thisValue, "toFixed").toFixed(optNum("toFixed", args[0]))],
-    ["toLocaleString", 0, (thisValue) => self(thisValue, "toLocaleString").toLocaleString("en-US")],
     [
       "toExponential",
       1,
@@ -82,18 +81,18 @@ export const numberGlobal = <R>(ctx: Interpreter<R>) => {
   return number
 }
 
-export const booleanGlobal = <R>(ctx: Interpreter<R>) => {
-  const builtins = ctx.builtins
-  const boolean = constructor<R>(builtins, builtins.Boolean, {
+export const booleanGlobal = <R>(runner: Runner<R>) => {
+  const protos = runner.prototypes
+  const boolean = constructor<R>(protos, protos.Boolean, {
     name: "Boolean",
     length: 1,
-    call: coercion(ctx, "Boolean").call,
+    call: coercion(runner, "Boolean").call,
   })
   const self = (thisValue: unknown, name: string): boolean => {
     if (typeof thisValue === "boolean") return thisValue
     throw typeError(`Boolean.prototype.${name} requires that 'this' be a Boolean.`)
   }
-  methods(builtins, builtins.Boolean, [
+  methods(protos, protos.Boolean, [
     ["toString", 0, (thisValue) => String(self(thisValue, "toString"))],
     ["valueOf", 0, (thisValue) => self(thisValue, "valueOf")],
   ])

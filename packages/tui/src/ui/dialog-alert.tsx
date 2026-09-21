@@ -11,7 +11,7 @@ export type DialogAlertProps = {
 
 export function DialogAlert(props: DialogAlertProps) {
   const dialog = useDialog()
-  const theme = useTheme().surface("dialog")
+  const theme = useTheme("elevated")
 
   Keymap.createLayer(() => ({
     mode: "modal",
@@ -30,15 +30,15 @@ export function DialogAlert(props: DialogAlertProps) {
   return (
     <box paddingLeft={2} paddingRight={2} gap={1}>
       <box flexDirection="row" justifyContent="space-between">
-        <text attributes={TextAttributes.BOLD} fg={theme.text.base}>
+        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
           {props.title}
         </text>
-        <text fg={theme.text.muted} onMouseUp={() => dialog.clear()}>
+        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
           esc
         </text>
       </box>
       <box paddingBottom={1}>
-        <text fg={theme.text.muted}>{props.message}</text>
+        <text fg={theme.text.subdued}>{props.message}</text>
       </box>
       <box flexDirection="row" justifyContent="flex-end" paddingBottom={1}>
         <box

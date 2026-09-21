@@ -4,13 +4,9 @@ import { Schema } from "effect"
 import { optional, statics } from "./schema.js"
 import { Provider } from "./provider.js"
 import { Money } from "./money.js"
-import { ephemeral, inventory } from "./event.js"
 
 export const ID = Schema.String.pipe(Schema.brand("Model.ID"))
 export type ID = typeof ID.Type
-
-const Updated = ephemeral({ type: "model.updated", schema: {} })
-export const Event = { Updated, Definitions: inventory(Updated) }
 
 export const VariantID = Schema.String.pipe(Schema.brand("Model.VariantID"))
 export type VariantID = typeof VariantID.Type
@@ -56,21 +52,6 @@ export const MaxTokensField = Schema.Literals(["max_completion_tokens", "max_tok
 })
 export type MaxTokensField = typeof MaxTokensField.Type
 
-export const Settings = Schema.StructWithRest(
-  Schema.Struct({
-    compaction: Provider.Compaction.pipe(optional),
-  }),
-  // Provider packages may define arbitrary model-level options beyond OpenCode's shared compaction policy.
-  [Schema.Record(Schema.String, Schema.Any)],
-).annotate({ identifier: "Model.Settings" })
-export type Settings = typeof Settings.Type
-
-export const Overlays = {
-  settings: Settings.pipe(optional),
-  headers: Schema.Record(Schema.String, Schema.String).pipe(optional),
-  body: Schema.Record(Schema.String, Schema.Any).pipe(optional),
-}
-
 export interface Compatibility extends Schema.Schema.Type<typeof Compatibility> {}
 export const Compatibility = Schema.Struct({
   reasoningField: ReasoningField.pipe(optional),
@@ -79,7 +60,6 @@ export const Compatibility = Schema.Struct({
   maxTokensField: MaxTokensField.pipe(optional),
   requireFinishReason: Schema.Boolean.pipe(optional),
   requireAssistantAfterTool: Schema.Boolean.pipe(optional),
-  supportsPromptCacheKey: Schema.Boolean.pipe(optional),
 }).annotate({ identifier: "Model.Compatibility" })
 
 export interface Capabilities extends Schema.Schema.Type<typeof Capabilities> {}
@@ -87,6 +67,7 @@ export const Capabilities = Schema.Struct({
   tools: Schema.Boolean,
   input: Schema.Array(Schema.String),
   output: Schema.Array(Schema.String),
+  responsesWebsockets: Schema.Boolean.pipe(optional),
 })
   .annotate({ identifier: "Model.Capabilities" })
   .pipe(
@@ -112,7 +93,7 @@ export const Cost = Schema.Struct({
 export interface Variant extends Schema.Schema.Type<typeof Variant> {}
 export const Variant = Schema.Struct({
   id: VariantID,
-  ...Overlays,
+  ...Provider.Overlays,
 }).annotate({ identifier: "Model.Variant" })
 
 export interface Info extends Schema.Schema.Type<typeof Info> {}
@@ -125,7 +106,10 @@ export const Info = Schema.Struct({
   name: Schema.String,
   compatibility: Compatibility.pipe(optional),
   package: Provider.Package.pipe(optional),
-  ...Overlays,
+  compaction: Provider.Compaction.pipe(optional),
+  /** Session WebSocket policy; omitted inherits the provider policy, then defaults to disabled. */
+  websocket: Schema.Boolean.pipe(optional),
+  ...Provider.Overlays,
   capabilities: Capabilities,
   variants: Schema.Array(Variant),
   time: Schema.Struct({

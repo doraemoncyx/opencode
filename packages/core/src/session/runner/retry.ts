@@ -35,15 +35,12 @@ export function isRetryable(error: AIError) {
     case "RateLimit":
     case "ProviderInternal":
       return true
-    // A WebSocket acknowledgment marks delivery accepted before model output may exist.
-    // Read failures can still recover; the Step chooses retry versus continuation from durable output.
+    // HTTP transport errors carry no delivery and always retry. WebSocket marks accepted and rejected
+    // requests as final; not-sent and ambiguous (no frame observed) are still pre-output.
     case "Transport":
-      return (
-        error.reason.delivery !== "rejected" &&
-        (error.reason.delivery !== "accepted" || error.reason.operation === "read")
-      )
+      return error.reason.delivery !== "accepted" && error.reason.delivery !== "rejected"
     case "InvalidProviderOutput":
-      return error.reason.classification === "incomplete-stream"
+      return error.reason.classification === "incomplete-stream" || error.reason.classification === "invalid-frame"
     // Unrecognized failures retry: classification records affirmative
     // deterministic evidence, and transient failures are exactly the ones
     // that arrive in shapes no classifier anticipates.
@@ -66,6 +63,12 @@ export function isRetryable(error: AIError) {
 /** Bound provider-requested delays so a hostile or buggy retry-after cannot stall a session for hours. */
 const RETRY_AFTER_MAX = Duration.toMillis("15 minutes")
 
+/** A malformed stream frame is transient, but repeated malformed frames are terminal after a few tries. */
+const FRAME_RETRY_LIMIT = 3
+
+const isInvalidFrame = (cause: AIError) =>
+  cause.reason._tag === "InvalidProviderOutput" && cause.reason.classification === "invalid-frame"
+
 const retryAfter = (input: Input) => {
   if (input.cause.reason._tag === "RateLimit" || input.cause.reason._tag === "ProviderInternal")
     return input.cause.reason.retryAfterMs === undefined
@@ -74,13 +77,7 @@ const retryAfter = (input: Input) => {
   return undefined
 }
 
-// Exponential from 2s capped at 10s per gap, for 10 retries: 2, 4, 8, then 10 × 7, about 84s of
-// waiting when every attempt fails (67–101s with jitter). `min` takes the faster schedule, so the
-// cap applies per gap; `max` with `recurs` bounds the count.
-const schedule = Schedule.max([
-  Schedule.min([Schedule.exponential("2 seconds"), Schedule.spaced("10 seconds")]),
-  Schedule.recurs(10),
-]).pipe(
+const schedule = Schedule.max([Schedule.exponential("2 seconds"), Schedule.recurs(4)]).pipe(
   Schedule.jittered,
   Schedule.setInputType<Input>(),
   Schedule.modifyDelay(({ input, duration: delay }) => {
@@ -94,8 +91,10 @@ export const policy = (sessionID: SessionSchema.ID) =>
   Effect.gen(function* () {
     const step = yield* Schedule.toStep(schedule)
     let attempt = 1
+    let frameAttempts = 0
     return (input: Input) =>
       Effect.gen(function* () {
+        if (isInvalidFrame(input.cause) && frameAttempts >= FRAME_RETRY_LIMIT) return { retry: false as const }
         const now = yield* Clock.currentTimeMillis
         const next = yield* step(now, input).pipe(Pull.catchDone(() => Effect.succeed(undefined)))
         if (!next) return { retry: false as const }
@@ -112,6 +111,7 @@ export const policy = (sessionID: SessionSchema.ID) =>
         }
         yield* input.hook(event)
         if (!event.decision.retry) return event.decision
+        if (isInvalidFrame(input.cause)) frameAttempts++
         const normalized =
           Number.isFinite(event.decision.delay) && event.decision.delay >= 0 ? Math.ceil(event.decision.delay) : delay
         return { retry: true as const, attempt, delay: normalized }

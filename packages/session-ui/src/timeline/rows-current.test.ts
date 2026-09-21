@@ -240,7 +240,7 @@ describe("current session timeline rows", () => {
     expect(result.rows.map((row) => row._tag)).toEqual(["UserMessage", "Retry"])
   })
 
-  test.each(["hidden", "compact", "full"] as const)("only shows active reasoning in %s mode", (reasoningMode) => {
+  test.each(["hidden", "compact", "snippet", "full"] as const)("only shows active reasoning in %s mode", (reasoningMode) => {
     const active = { type: "reasoning", text: "## Current thought", time: { created: 2 } } as const
     const cases: { content: SessionMessageAssistant["content"]; thinking: boolean }[] = [
       { content: [], thinking: false },

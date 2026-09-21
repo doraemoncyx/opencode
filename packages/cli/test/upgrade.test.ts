@@ -35,12 +35,6 @@ describe("upgrade command", () => {
     expect(result.events).toEqual([{ method: "bun", version: "2.0.0" }])
   })
 
-  test("accepts vp as an explicit installation method", async () => {
-    const result = await cli(["2.0.0", "--method", "vp"])
-    expect(result.exitCode).toBe(0)
-    expect(result.events).toEqual([{ method: "vp", version: "2.0.0" }])
-  })
-
   test("skips the already installed version", async () => {
     const result = await cli(["v0.0.0-beta-old"])
     expect(result.exitCode).toBe(0)
@@ -56,7 +50,7 @@ describe("upgrade command", () => {
   })
 
   test("rejects unsupported methods before attempting an upgrade", async () => {
-    const result = await cli(["--method", "apt"])
+    const result = await cli(["--method", "brew"])
     expect(result.exitCode).not.toBe(0)
     expect(result.events).toEqual([])
   })

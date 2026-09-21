@@ -54,7 +54,5 @@ export interface ToolFailures extends Record<keyof ToolHooks, unknown> {
 export interface ToolDomain {
   readonly transform: Transform<ToolEditor>
   readonly reload: () => Effect.Effect<void>
-  /** Currently registered tools, after every transform, keyed by effective name. */
-  readonly list: () => Effect.Effect<readonly (Tool.Info & { readonly id: string })[]>
   readonly hook: Hooks<ToolHooks, ToolFailures>
 }

@@ -37,7 +37,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             if (generatingTitles[sessionID]) return
             setGeneratingTitles(sessionID, true)
             await client.api.session
-              .update({ sessionID, title: "" })
+              .rename({ sessionID, title: "" })
               .then(() => {
                 // The HTTP response can beat the renamed event. Keep pending until the new title is projected locally.
                 data.session.invalidate(sessionID)

@@ -95,7 +95,7 @@ export async function checkServerHealth(
       fetch,
       headers,
     })
-      .server.info({ signal })
+      .server.status({ signal })
       .then((status) => ({ data: { healthy: true as const, version: status.version } }))
       .catch((error) => ({ error }))
     if ("data" in current) return current.data

@@ -13,6 +13,7 @@ import { HttpServer } from "effect/unstable/http"
 import { Env } from "./env"
 import { ServiceConfig } from "./services/service-config"
 import { ServiceRegistration } from "./services/service-registration"
+import { Updater } from "./services/updater"
 import { WebUi } from "./services/web-ui"
 import { databasePath } from "./database-path"
 
@@ -71,13 +72,17 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
         delete process.env.OPENCODE_PASSWORD
         delete process.env.OPENCODE_SERVER_PASSWORD
       }
+      // Managed (service) mode keeps its configured credential, stdio keeps the
+      // environment credential, and a foreground `serve` runs without authentication.
       const password =
         options.mode === "service"
           ? config.password || randomBytes(32).toString("base64url")
-          : environmentPassword
-            ? Redacted.value(environmentPassword)
-            : randomBytes(32).toString("base64url")
-      if (!password) return yield* Effect.fail(new Error("Missing server password"))
+          : options.mode === "stdio"
+            ? environmentPassword
+              ? Redacted.value(environmentPassword)
+              : randomBytes(32).toString("base64url")
+            : undefined
+      if (options.mode !== "default" && !password) return yield* Effect.fail(new Error("Missing server password"))
       const instanceID = randomUUID()
       const transform = yield* WebUi.handler()
       const server = yield* start(
@@ -91,6 +96,9 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           port,
           cors: options.cors ?? config.cors,
           password,
+          // The web UI is served from this listener, so the browser that opens it on
+          // this machine cannot supply credentials. Remote peers still authenticate.
+          localAuth: true,
           pty: { handoff },
           simulation: truthy(process.env.OPENCODE_SIMULATE),
           database: {
@@ -120,7 +128,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
                 : !truthy(process.env.OPENCODE_DISABLE_FFF),
           },
         },
-        serviceOptions === undefined
+        serviceOptions === undefined || password === undefined
           ? undefined
           : {
               onListen: (address, shutdown) =>
@@ -157,7 +165,22 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
       if (server === undefined) return
       const url = HttpServer.formatAddress(server.address)
       console.log(options.mode === "stdio" ? JSON.stringify({ url }) : `server listening on ${url}`)
-      if (foreground && !environmentPassword) console.log(`server password ${password}`)
+      if (foreground && password !== undefined) console.log(`server password ${password}`)
+      yield* Updater.Service.pipe(
+        Effect.flatMap((updater) =>
+          Updater.pollUpdates({
+            check: updater.run().pipe(
+              Effect.flatMap((result) => {
+                if (!result) return Effect.void
+                if (result.type === "available") return server.updateAvailable(result.version)
+                return server.updated(result.version)
+              }),
+            ),
+          }),
+        ),
+        Effect.provide(Updater.layer),
+        Effect.forkScoped,
+      )
       return yield* options.mode === "service"
         ? server.shutdown
         : options.mode === "stdio"

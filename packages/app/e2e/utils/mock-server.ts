@@ -42,7 +42,7 @@ export interface MockServerConfig {
   sessionStatus?: Record<string, unknown> | (() => Record<string, unknown>)
   inbox?: unknown[] | (() => unknown[])
   onPrompt?: (input: { sessionID: string; body: Record<string, unknown> }) => void
-  onInboxChange?: (input: { sessionID: string; inboxID: string; action: "cancel" | "steer" | "queue" }) => void
+  onInboxChange?: (input: { sessionID: string; inboxID: string; action: "cancel" | "steer" }) => void
 }
 
 type MockStreamWindow = Window & {
@@ -219,13 +219,7 @@ function mockHandlers(config: MockServerConfig, state: { cursors: Map<string, st
         }),
       )
       .handleAll({
-        info: () =>
-          Effect.succeed({
-            version: "2.0.0",
-            pid: 1,
-            urls: config.server ? [config.server] : [],
-            paths: { tmp: "/tmp/opencode" },
-          }),
+        status: () => Effect.succeed({ version: "2.0.0", pid: 1, urls: config.server ? [config.server] : [] }),
         config: () => Effect.succeed(configEntries),
         reference: () =>
           Effect.succeed({
@@ -303,7 +297,7 @@ function mockHandlers(config: MockServerConfig, state: { cursors: Map<string, st
             })),
           ]),
         worktreeCreate: (ctx) => {
-          const input = ctx.payload
+          const input = record(ctx.payload) ? ctx.payload : {}
           return Effect.succeed({
             directory: `${typeof input.directory === "string" ? input.directory : config.directory}/${
               typeof input.name === "string" ? input.name : "copy"
@@ -443,7 +437,7 @@ function mockHandlers(config: MockServerConfig, state: { cursors: Map<string, st
               data: {
                 id: typeof body.id === "string" ? body.id : `inb_mock_${Date.now()}`,
                 sessionID: ctx.params.sessionID,
-                time: { created: Date.now() },
+                timeCreated: Date.now(),
                 type: "user",
                 payload: {
                   text: typeof body.text === "string" ? body.text : "",
@@ -460,13 +454,9 @@ function mockHandlers(config: MockServerConfig, state: { cursors: Map<string, st
           Effect.sync(() =>
             config.onInboxChange?.({ sessionID: ctx.params.sessionID, inboxID: ctx.params.inboxID, action: "cancel" }),
           ).pipe(Effect.andThen(noContent)),
-        sessionInboxUpdate: (ctx) =>
+        sessionInboxSteer: (ctx) =>
           Effect.sync(() =>
-            config.onInboxChange?.({
-              sessionID: ctx.params.sessionID,
-              inboxID: ctx.params.inboxID,
-              action: ctx.payload.delivery,
-            }),
+            config.onInboxChange?.({ sessionID: ctx.params.sessionID, inboxID: ctx.params.inboxID, action: "steer" }),
           ).pipe(Effect.andThen(noContent)),
         sessionSwitchAgent: () => noContent,
         sessionSwitchModel: () => noContent,

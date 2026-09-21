@@ -248,38 +248,7 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
-  it.effect("keeps valid Chat options when a sibling option is malformed", () =>
-    Effect.gen(function* () {
-      const prepared = yield* compileRequest(
-        LLM.request({
-          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).chat("gpt-4o-mini"),
-          prompt: "think",
-          providerOptions: { store: true, reasoningEffort: "max", topLogprobs: 25 },
-        }),
-      )
-
-      expect(prepared.body.store).toBe(true)
-      expect(prepared.body.reasoning_effort).toBe("max")
-    }),
-  )
-
-  it.effect("maps the request prompt cache key when the compatibility flag is set", () =>
-    Effect.gen(function* () {
-      const prepared = yield* compileRequest(
-        LLM.request({
-          model: OpenAIChat.route
-            .with({ endpoint: { baseURL: "https://api.compatible.test/v1" }, auth: Auth.bearer("test") })
-            .model({ id: "compatible-model", compatibility: { supportsPromptCacheKey: true } }),
-          prompt: "Hello",
-          promptCacheKey: "session_123",
-        }),
-      )
-
-      expect(prepared.body.prompt_cache_key).toBe("session_123")
-    }),
-  )
-
-  it.effect("omits the prompt cache key without the compatibility flag", () =>
+  it.effect("maps the request prompt cache key", () =>
     Effect.gen(function* () {
       const prepared = yield* compileRequest(
         LLM.request({
@@ -292,7 +261,7 @@ describe("OpenAI Chat route", () => {
         }),
       )
 
-      expect(prepared.body).not.toHaveProperty("prompt_cache_key")
+      expect(prepared.body.prompt_cache_key).toBe("session_123")
     }),
   )
 
@@ -311,7 +280,7 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
-  it.effect("maps the xAI Chat prompt cache key to conversation affinity header only", () =>
+  it.effect("maps the xAI Chat prompt cache key to conversation affinity", () =>
     LLMClient.generate(
       LLM.request({
         model: XAI.configure({ apiKey: "test", baseURL: "https://api.x.ai/v1" }).chat("grok-4.5"),
@@ -325,8 +294,7 @@ describe("OpenAI Chat route", () => {
             const web = yield* HttpClientRequest.toWeb(input.request).pipe(Effect.orDie)
             expect(web.headers.get("x-grok-conv-id")).toBe("session_123")
             const body = decodeJson(yield* Effect.promise(() => web.text()))
-            // Chat uses the header; prompt_cache_key is Responses-only.
-            expect(ProviderShared.isRecord(body) ? body.prompt_cache_key : undefined).toBeUndefined()
+            expect(ProviderShared.isRecord(body) ? body.prompt_cache_key : undefined).toBe("session_123")
             return input.respond(sseEvents(deltaChunk({}, "stop")), {
               headers: { "content-type": "text/event-stream" },
             })
@@ -727,54 +695,6 @@ describe("OpenAI Chat route", () => {
           ],
         },
       ])
-    }),
-  )
-
-  it.effect("preserves HTTP and HTTPS image URLs in user content", () =>
-    Effect.gen(function* () {
-      const urls = ["https://example.com/image.png?size=64#preview", "http://example.com/image.jpg"]
-      const prepared = yield* compileRequest(
-        LLM.request({
-          model,
-          prompt: urls.map((data) => ({ type: "media" as const, mediaType: "image/png", data })),
-        }),
-      )
-      expect(prepared.body.messages).toEqual([
-        { role: "user", content: urls.map((url) => ({ type: "image_url", image_url: { url } })) },
-      ])
-    }),
-  )
-
-  it.effect("preserves remote image URLs from tool results", () =>
-    Effect.gen(function* () {
-      const url = "https://example.com/tool-image.png?version=2"
-      const prepared = yield* compileRequest(
-        LLM.request({
-          model,
-          messages: [
-            Message.user("Describe the image."),
-            Message.assistant([ToolCallPart.make({ id: "call_image", name: "read_image", input: {} })]),
-            Message.tool({
-              id: "call_image",
-              name: "read_image",
-              resultType: "content",
-              result: [
-                { type: "text", text: "Image attached." },
-                { type: "file", mime: "image/png", uri: url },
-              ],
-            }),
-          ],
-        }),
-      )
-      expect(prepared.body.messages).toContainEqual({
-        role: "tool",
-        tool_call_id: "call_image",
-        content: "Image attached.",
-      })
-      expect(prepared.body.messages.at(-1)).toEqual({
-        role: "user",
-        content: [{ type: "image_url", image_url: { url } }],
-      })
     }),
   )
 
@@ -1815,6 +1735,10 @@ describe("OpenAI Chat route", () => {
       const error = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)), Effect.flip)
 
       expect(error.message).toContain("Invalid openai/openai-chat stream event")
+      expect(error.reason).toMatchObject({
+        _tag: "InvalidProviderOutput",
+        classification: "invalid-frame",
+      })
     }),
   )
 

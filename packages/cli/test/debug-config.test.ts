@@ -39,14 +39,9 @@ describe("debug config command", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url)
-        if (url.pathname === "/api/info") {
+        if (url.pathname === "/api/status") {
           healthProbes += 1
-          return Response.json({
-            version: OPENCODE_VERSION,
-            pid: process.pid,
-            urls: [],
-            paths: { tmp: "/tmp/opencode" },
-          })
+          return Response.json({ version: OPENCODE_VERSION, pid: process.pid, urls: [] })
         }
         requested = url
         authorization.push(request.headers.get("authorization"))

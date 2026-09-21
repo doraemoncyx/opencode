@@ -24,7 +24,7 @@ export function ReasoningPart(props: {
 }) {
   const theme = useTheme()
   const { currentSyntax: syntax } = useThemes()
-  const thinkingSyntax = createSyntaxStyleMemo(() => generateThinkingSyntax(syntax(), theme.text.muted))
+  const thinkingSyntax = createSyntaxStyleMemo(() => generateThinkingSyntax(syntax(), theme.text.subdued))
   const ctx = use()
   // Collapsed by default in hide mode: a single line throughout, so the
   // layout never shifts. Click to open the full markdown block, click to close.
@@ -52,7 +52,7 @@ export function ReasoningPart(props: {
         <box
           border={!inMinimal() || expanded() ? ["left"] : undefined}
           customBorderChars={SplitBorder.customBorderChars}
-          borderColor={theme.decrease(theme.background.base)}
+          borderColor={theme.raise(theme.background.default)}
           paddingLeft={!inMinimal() || expanded() ? 1 : 0}
         >
           <box onMouseUp={toggle}>
@@ -70,7 +70,7 @@ export function ReasoningPart(props: {
             <box
               border={["left"]}
               customBorderChars={SplitBorder.customBorderChars}
-              borderColor={theme.decrease(theme.background.base)}
+              borderColor={theme.raise(theme.background.default)}
               paddingLeft={inMinimal() ? 3 : 1}
             >
               <code
@@ -80,7 +80,7 @@ export function ReasoningPart(props: {
                 syntaxStyle={thinkingSyntax()}
                 content={content()}
                 conceal={ctx.markdownMode() === "rendered"}
-                fg={theme.text.muted}
+                fg={theme.text.subdued}
               />
             </box>
           </box>
@@ -106,12 +106,12 @@ function ReasoningHeader(props: {
   const fg = () =>
     props.open
       ? RGBA.fromValues(
-          theme.text.feedback.warning.base.r,
-          theme.text.feedback.warning.base.g,
-          theme.text.feedback.warning.base.b,
+          theme.text.feedback.warning.default.r,
+          theme.text.feedback.warning.default.g,
+          theme.text.feedback.warning.default.b,
           0.6,
         )
-      : theme.text.feedback.warning.base
+      : theme.text.feedback.warning.default
 
   return (
     <Switch>
@@ -166,7 +166,7 @@ export function TextPart(props: {
           tableOptions={{ style: "grid", cellPaddingX: 1 }}
           conceal={ctx.markdownMode() === "rendered"}
           fg={theme.markdown.text}
-          bg={theme.background.base}
+          bg={theme.background.default}
         />
       </box>
     </Show>

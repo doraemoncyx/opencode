@@ -111,15 +111,15 @@ export const Renamed = Event.durable({
 })
 export type Renamed = typeof Renamed.Type
 
-export const Permissions = Event.durable({
-  type: "session.permissions",
+export const PermissionsUpdated = Event.durable({
+  type: "session.permissions.updated",
   ...options,
   schema: {
     ...Base,
     permissions: Permission.Ruleset,
   },
 })
-export type Permissions = typeof Permissions.Type
+export type PermissionsUpdated = typeof PermissionsUpdated.Type
 
 export const Viewed = Event.durable({
   type: "session.viewed",
@@ -328,8 +328,6 @@ export namespace Step {
       agent: Agent.ID,
       model: Model.Ref,
       snapshot: Snapshot.ID.pipe(optional),
-      /** Request dispatch time, before waiting for provider output. */
-      started: NonNegativeInt,
     },
   })
   export type Started = typeof Started.Type
@@ -648,7 +646,7 @@ export const Definitions = Event.inventory(
   ModelSelected,
   Moved,
   Renamed,
-  Permissions,
+  PermissionsUpdated,
   Viewed,
   UsageUpdated,
   Deleted,

@@ -6,9 +6,7 @@ import { Global } from "@opencode/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
 
-test
-  .skipIf(process.platform === "win32")
-  .each([80, 120, 180])("session wheel scrolling preserves pane focus at width %s", async (width) => {
+test.each([80, 120, 180])("session wheel scrolling preserves pane focus at width %s", async (width) => {
   await using state = await tmpdir()
   const setup = await createTestRenderer({ width, height: 36, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
@@ -78,7 +76,7 @@ test
       app: { name: "test", version: "test", channel: "test" },
       server: { endpoint: { url: server.url.toString() } },
       config: {
-        get: async () => ({ animations: false, tabs: { enabled: false } }),
+        get: async () => ({ animations: false, session: { terminal: true }, tabs: { enabled: false } }),
         update: async () => ({}),
       },
       packages: { prepare: async () => ({ directory: "" }) },

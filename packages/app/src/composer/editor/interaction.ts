@@ -2,7 +2,6 @@ import { createEffect, type Accessor } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { useFilteredList } from "@opencode/ui/hooks"
 import { createComposerAttachments, type ComposerAttachmentConfig } from "../attachments/attachments"
-import type { Upload } from "../attachments/uploads"
 import { createComposerEditorActions, type ComposerStateStoreInput } from "./actions"
 import type {
   ComposerAttachment,
@@ -19,7 +18,7 @@ import {
   type ComposerInteractionCommand,
   type ComposerInteractionEvent,
 } from "../suggestions/machine"
-import { clonePrompt, isAttachment, promptLength } from "../prompt-parts"
+import { clonePrompt, promptLength } from "../prompt-parts"
 import type { ComposerQueue } from "../adapter"
 
 export type ComposerSelectControl = {
@@ -75,7 +74,7 @@ export function createComposerEditor(input: {
   const draft = createComposerEditorActions(input.store)
   const [state, setState] = input.state ?? createComposerEditorState(draft.state.mode)
   function addPart(part: ComposerPersistedState["prompt"][number]) {
-    if (isAttachment(part)) return false
+    if (part.type === "image") return false
     if (part.type === "file" || part.type === "agent") {
       draft.addMention(part)
       return true
@@ -170,7 +169,7 @@ export function createComposerEditor(input: {
       if (!action || state.popover.type !== "command-menu") result.commands.forEach(execute)
       if (action && event.item.kind === "command" && state.popover.type !== "command-menu") {
         draft.setPrompt(
-          draft.state.prompt.filter(isAttachment),
+          draft.state.prompt.filter((part): part is ComposerAttachment => part.type === "image"),
           0,
         )
       }
@@ -316,13 +315,7 @@ export function createComposerEditor(input: {
       return draft.state.context.items.filter((item) => !!item.comment?.trim())
     },
     attachments(): ComposerAttachment[] {
-      return draft.state.prompt.filter(isAttachment)
-    },
-    uploads(): Upload[] {
-      return attachments?.pending() ?? []
-    },
-    cancelUpload(id: string) {
-      attachments?.cancel(id)
+      return draft.state.prompt.filter((part): part is ComposerAttachment => part.type === "image")
     },
     toggleContext(id: string) {
       dispatch({ type: "context.active", id })
@@ -343,12 +336,11 @@ export function createComposerEditor(input: {
     canSubmit() {
       if (input.view.submit.available?.() === false) return false
       if (input.view.draftOnly) return false
-      if (attachments?.pending().length) return false
       const persisted = draft.state
       if (state.mode === "shell") {
         return persisted.prompt.some((part) => "content" in part && !!part.content.trim())
       }
-      if (persisted.prompt.some(isAttachment)) return true
+      if (persisted.prompt.some((part) => part.type === "image")) return true
       if (persisted.context.items.some((item) => !!item.comment?.trim())) return true
       return persisted.prompt.some((part) => "content" in part && !!part.content.trim())
     },
@@ -377,7 +369,6 @@ export function createComposerEditor(input: {
     submit(options?: { alternate?: boolean }) {
       if (input.view.submit.available?.() === false) return
       if (input.view.draftOnly) return
-      if (attachments?.pending().length) return
       input.view.submit.onSubmit(options)
       dispatch({ type: "popover.close" })
     },
@@ -393,20 +384,20 @@ export function createComposerEditor(input: {
     },
     onPaste(event: ClipboardEvent) {
       const clipboard = event.clipboardData
-      const text = clipboard?.getData("text/plain")
-      if (attachments && shouldHandlePasteAsAttachment(clipboard, !!input.attachments?.readClipboardImage)) {
+      if (
+        attachments &&
+        (Array.from(clipboard?.items ?? []).some((item) => item.kind === "file") || !clipboard?.getData("text/plain"))
+      ) {
         void attachments.handlePaste(event)
         return
       }
+      const text = clipboard?.getData("text/plain").replace(/\r\n?/g, "\n")
       if (!text) return
       event.preventDefault()
       // insertText emits input events per line, repeatedly parsing and saving the draft.
       // Escaped HTML inserts multiline text once and preserves native selection and undo.
-      const normalized = text.replace(/\r\n?/g, "\n")
-      const multiline = normalized.includes("\n")
-      const value = multiline
-        ? normalized.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-        : normalized
+      const multiline = text.includes("\n")
+      const value = multiline ? text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;") : text
       if (
         typeof document.execCommand === "function" &&
         document.execCommand(multiline ? "insertHTML" : "insertText", false, value)
@@ -417,13 +408,13 @@ export function createComposerEditor(input: {
       if (!(target instanceof HTMLElement) || !selection?.rangeCount || !target.contains(selection.anchorNode)) return
       const range = selection.getRangeAt(0)
       range.deleteContents()
-      const node = document.createTextNode(normalized)
+      const node = document.createTextNode(text)
       range.insertNode(node)
       range.setStartAfter(node)
       range.collapse(true)
       selection.removeAllRanges()
       selection.addRange(range)
-      target.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: normalized }))
+      target.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: text }))
     },
     onDragEnter(event: DragEvent) {
       event.preventDefault()
@@ -458,12 +449,6 @@ export function createComposerEditor(input: {
 }
 
 export type ComposerEditorModel = ReturnType<typeof createComposerEditor>
-
-export function shouldHandlePasteAsAttachment(clipboard: DataTransfer | null, readClipboardImage: boolean) {
-  if (Array.from(clipboard?.items ?? []).some((item) => item.kind === "file")) return true
-  if (Array.from(clipboard?.types ?? []).some((type) => type.startsWith("text/"))) return false
-  return readClipboardImage
-}
 
 function canNavigateHistory(direction: "up" | "down", text: string, cursor: number, inHistory: boolean) {
   const position = Math.max(0, Math.min(cursor, text.length))

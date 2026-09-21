@@ -280,6 +280,35 @@
   color: var(--v2-text-text-muted);
   line-height: var(--line-height-normal);
 
+  /* Preview lines stack under the label instead of sitting beside it. */
+  [data-slot="basic-tool-tool-info-structured"]:has([data-slot="reasoning-preview"]) {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: 2px;
+  }
+
+  [data-slot="reasoning-preview"] {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    max-width: 100%;
+    color: var(--v2-text-text-faint);
+    font-family: var(--v2-font-family-sans);
+    font-size: 13px;
+    font-weight: 440;
+    line-height: var(--line-height-compact);
+    letter-spacing: -0.04px;
+  }
+
+  [data-slot="reasoning-preview-line"] {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   [data-component="markdown"] {
     margin-top: 0;
     font-style: normal;
@@ -365,11 +394,56 @@
   }
 }
 
+[data-component="tool-input"] {
+  white-space: pre;
+  padding: 0;
+  margin-bottom: 8px;
+  height: fit-content;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+
+  [data-slot="tool-input-label"] {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--v2-text-text-muted);
+    margin-bottom: 4px;
+  }
+
+  [data-slot="tool-input-json"] {
+    margin: 0;
+    padding: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    font-family: var(--font-family-mono, monospace);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--v2-text-text-muted);
+    background: var(--v2-background-bg-layer-02);
+    border: 0.5px solid var(--v2-border-border-base);
+    border-radius: 6px;
+    overflow: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+
+    &::-webkit-scrollbar {
+      display: none;
+    }
+  }
+
+  &[data-scrollable] {
+    max-height: 240px;
+    overflow-y: auto;
+  }
+}
+
 [data-component="read-image"] {
   min-width: 0;
 
   img {
-    cursor: zoom-in;
     display: block;
     max-width: 100%;
     height: auto;
@@ -1265,8 +1339,6 @@
 [data-component="write-tool"],
 [data-component="apply-patch-tool"] {
   > [data-component="collapsible"].tool-collapsible {
-    /* Only file lists with a tool title reserve space for its sticky row. */
-    --sticky-accordion-offset: calc(32px + var(--tool-content-gap));
     gap: 0px;
   }
 
@@ -1288,7 +1360,7 @@
     position: sticky;
     top: var(--sticky-accordion-top, 0px);
     z-index: 20;
-    height: var(--sticky-accordion-offset);
+    height: calc(32px + var(--tool-content-gap));
     padding-bottom: var(--tool-content-gap);
     background-color: var(--v2-background-bg-base);
   }

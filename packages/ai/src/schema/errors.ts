@@ -124,7 +124,7 @@ export class InvalidProviderOutputError extends Schema.TaggedError<InvalidProvid
   "AI.Error.InvalidProviderOutput",
 )("InvalidProviderOutput", {
   ...ReasonFields,
-  classification: Schema.optional(Schema.Literals(["incomplete-stream"])),
+  classification: Schema.optional(Schema.Literals(["incomplete-stream", "invalid-frame"])),
   route: Schema.optional(Schema.String),
 }) {}
 

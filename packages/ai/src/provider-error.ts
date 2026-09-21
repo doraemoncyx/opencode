@@ -59,15 +59,7 @@ export const isContextOverflowFailure = (failure: unknown) =>
     : Schema.is(ProviderErrorEvent)(failure) && failure.classification === "context-overflow"
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
-// OpenCode Zen reports account caps as typed 429/402 errors that are not throttles.
-const QUOTA_CODES = new Set([
-  "insufficient_quota",
-  "usage_not_included",
-  "billing_error",
-  "gousagelimiterror",
-  "freeusagelimiterror",
-  "creditlimitexceeded",
-])
+const QUOTA_CODES = new Set(["insufficient_quota", "usage_not_included", "billing_error"])
 const AUTH_CODES = new Set(["authentication_error", "permission_error"])
 const SERVER_CODES = new Set([
   "api_error",
@@ -81,28 +73,9 @@ const SERVER_CODES = new Set([
   "serviceunavailableexception",
 ])
 const INVALID_REQUEST_CODES = new Set(["invalid_prompt", "invalid_request_error", "validationexception"])
-// Azure OpenAI reports `content_filter` with `innererror.code` ResponsibleAIPolicyViolation.
-// OpenRouter tags provider failures with a typed `error_type`; its Responses skin also
-// emits `image_content_policy_violation` as the native code.
-const CONTENT_POLICY_CODES = new Set([
-  "content_filter",
-  "responsibleaipolicyviolation",
-  "content_policy_violation",
-  "image_content_policy_violation",
-  "refusal",
-])
-// OpenCode Zen replaces upstream codes outside its allow-list but keeps the original
-// as a `[code]` label at the start of the rewritten message.
-const GATEWAY_CODE_LABEL = /^[^:\n]+: \[([A-Za-z0-9_.-]+)\]/
 const RATE_LIMIT_TEXT = /rate increased too quickly|rate[-_\s]?limit|too[_\s]?many[_\s]?requests/i
-// Only consulted on 429, where throttles and account caps share a status.
-const QUOTA_TEXT = /insufficient[-_\s]?quota|quota[-_\s]?exceeded|budget exceeded|usage limit/i
-// Policy rejections without a dedicated code, matched against the provider's own
-// explanation only. OpenAI reuses `invalid_prompt` for usage-policy rejections while
-// Bedrock Mantle reuses it for schema validation; Anthropic reports blocked output
-// under `invalid_request_error`.
-const CONTENT_POLICY_TEXT =
-  /violating our usage policy|blocked by content filtering policy|content[-_\s]?policy|rejected as a result of our safety system/i
+const QUOTA_TEXT = /insufficient[-_\s]?quota|quota[-_\s]?exceeded/i
+const CONTENT_POLICY_TEXT = /content[-_\s]?policy|content_filter|safety/i
 const SERVER_ERROR_TEXT =
   /\b(?:try again|(?:please |you can )?retry (?:the |this |your )?request|try (?:the |this |your )?request again|(?:currently |temporarily )?at capacity|overloaded|temporarily unavailable|service[-_\s]?unavailable|(?:server|internal)[-_\s]?error|server (?:is )?busy|provider returned (?:an )?error|resource[-_\s]?exhausted|upstream (?:connect|connection|request)|request buffer limit while retrying upstream)\b/i
 
@@ -129,12 +102,9 @@ export interface ProviderFailure {
 export function classifyProviderFailure(input: ProviderFailure): AIError["reason"] {
   const details = { message: input.message, body: input.rawBody, http: input.http, cause: input.cause }
   const body = input.rawBody ?? ""
-  const codes = [
-    ...providerCodes(input.data),
-    ...providerCodes(body),
-    ...providerCodes(input.message),
-    ...(GATEWAY_CODE_LABEL.exec(input.message)?.slice(1) ?? []),
-  ].map((code) => code.toLowerCase())
+  const codes = [...providerCodes(input.data), ...providerCodes(body), ...providerCodes(input.message)].map((code) =>
+    code.toLowerCase(),
+  )
   // Scan the raw payload too so signals missing from the summary message
   // (e.g. overflow phrases nested in a JSON error body) still classify.
   const text = [input.message, body].filter((value) => value.length > 0).join("\n")
@@ -150,13 +120,8 @@ export function classifyProviderFailure(input: ProviderFailure): AIError["reason
     return new InvalidRequestError({ ...details, classification: "context-overflow" })
   if (input.status === 413 || isPayloadTooLarge(text))
     return new InvalidRequestError({ ...details, classification: "payload-too-large" })
-  if (codes.some((code) => CONTENT_POLICY_CODES.has(code)) || (clientScoped && CONTENT_POLICY_TEXT.test(input.message)))
-    return new ContentPolicyError(details)
-  if (
-    input.status === 402 ||
-    codes.some((code) => QUOTA_CODES.has(code)) ||
-    (input.status === 429 && QUOTA_TEXT.test(text))
-  )
+  if (CONTENT_POLICY_TEXT.test(text)) return new ContentPolicyError(details)
+  if (codes.some((code) => QUOTA_CODES.has(code)) || (input.status === 429 && QUOTA_TEXT.test(text)))
     return new QuotaExceededError(details)
   if (input.status === 401 || input.status === 403 || codes.some((code) => AUTH_CODES.has(code)))
     return new AuthenticationError(details)
@@ -176,12 +141,10 @@ export function classifyProviderFailure(input: ProviderFailure): AIError["reason
     input.status === 408 ||
     input.status === 409 ||
     (input.status !== undefined && input.status >= 500) ||
-    // Server codes and phrasing only decide when no HTTP status contradicts them:
-    // gateways such as OpenCode Zen substitute `server_error` for codes they do
-    // not forward, so a 4xx with a server code is still a rejected request.
     ((input.status === undefined || input.status < 400) &&
-      ((!codes.some((code) => INVALID_REQUEST_CODES.has(code)) && SERVER_ERROR_TEXT.test(text)) ||
-        codes.some((code) => SERVER_CODES.has(code) || code.includes("exhausted") || code.includes("unavailable"))))
+      !codes.some((code) => INVALID_REQUEST_CODES.has(code)) &&
+      SERVER_ERROR_TEXT.test(text)) ||
+    codes.some((code) => SERVER_CODES.has(code) || code.includes("exhausted") || code.includes("unavailable"))
   )
     return new ProviderInternalError({
       ...details,
@@ -197,24 +160,12 @@ function providerCodes(value: unknown) {
   const decoded = typeof value === "string" ? Option.getOrUndefined(decodeJson(value)) : value
   if (!isRecord(decoded)) return []
   const error = isRecord(decoded.error) ? decoded.error : undefined
-  const inner = error && isRecord(error.innererror) ? error.innererror : undefined
-  const metadata = error && isRecord(error.metadata) ? error.metadata : undefined
   const response = isRecord(decoded.response) ? decoded.response : undefined
   const responseError = response && isRecord(response.error) ? response.error : undefined
   const exception = isRecord(decoded.exception) ? decoded.exception : undefined
-  return [
-    decoded.code,
-    decoded.error_type,
-    error?.code,
-    error?.type,
-    error?.status,
-    error?.error_type,
-    inner?.code,
-    metadata?.error_type,
-    responseError?.code,
-    response?.error_type,
-    exception?.type,
-  ].filter((value): value is string => typeof value === "string")
+  return [decoded.code, error?.code, error?.type, error?.status, responseError?.code, exception?.type].filter(
+    (value): value is string => typeof value === "string",
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

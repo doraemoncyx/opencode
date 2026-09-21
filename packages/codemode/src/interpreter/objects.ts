@@ -1,6 +1,5 @@
 import type { BlockStatement, Expression, Pattern } from "acorn"
 import type { Effect, Fiber } from "effect"
-import { checkArrayLength } from "./limits.js"
 import {
   AsyncIteratorSymbol,
   type Binding,
@@ -34,14 +33,14 @@ export const readonly: Attributes = { writable: false, enumerable: false, config
 export const frozen: Attributes = { writable: false, enumerable: false, configurable: false }
 
 /** An object owned by the program: own properties plus a prototype link. */
-export class Obj {
+export class ProgramObject {
   readonly props = new Map<string | symbol, Slot>()
-  constructor(public proto: Obj | null) {}
+  constructor(public proto: ProgramObject | null) {}
 }
 
-export class Arr extends Obj {
+export class ProgramArray extends ProgramObject {
   constructor(
-    proto: Obj,
+    proto: ProgramObject,
     readonly items: Array<unknown> = [],
   ) {
     super(proto)
@@ -49,22 +48,22 @@ export class Arr extends Obj {
 }
 
 /** An object with the [[ErrorData]] slot: what `Error.prototype.toString` and the host boundary recognize as an error. */
-export class ErrorObj extends Obj {
+export class ProgramError extends ProgramObject {
   /** The interpreter failure this error materialized from, so rethrowing it keeps the diagnostic kind and location. */
   host?: PendingThrow
 }
 
-export abstract class Callable extends Obj {
-  constructor(proto: Obj, name: string, length: number) {
+export abstract class Callable extends ProgramObject {
+  constructor(proto: ProgramObject, name: string, length: number) {
     super(proto)
     define(this, "length", length, readonly)
     define(this, "name", name, readonly)
   }
 }
 
-export class Fn extends Callable {
+export class ProgramFunction extends Callable {
   constructor(
-    proto: Obj,
+    proto: ProgramObject,
     name: string,
     readonly parameters: ReadonlyArray<Pattern>,
     readonly body: BlockStatement | Expression,
@@ -90,12 +89,12 @@ export type NativeOptions<R> = {
   readonly callback?: boolean
 }
 
-export class Native<R = never> extends Callable {
+export class NativeFunction<R = never> extends Callable {
   readonly call: NativeCall<R>
   readonly construct: NativeConstruct<R> | undefined
   readonly callback: boolean
 
-  constructor(proto: Obj, options: NativeOptions<R>) {
+  constructor(proto: ProgramObject, options: NativeOptions<R>) {
     super(proto, options.name, options.length ?? 0)
     this.call = options.call
     this.construct = options.construct
@@ -103,18 +102,18 @@ export class Native<R = never> extends Callable {
   }
 }
 
-export class PromiseObj extends Obj {
+export class ProgramPromise extends ProgramObject {
   constructor(
-    proto: Obj,
+    proto: ProgramObject,
     readonly fiber: Fiber.Fiber<unknown, unknown>,
   ) {
     super(proto)
   }
 }
 
-export class GeneratorObj extends Obj {
+export class ProgramGenerator extends ProgramObject {
   constructor(
-    proto: Obj,
+    proto: ProgramObject,
     readonly asynchronous: boolean,
     readonly request: (kind: GeneratorRequestKind, value: unknown) => Effect.Effect<unknown, unknown, unknown>,
   ) {
@@ -122,127 +121,87 @@ export class GeneratorObj extends Obj {
   }
 }
 
-/** A built-in collection iterator: live over the host collection, yielding program values. */
-export class IteratorObj extends Obj {
+export class ProgramDate extends ProgramObject {
   constructor(
-    proto: Obj,
-    readonly iterator: IteratorObject<unknown>,
-  ) {
-    super(proto)
-  }
-}
-
-export class DateObj extends Obj {
-  constructor(
-    proto: Obj,
+    proto: ProgramObject,
     public time: number,
   ) {
     super(proto)
   }
 }
 
-export class RegExpObj extends Obj {
+export class ProgramRegExp extends ProgramObject {
   readonly regex: RegExp
-  constructor(proto: Obj, pattern: string, flags: string) {
+  constructor(proto: ProgramObject, pattern: string, flags: string) {
     super(proto)
     this.regex = new RegExp(pattern, flags)
+    define(this, "lastIndex", 0, { writable: true, enumerable: false, configurable: false })
   }
 }
 
-export class MapObj extends Obj {
+export class ProgramMap extends ProgramObject {
   readonly map = new Map<unknown, unknown>()
 }
 
-export class SetObj extends Obj {
+export class ProgramSet extends ProgramObject {
   readonly set = new Set<unknown>()
 }
 
-export class URLSearchParamsObj extends Obj {
+export class ProgramURLSearchParams extends ProgramObject {
   constructor(
-    proto: Obj,
+    proto: ProgramObject,
     readonly params: URLSearchParams,
   ) {
     super(proto)
   }
 }
 
-export class HeadersObj extends Obj {
+export class ProgramURL extends ProgramObject {
+  readonly searchParams: ProgramURLSearchParams
   constructor(
-    proto: Obj,
-    readonly headers: Headers,
-  ) {
-    super(proto)
-  }
-}
-
-export class URLObj extends Obj {
-  readonly searchParams: URLSearchParamsObj
-  constructor(
-    proto: Obj,
-    searchParamsProto: Obj,
+    proto: ProgramObject,
+    searchParamsProto: ProgramObject,
     readonly url: URL,
   ) {
     super(proto)
-    this.searchParams = new URLSearchParamsObj(searchParamsProto, url.searchParams)
-  }
-}
-
-/** A `Uint8Array`: the host array does the byte clamping and ignores out-of-range writes, as JS does. */
-export class Bytes extends Obj {
-  constructor(
-    proto: Obj,
-    readonly bytes: Uint8Array,
-  ) {
-    super(proto)
+    this.searchParams = new ProgramURLSearchParams(searchParamsProto, url.searchParams)
   }
 }
 
 /** Built-in objects that wrap a host value; data-like, but never plain data. */
 export const isWrapper = (
   value: unknown,
-): value is DateObj | RegExpObj | MapObj | SetObj | URLObj | URLSearchParamsObj | HeadersObj | Bytes =>
-  value instanceof DateObj ||
-  value instanceof RegExpObj ||
-  value instanceof MapObj ||
-  value instanceof SetObj ||
-  value instanceof URLObj ||
-  value instanceof URLSearchParamsObj ||
-  value instanceof HeadersObj ||
-  value instanceof Bytes
+): value is ProgramDate | ProgramRegExp | ProgramMap | ProgramSet | ProgramURL | ProgramURLSearchParams =>
+  value instanceof ProgramDate ||
+  value instanceof ProgramRegExp ||
+  value instanceof ProgramMap ||
+  value instanceof ProgramSet ||
+  value instanceof ProgramURL ||
+  value instanceof ProgramURLSearchParams
 
-const MAX_ARRAY_INDEX = 4_294_967_295
+const MAX_ARRAY_LENGTH = 4_294_967_295
 
 export const parseArrayIndex = (key: string | number): number | undefined => {
   const property = String(key)
   if (!/^(0|[1-9]\d*)$/.test(property)) return undefined
   const index = Number(property)
-  return index < MAX_ARRAY_INDEX ? index : undefined
+  return index < MAX_ARRAY_LENGTH ? index : undefined
 }
 
 const canonical = (key: PropertyKey): string | symbol => (typeof key === "symbol" ? key : String(key))
 
-/** Objects whose integer keys are live elements rather than own property slots. */
-type Indexed = Arr | Bytes
-
-const isIndexed = (target: Obj): target is Indexed => target instanceof Arr || target instanceof Bytes
-
-const elements = (target: Indexed): Array<unknown> | Uint8Array => (target instanceof Arr ? target.items : target.bytes)
-
-const index = (target: Obj, key: string | symbol): number | undefined =>
-  isIndexed(target) && typeof key === "string" ? parseArrayIndex(key) : undefined
+const index = (target: ProgramObject, key: string | symbol): number | undefined =>
+  target instanceof ProgramArray && typeof key === "string" ? parseArrayIndex(key) : undefined
 
 /** The own property under `key`, including an array's live indexes and `length`. */
-export const own = (target: Obj, key: PropertyKey): Slot | undefined => {
+export const own = (target: ProgramObject, key: PropertyKey): Slot | undefined => {
   const name = canonical(key)
-  if (isIndexed(target)) {
+  if (target instanceof ProgramArray) {
     const at = index(target, name)
     if (at !== undefined) {
-      const items = elements(target)
-      return at in items ? { value: items[at], ...data } : undefined
+      return at in target.items ? { value: target.items[at], ...data } : undefined
     }
-    if (target instanceof Arr && name === "length") {
-      return { value: target.items.length, writable: true, enumerable: false, configurable: false }
-    }
+    if (name === "length") return { value: target.items.length, writable: true, enumerable: false, configurable: false }
   }
   return target.props.get(name)
 }
@@ -250,55 +209,53 @@ export const own = (target: Obj, key: PropertyKey): Slot | undefined => {
 const read = (slot: Slot, receiver: unknown): unknown =>
   "value" in slot ? slot.value : slot.get === undefined ? undefined : slot.get(receiver)
 
-export const hasOwn = (target: Obj, key: PropertyKey): boolean => own(target, key) !== undefined
+export const hasOwn = (target: ProgramObject, key: PropertyKey): boolean => own(target, key) !== undefined
 
-export const getOwn = (target: Obj, key: PropertyKey): unknown => {
+export const getOwn = (target: ProgramObject, key: PropertyKey): unknown => {
   const slot = own(target, key)
   return slot === undefined ? undefined : read(slot, target)
 }
 
 /** [[Get]]: walks the prototype chain; accessors see `receiver`, which is the primitive for wrapper prototypes. */
-export const get = (target: Obj, key: PropertyKey, receiver: unknown = target): unknown => {
-  for (let current: Obj | null = target; current !== null; current = current.proto) {
+export const get = (target: ProgramObject, key: PropertyKey, receiver: unknown = target): unknown => {
+  for (let current: ProgramObject | null = target; current !== null; current = current.proto) {
     const slot = own(current, key)
     if (slot !== undefined) return read(slot, receiver)
   }
   return undefined
 }
 
-export const has = (target: Obj, key: PropertyKey): boolean => {
-  for (let current: Obj | null = target; current !== null; current = current.proto) {
+export const has = (target: ProgramObject, key: PropertyKey): boolean => {
+  for (let current: ProgramObject | null = target; current !== null; current = current.proto) {
     if (own(current, key) !== undefined) return true
   }
   return false
 }
 
-export const hasPrototype = (value: unknown, proto: Obj): boolean => {
-  for (let current = value instanceof Obj ? value.proto : null; current !== null; current = current.proto) {
+export const hasPrototype = (value: unknown, proto: ProgramObject): boolean => {
+  for (let current = value instanceof ProgramObject ? value.proto : null; current !== null; current = current.proto) {
     if (current === proto) return true
   }
   return false
 }
 
-const writeElement = (target: Indexed, name: string | symbol, value: unknown): boolean | undefined => {
+const writeArray = (target: ProgramArray, name: string | symbol, value: unknown): boolean | undefined => {
   const at = index(target, name)
   if (at !== undefined) {
-    if (target instanceof Bytes) target.bytes[at] = typeof value === "number" ? value : Number(value)
-    else target.items[at] = value
+    target.items[at] = value
     return true
   }
-  if (!(target instanceof Arr) || name !== "length") return undefined
+  if (name !== "length") return undefined
   const length = typeof value === "number" ? value : Number(value)
-  if (!Number.isInteger(length) || length < 0) return false
-  checkArrayLength(length)
+  if (!Number.isInteger(length) || length < 0 || length > MAX_ARRAY_LENGTH) return false
   target.items.length = length
   return true
 }
 
 /** [[Set]]: an inherited setter or read-only property decides before an own data property is created. */
-export const set = (target: Obj, key: PropertyKey, value: unknown): boolean => {
+export const set = (target: ProgramObject, key: PropertyKey, value: unknown): boolean => {
   const name = canonical(key)
-  for (let current: Obj | null = target; current !== null; current = current.proto) {
+  for (let current: ProgramObject | null = target; current !== null; current = current.proto) {
     const slot = own(current, name)
     if (slot === undefined) continue
     if (!("value" in slot)) {
@@ -308,15 +265,15 @@ export const set = (target: Obj, key: PropertyKey, value: unknown): boolean => {
     }
     if (!slot.writable) return false
     if (current !== target) break
-    if (isIndexed(target)) {
-      const written = writeElement(target, name, value)
+    if (target instanceof ProgramArray) {
+      const written = writeArray(target, name, value)
       if (written !== undefined) return written
     }
     slot.value = value
     return true
   }
-  if (isIndexed(target)) {
-    const written = writeElement(target, name, value)
+  if (target instanceof ProgramArray) {
+    const written = writeArray(target, name, value)
     if (written !== undefined) return written
   }
   target.props.set(name, { value, ...data })
@@ -324,22 +281,22 @@ export const set = (target: Obj, key: PropertyKey, value: unknown): boolean => {
 }
 
 /** [[DefineOwnProperty]] for a data property, ignoring the chain. */
-export const define = (target: Obj, key: PropertyKey, value: unknown, attrs: Attributes = data): void => {
+export const define = (target: ProgramObject, key: PropertyKey, value: unknown, attrs: Attributes = data): void => {
   const name = canonical(key)
-  if (isIndexed(target) && writeElement(target, name, value) !== undefined) return
+  if (target instanceof ProgramArray && writeArray(target, name, value) !== undefined) return
   target.props.set(name, { value, ...attrs })
 }
 
-export const defineAccessor = (target: Obj, key: PropertyKey, get: Getter | undefined, set?: Setter): void => {
+export const defineAccessor = (target: ProgramObject, key: PropertyKey, get: Getter, set?: Setter): void => {
   target.props.set(canonical(key), { get, set, enumerable: false, configurable: true })
 }
 
-export const remove = (target: Obj, key: PropertyKey): boolean => {
+export const remove = (target: ProgramObject, key: PropertyKey): boolean => {
   const name = canonical(key)
-  if (isIndexed(target)) {
+  if (target instanceof ProgramArray) {
     const at = index(target, name)
-    if (at !== undefined) return target instanceof Bytes ? !(at in target.bytes) : delete target.items[at]
-    if (target instanceof Arr && name === "length") return false
+    if (at !== undefined) return delete target.items[at]
+    if (name === "length") return false
   }
   const slot = target.props.get(name)
   if (slot === undefined) return true
@@ -349,41 +306,41 @@ export const remove = (target: Obj, key: PropertyKey): boolean => {
 }
 
 // JS order: array indexes, integer-like keys ascending, other strings, then symbols.
-export const ownKeys = (target: Obj): Array<string | symbol> => {
+export const ownKeys = (target: ProgramObject): Array<string | symbol> => {
   const strings = [...target.props.keys()].filter((key): key is string => typeof key === "string")
   const symbols = [...target.props.keys()].filter((key): key is symbol => typeof key === "symbol")
   return [
-    ...(isIndexed(target) ? Object.keys(elements(target)) : []),
-    ...(target instanceof Arr ? ["length"] : []),
+    ...(target instanceof ProgramArray ? [...Object.keys(target.items), "length"] : []),
     ...strings.filter((key) => parseArrayIndex(key) !== undefined).sort((a, b) => Number(a) - Number(b)),
     ...strings.filter((key) => parseArrayIndex(key) === undefined),
     ...symbols,
   ]
 }
 
-const enumerable = (target: Obj, key: string | symbol): boolean => own(target, key)?.enumerable === true
+const enumerable = (target: ProgramObject, key: string | symbol): boolean => own(target, key)?.enumerable === true
 
 /** Own enumerable keys, including the iterator symbols; what spread and `Object.assign` copy. */
-export const enumerableKeys = (target: Obj): Array<string | symbol> =>
+export const enumerableKeys = (target: ProgramObject): Array<string | symbol> =>
   ownKeys(target).filter(
     (key) =>
       (typeof key === "string" || key === IteratorSymbol || key === AsyncIteratorSymbol) && enumerable(target, key),
   )
 
 /** Own enumerable string keys: `Object.keys`. */
-export const keys = (target: Obj): Array<string> =>
+export const keys = (target: ProgramObject): Array<string> =>
   ownKeys(target).filter((key): key is string => typeof key === "string" && enumerable(target, key))
 
 /** Own enumerable string entries: `Object.entries` and serialization. */
-export const entries = (target: Obj): Array<[string, unknown]> => keys(target).map((key) => [key, getOwn(target, key)])
+export const entries = (target: ProgramObject): Array<[string, unknown]> =>
+  keys(target).map((key) => [key, getOwn(target, key)])
 
-export const record = (proto: Obj, fields: Record<string, unknown>): Obj => {
-  const target = new Obj(proto)
+export const record = (proto: ProgramObject, fields: Record<string, unknown>): ProgramObject => {
+  const target = new ProgramObject(proto)
   for (const [key, value] of Object.entries(fields)) define(target, key, value)
   return target
 }
 
-export const assign = (target: Obj, source: Obj, skip?: ReadonlySet<PropertyKey>): void => {
+export const assign = (target: ProgramObject, source: ProgramObject, skip?: ReadonlySet<PropertyKey>): void => {
   for (const key of enumerableKeys(source)) {
     if (skip?.has(key)) continue
     set(target, key, getOwn(source, key))

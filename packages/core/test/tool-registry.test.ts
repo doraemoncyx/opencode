@@ -817,6 +817,30 @@ describe("Tool", () => {
     }),
   )
 
+  it.effect("suggests a near tool name for an unknown call", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      yield* transform(service, { shell: constant("ran"), "fff-mcp_multi_grep": constant("ran") }, { codemode: false })
+      const snapshot = yield* service.snapshot()
+      const available = new Map(snapshot.definitions.map((definition) => [definition.name, definition]))
+      const rejected = (name: string) =>
+        snapshot.execute({ ...call(name), definitions: available }).pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        )
+
+      expect(yield* rejected("bash")).toBe(
+        'No tool named "bash" is currently available. Did you mean "shell"? Please use a tool from the available tool list.',
+      )
+      expect(yield* rejected("multi_grep")).toBe(
+        'No tool named "multi_grep" is currently available. Did you mean "fff-mcp_multi_grep"? Please use a tool from the available tool list.',
+      )
+      expect(yield* rejected("missing")).toBe(
+        'No tool named "missing" is currently available. Please use a tool from the available tool list.',
+      )
+    }),
+  )
+
   it.effect("exposes execution only through a snapshot", () =>
     Effect.gen(function* () {
       const service = yield* Tool.Service
@@ -853,21 +877,6 @@ describe("Tool", () => {
       expect(contexts).toEqual([
         { sessionID, ...identity, id: Tool.CallID.make("call-context"), progress: expect.any(Function) },
       ])
-    }),
-  )
-  it.effect("lists registered tools by effective name", () =>
-    Effect.gen(function* () {
-      const service = yield* Tool.Service
-      yield* transform(service, { echo: make() }, { codemode: false })
-      yield* transform(service, { count: { ...constant("1"), name: "count" } }, { namespace: "acme" })
-
-      expect((yield* service.list()).map((tool) => [tool.id, tool.name])).toEqual([
-        ["echo", "echo"],
-        ["acme_count", "count"],
-      ])
-
-      yield* service.transform((editor) => editor.remove("echo"))
-      expect((yield* service.list()).map((tool) => tool.id)).toEqual(["acme_count"])
     }),
   )
   ;[

@@ -23,7 +23,6 @@ export type {
   FileAttachmentPart,
   FileContextItem,
   ImageAttachmentPart,
-  PathAttachmentPart,
   Prompt,
   PromptModel,
   SkillPart,

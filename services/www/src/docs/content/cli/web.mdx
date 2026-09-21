@@ -4,17 +4,36 @@ description: "Run OpenCode in the browser."
 ---
 
 OpenCode ships with a web ui that is served from the same server that powers the
-TUI. It's available by default and password protected.
+TUI. It's available by default.
+
+Requests that arrive from the machine running the server are treated as already
+authenticated, so opening the ui there needs no password. Requests from other
+machines to the shared service authenticate with its password.
 
 ## Access
 
+On the machine running the server, open the ui at its address. No credentials are
+required.
+
+```text
+http://127.0.0.1:49374
+```
+
+From another machine, the server has to listen on a reachable interface and you
+sign in with the service password.
+
 ```bash
+$ opencode service set hostname 0.0.0.0
+$ opencode service start
 $ opencode pair
 
-  URLs      http://127.0.0.1:49374
+  URLs      http://192.168.1.10:49374
   Username  opencode
   Password  ********
 ```
+
+`opencode pair` lists the available URLs, the username and password, and a QR
+code a client can scan.
 
 By default the server runs on port 49374 and listens only on localhost. You can
 change this config with the `opencode service` command.

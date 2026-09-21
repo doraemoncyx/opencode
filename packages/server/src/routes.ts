@@ -14,7 +14,6 @@ import { PermissionSaved } from "@opencode/core/permission/saved"
 import { PtyTicket } from "@opencode/core/pty/ticket"
 import { PersistentPty } from "@opencode/core/persistent-pty"
 import { Project } from "@opencode/core/project"
-import { Worktree } from "@opencode/core/worktree"
 import { Session } from "@opencode/core/session"
 import { Instance } from "@opencode/core/instance/service"
 import { SessionTransfer } from "@opencode/core/session/transfer"
@@ -56,7 +55,6 @@ const applicationServiceNodes = [
   httpClient,
   Job.node,
   Project.node,
-  Worktree.node,
   Session.node,
   Instance.node,
   SessionTransfer.node,
@@ -99,7 +97,13 @@ export function createEmbeddedRoutes(
   overrides: LayerNode.Replacements = [],
   instances?: InstanceNode,
 ) {
-  return makeRoutes(ServerAuth.Config.configLayer({ password: Option.none() }), options, () => [], overrides, instances)
+  return makeRoutes(
+    ServerAuth.Config.configLayer({ password: Option.none() }),
+    { ...options, localAuth: false },
+    () => [],
+    overrides,
+    instances,
+  )
 }
 
 function makeRoutes<AuthError, AuthServices>(
@@ -162,21 +166,20 @@ function makeRoutes<AuthError, AuthServices>(
         Layer.succeedContext(
           Context.pick(
             Database.Service,
-            Credential.Service,
             PermissionSaved.Service,
             PluginUpdate.Service,
             Project.Service,
             WellKnown.Service,
           )(context),
         ),
-        ServerInfo.layer(serviceURLs, Context.get(context, Global.Service).tmp, options.app),
+        ServerInfo.layer(serviceURLs, options.app),
       )
       const api = HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
         Layer.provide(handlers.pipe(Layer.provide(services), Layer.provide(Layer.succeed(CorsConfig, options)))),
         Layer.provide(formLocationLayer),
         Layer.provide(sessionLocationLayer),
         Layer.provide(layer),
-        Layer.provide(authorizationLayer),
+        Layer.provide(authorizationLayer(options.localAuth === true)),
         Layer.provide(schemaErrorLayer),
         Layer.provide(auth),
         HttpRouter.provideRequest(requestServices),

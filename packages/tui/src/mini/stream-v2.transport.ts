@@ -376,13 +376,8 @@ function messageIDFromEvent(id: string) {
   return SessionMessage.ID.fromEvent(Event.ID.make(id))
 }
 
-function eventIDFromMessage(id: SessionMessage.ID) {
-  return Event.ID.make(id.replace(/^msg_/, "evt_"))
-}
-
 const catalogEvents = new Set([
-  "provider.updated",
-  "model.updated",
+  "catalog.updated",
   "integration.updated",
   "credential.switched",
   "agent.updated",
@@ -520,14 +515,6 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
   const abortReady = () => readyReject(new Error("Mini closed before the event stream connected"))
   controller.signal.addEventListener("abort", abortReady, { once: true })
   const offFooterClose = input.footer.onClose(() => controller.abort())
-  const waitUntilConnected = async (signal?: AbortSignal) => {
-    const abort = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
-    while (!state.connected) {
-      if (state.closed || controller.signal.aborted || input.footer.isClosed || signal?.aborted)
-        throw new Error("Event stream aborted")
-      await wait(25, abort)
-    }
-  }
   const current = (attempt: Attempt) =>
     !state.closed &&
     !controller.signal.aborted &&
@@ -934,7 +921,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     ]
     const messages = await Promise.allSettled(
       messageIDs.map((messageID) =>
-        client.session.message.get({ sessionID: input.sessionID, messageID }, { signal: attempt.signal }),
+        client.session.message({ sessionID: input.sessionID, messageID }, { signal: attempt.signal }),
       ),
     )
     if (!current(attempt)) return permissions
@@ -956,9 +943,9 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       projectedMessages(client, attempt.signal),
       client.session.inbox.list({ sessionID: input.sessionID }, options),
       client.permission.list({ sessionID: input.sessionID }, options),
-      client.session.form.list({ sessionID: input.sessionID }, options),
+      client.form.list({ sessionID: input.sessionID }, options),
       input.location
-        ? client.form.list(
+        ? client.form.request.list(
             {
               location: { directory: input.location.directory },
             },
@@ -999,7 +986,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       phase: state.rootActive ? "running" : "idle",
       status: state.rootActive ? "assistant responding" : blockerStatus(state.view),
     })
-    if (!state.rootActive && !next.reconnect) await input.footer.idle()
+    if (!state.rootActive) await input.footer.idle()
     if (!current(attempt)) return
   }
 
@@ -1042,7 +1029,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       mergePending({
         id: event.data.inboxID,
         sessionID: event.data.sessionID,
-        time: { created: event.created },
+        timeCreated: event.created,
         ...event.data.item,
       })
       return
@@ -1470,6 +1457,13 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     })
     return task
   }
+  const settleCatalog = async (attempt: Attempt) => {
+    while (current(attempt)) {
+      const refreshes = catalogRefreshes.get(attempt.generation)
+      if (!refreshes || refreshes.size === 0) return
+      await Promise.all(refreshes)
+    }
+  }
   const settleCatalogRefreshes = async () => {
     while (catalogRefreshes.size > 0)
       await Promise.all([...catalogRefreshes.values()].flatMap((refreshes) => [...refreshes]))
@@ -1507,14 +1501,18 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
             ),
             consume,
           ])
+          await Promise.race([refreshCatalog(attempt), consume])
           if (!current(attempt)) throw new Error("Event stream disconnected")
           state.initial = false
-          for (const event of buffered.splice(0)) apply(attempt, event)
+          do {
+            for (const event of buffered.splice(0)) apply(attempt, event)
+            await Promise.race([subagents.ready(), consume])
+            await Promise.race([settleCatalog(attempt), consume])
+          } while (buffered.length > 0)
           if (!current(attempt)) throw new Error("Event stream disconnected")
           booting = false
           state.connected = true
           readyResolve()
-          void refreshCatalog(attempt)
           await consume
         } finally {
           connection.abort()
@@ -1560,7 +1558,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
 
   const runShellTurn = async (next: SessionTurnInput) => {
     if (state.wait || state.shellWait) throw new Error("prompt already running")
-    await waitUntilConnected(next.signal)
+    if (!state.connected) throw new Error("Event stream is reconnecting")
     const client = sdk
     const abort = new AbortController()
     const onAbort = () => abort.abort()
@@ -1569,20 +1567,19 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     const output = new Promise<void>((resolve) => {
       rendered = resolve
     })
-    const messageID = SessionMessage.ID.create()
-    const eventID = eventIDFromMessage(messageID)
+    const eventID = Event.ID.create()
     const active: ShellWait = {
       eventID,
-      messageID,
+      messageID: messageIDFromEvent(eventID),
       resolve: rendered,
       abort: () => abort.abort(),
     }
     state.shellWait = active
-    input.trace?.write("send.shell", { sessionID: input.sessionID, id: messageID, command: next.prompt.text })
+    input.trace?.write("send.shell", { sessionID: input.sessionID, id: eventID, command: next.prompt.text })
     write([], { phase: "running", status: "running shell" })
     try {
       await client.session.shell(
-        { sessionID: input.sessionID, id: messageID, command: next.prompt.text },
+        { sessionID: input.sessionID, id: eventID, command: next.prompt.text },
         { signal: abort.signal },
       )
       await Promise.race([output, wait(SHELL_OUTPUT_GRACE_MS, abort.signal)])
@@ -1615,7 +1612,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     state.wait = active
     const interrupt = () => {
       active.interrupted = true
-      void sdk.session.interrupt({ sessionID: input.sessionID, resume: true }).catch(() => {})
+      void sdk.session.interrupt({ sessionID: input.sessionID, continue: true }).catch(() => {})
     }
     next.signal?.addEventListener("abort", interrupt, { once: true })
     try {
@@ -1754,7 +1751,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     return client.session.command(
       {
         sessionID: input.sessionID,
-        name: command.name,
+        command: command.name,
         text: command.arguments,
         files: attachments.files.length ? attachments.files : undefined,
         agents: agents.length ? agents : undefined,
@@ -1793,7 +1790,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
   return {
     async admitPromptTurn(next, delivery) {
       if (next.prompt.mode === "shell") throw new Error("This prompt cannot be queued")
-      await waitUntilConnected(next.signal)
+      if (!state.connected) throw new Error("Event stream is reconnecting")
       const client = sdk
       if (!next.prompt.command && next.agent)
         await client.session.switchAgent({ sessionID: input.sessionID, agent: next.agent }, { signal: next.signal })
@@ -1818,7 +1815,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         return
       }
       if (state.wait || state.shellWait) throw new Error("prompt already running")
-      await waitUntilConnected(next.signal)
+      if (!state.connected) throw new Error("Event stream is reconnecting")
       const client = sdk
       const messageID = next.prompt.messageID
       if (!messageID) throw new Error("Prompt message ID is required")
@@ -1861,7 +1858,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       // A failed request paints nothing, so the two-press gesture stays available for retry,
       // and a lifecycle event racing the ack wins via the epoch guard.
       const epoch = state.executionEpoch
-      await sdk.session.interrupt({ sessionID: input.sessionID, resume: true }).then(
+      await sdk.session.interrupt({ sessionID: input.sessionID, continue: true }).then(
         () => {
           if (state.executionEpoch === epoch) paintIdle(blockerStatus(state.view))
         },

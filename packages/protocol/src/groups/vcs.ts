@@ -66,14 +66,14 @@ export const VcsGroup = HttpApiGroup.make("server.vcs")
       ),
   )
   .add(
-    HttpApiEndpoint.get("vcs.branch.list", "/api/vcs/branch", {
+    HttpApiEndpoint.get("vcs.branches", "/api/vcs/branches", {
       query: BranchesQuery,
       success: Location.response(Vcs.BranchList),
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
         OpenApi.annotations({
-          identifier: "vcs.branch.list",
+          identifier: "vcs.branches",
           summary: "VCS branches",
           description: "List local and remote branches available at the requested location.",
         }),

@@ -1,19 +1,24 @@
 import { parse, type Program } from "acorn"
 import { Cause, Effect, Scope } from "effect"
+// #transpile: conditional import — full typescript on node/bun, an identity
+// pass-through on workerd (the compiler is ~11 MiB and can't init there).
+import { transpile } from "#transpile"
 import type { DataValue, Diagnostic, ResolvedExecutionLimits, Result } from "../codemode.js"
-import { toBoundary } from "../data.js"
+import { toData } from "../data.js"
 import { ToolRuntime } from "../tool-runtime.js"
 import { normalizeError } from "./errors.js"
-import { createBuiltins } from "./intrinsics.js"
-import { Pending } from "./promises.js"
-import { Interpreter } from "./interpreter.js"
+import { createPrototypes } from "./intrinsics.js"
+import type { Host } from "./globals.js"
+import { PendingThrow } from "./model.js"
+import { PromiseRuntime } from "./promises.js"
+import { Runtime } from "./runtime.js"
 
 export const executeProgram = <R>(
   code: string,
   prepared: ToolRuntime.Prepared<R>,
   limits: ResolvedExecutionLimits,
-  hooks: ToolRuntime.Hooks<R>,
-  globals?: (ctx: Interpreter<R>) => ReadonlyArray<readonly [string, unknown]>,
+  hooks: ToolRuntime.ToolCallHooks<R>,
+  extraGlobals?: (host: Host<R>) => ReadonlyArray<readonly [string, unknown]>,
 ): Effect.Effect<Result, never, R> => {
   if (code.trim().length === 0) {
     return Effect.succeed({
@@ -25,23 +30,31 @@ export const executeProgram = <R>(
 
   // Allocate execution state inside suspension so reused Effects never share it.
   return Effect.suspend(() => {
-    const builtins = createBuiltins()
-    const tools = ToolRuntime.make(prepared, limits.maxToolCalls, hooks)
+    const prototypes = createPrototypes()
+    const tools = ToolRuntime.make(prepared, prototypes, limits.maxToolCalls, hooks)
     const logs: Array<string> = []
     const logged = () => (logs.length > 0 ? { logs: [...logs] } : {})
     // Set only after copy-out so timeouts cannot report invalid values as completed.
-    let returned: { value: DataValue; pending: Pending<R> } | undefined
+    let returned: { value: DataValue; promises: PromiseRuntime<R> } | undefined
 
     const base = Effect.acquireUseRelease(
       Scope.make("parallel"),
       (scope) =>
         Effect.gen(function* () {
           const program = parseProgram(code)
-          const pending = new Pending<R>(scope, builtins.Promise)
-          const ctx = new Interpreter<R>({ tools, pending, builtins, logs, globals })
-          const result = (yield* toBoundary(ctx, yield* ctx.run(program))) ?? null
-          returned = { value: result, pending }
-          const warnings = yield* pending.interrupt()
+          const promises = new PromiseRuntime<R>(scope, prototypes.Promise)
+          const value = yield* new Runtime<R>(
+            tools.execute,
+            tools.search,
+            tools.keys,
+            promises,
+            prototypes,
+            logs,
+            extraGlobals,
+          ).run(program)
+          const result = toData(value, "Execution result", "result") as DataValue
+          returned = { value: result, promises }
+          const warnings = yield* promises.interrupt()
           return {
             ok: true,
             value: result,
@@ -78,7 +91,7 @@ export const executeProgram = <R>(
                         kind: "TimeoutExceeded",
                         message: `The program returned, but background work was still running at the ${timeoutMs}ms timeout and was interrupted. Await all started promises.`,
                       },
-                      ...returned.pending.diagnostics(),
+                      ...returned.promises.diagnostics(),
                     ],
                     ...logged(),
                     toolCalls: tools.calls,
@@ -106,7 +119,16 @@ export const executeProgram = <R>(
 }
 
 const parseProgram = (code: string): Program => {
-  return parse(code, {
+  const transpiled = transpile(`async function __codemode__() {\n${code}\n}`)
+
+  if (transpiled.error !== undefined) {
+    throw new PendingThrow("SyntaxError", `Failed to parse TypeScript: ${transpiled.error}`, undefined, "ParseError")
+  }
+
+  const bodyStart = transpiled.outputText.indexOf("{") + 1
+  const bodyEnd = transpiled.outputText.lastIndexOf("}")
+  const executableCode = transpiled.outputText.slice(bodyStart, bodyEnd)
+  return parse(executableCode, {
     ecmaVersion: "latest",
     sourceType: "script",
     allowReturnOutsideFunction: true,

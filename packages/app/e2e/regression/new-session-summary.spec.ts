@@ -108,15 +108,6 @@ test("non-Git folders show their status without offering worktree actions", asyn
   ).toBeEnabled()
 })
 
-test("submits locally after changing a new worktree draft to Local", async ({ page }) => {
-  const mock = await openDraft(page, "create", { currentDirectory: workspace })
-  await page.getByRole("button", { name: "New worktree", exact: true }).click()
-  await page.getByRole("menuitem", { name: "Local repository", exact: true }).click()
-  await page.locator('[data-component="composer-editor"]').fill("Run locally")
-  await page.locator('[data-action="composer-submit"]').click()
-  await expect.poll(() => mock.calls.find((call) => call.type === "session")?.directory).toBe(directory)
-})
-
 test("new worktree MCP choices persist per draft and apply before the first prompt", async ({ page }, testInfo) => {
   const mock = await openDraft(page, "create")
   await page.locator('[data-component="composer-editor"]').fill("Use my selected MCPs")
@@ -305,12 +296,7 @@ test("new worktree sign-in completes before the draft can send", async ({ page, 
   expect(attempts).toHaveLength(1)
 })
 
-async function openDraft(
-  page: Page,
-  worktree = "main",
-  options: { git?: boolean; direction?: "ltr" | "rtl"; currentDirectory?: string } = {},
-) {
-  const currentDirectory = options.currentDirectory ?? directory
+async function openDraft(page: Page, worktree = "main", options: { git?: boolean; direction?: "ltr" | "rtl" } = {}) {
   const project = {
     id: "proj_new_summary",
     worktree: directory,
@@ -329,7 +315,7 @@ async function openDraft(
   const prompts: { sessionID: string; body: Record<string, unknown> }[] = []
   const state: { fail: boolean; hold?: Promise<void>; holdDirectory?: string } = { fail: false }
   await mockOpenCodeServer(page, {
-    directory: currentDirectory,
+    directory,
     project,
     sessions,
     provider: {
@@ -357,7 +343,7 @@ async function openDraft(
       (route) => route.fulfill({ json: { location: { directory }, data: { branch: {} } } }),
     )
   }
-  await page.route(/\/api\/(?:experimental\/)?mcp(?:[/?]|$)/, async (route) => {
+  await page.route("**/api/mcp**", async (route) => {
     if (route.request().method() === "OPTIONS") return route.fallback()
     const url = new URL(route.request().url())
     const target = url.searchParams.get("location[directory]") ?? directory
@@ -456,7 +442,7 @@ async function openDraft(
     },
   )
   await page.addInitScript(
-    ({ directory, currentDirectory, server, draftID, secondDraftID, worktree }) => {
+    ({ directory, server, draftID, secondDraftID, worktree }) => {
       if (!localStorage.getItem("opencode.global.dat:server"))
         localStorage.setItem(
           "opencode.global.dat:server",
@@ -469,12 +455,12 @@ async function openDraft(
         localStorage.setItem(
           "opencode.window.browser.dat:tabs",
           JSON.stringify([
-            { type: "draft", draftID, server, directory: currentDirectory, worktree },
-            { type: "draft", draftID: secondDraftID, server, directory: currentDirectory, worktree },
+            { type: "draft", draftID, server, directory, worktree },
+            { type: "draft", draftID: secondDraftID, server, directory, worktree },
           ]),
         )
     },
-    { directory, currentDirectory, server, draftID, secondDraftID, worktree },
+    { directory, server, draftID, secondDraftID, worktree },
   )
   if (options.direction) await openWithDirection(page, draftPath, options.direction)
   if (!options.direction) await page.goto(draftPath)

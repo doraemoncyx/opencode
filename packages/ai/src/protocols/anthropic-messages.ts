@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer"
-import { Effect, Option, Schema, SchemaGetter } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { Tool } from "@opencode/schema/tool"
 import { Route } from "../route/client.js"
 import { Auth } from "../route/auth.js"
@@ -21,14 +21,12 @@ import {
   type JsonSchema,
   type MediaPart,
   type ProviderMetadata,
-  type ProviderOptions,
   type ToolCallPart,
   type ToolDefinition,
   type ToolResultPart,
 } from "../schema/index.js"
-import { JsonObject, knownString, optionalArray, optionalNull, ProviderShared } from "./shared.js"
+import { JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared.js"
 import { classifyProviderFailure } from "../provider-error.js"
-import { effortUpdate, resolveEffortUpdates } from "../effort-updates.js"
 import * as Cache from "./utils/cache.js"
 import { Lifecycle } from "./utils/lifecycle.js"
 import { ToolSchemaProjection } from "./utils/tool-schema.js"
@@ -38,7 +36,6 @@ const ADAPTER = "anthropic-messages"
 export const DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 export const PATH = "/messages"
 export const DEFAULT_MAX_TOKENS = 32_000
-const DEFAULT_EFFORT = "high"
 
 const SSE_EVENTS = new Set([
   "message",
@@ -53,10 +50,57 @@ const SSE_EVENTS = new Set([
 ])
 export const framing = Framing.sseEvents(SSE_EVENTS)
 
-export type ThinkingBlockBinding = typeof AnthropicThinkingBlockBinding.Type
-export type ThinkingInput = typeof Thinking.Encoded
-/** Caller-facing provider options; unknown keys are accepted and ignored. `Options.Type` is the wire-ready form. */
-export type OptionsInput = ProviderOptions & typeof Options.Encoded
+export type ThinkingBlockBinding = {
+  readonly prefix_mismatch_behavior?: "error" | "drop_block" | (string & {})
+}
+
+export type ThinkingInput =
+  | {
+      readonly type: "adaptive"
+      readonly display?: "summarized" | "omitted"
+      readonly block_binding?: ThinkingBlockBinding
+    }
+  | {
+      readonly type: "disabled"
+    }
+  | ({
+      readonly type: "enabled"
+      readonly display?: "summarized" | "omitted"
+      readonly block_binding?: ThinkingBlockBinding
+    } & (
+      | { readonly budgetTokens: number; readonly budget_tokens?: number }
+      | { readonly budgetTokens?: number; readonly budget_tokens: number }
+    ))
+
+export interface OptionsInput {
+  /** Advanced in-band compaction. The caller owns checkpoint persistence and recovery. */
+  readonly contextManagement?: ContextManagement
+  readonly [key: string]: unknown
+  readonly thinking?: ThinkingInput
+  readonly effort?: string
+  readonly service_tier?: "auto" | "standard_only"
+  readonly serviceTier?: "auto" | "standard_only"
+  // SDK Metadata:2649 {user_id?: string | null}
+  readonly metadata?: { readonly user_id?: string | null }
+  // SDK MessageCreateParamsContainer:2596 ContainerParams|string
+  readonly container?:
+    | string
+    | { readonly id?: string | null; readonly skills?: ReadonlyArray<Record<string, unknown>> | null }
+  readonly inference_geo?: string | null
+  readonly inferenceGeo?: string | null
+  readonly cache_control?: { readonly type: "ephemeral"; readonly ttl?: "5m" | "1h" }
+  readonly cacheControl?: { readonly type: "ephemeral"; readonly ttl?: "5m" | "1h" }
+  // SDK OutputConfig:2684 {effort, format: JSONOutputFormat}
+  readonly output_config?: {
+    readonly effort?: string | null
+    readonly format?: { readonly type: "json_schema"; readonly schema: Record<string, unknown> } | null
+  }
+  readonly outputConfig?: {
+    readonly effort?: string | null
+    readonly format?: { readonly type: "json_schema"; readonly schema: Record<string, unknown> } | null
+  }
+}
+
 export type ProviderOptionsInput = OptionsInput
 
 export const ContextManagement = Schema.Struct({
@@ -83,7 +127,6 @@ const AnthropicCacheControl = Schema.Struct({
   type: Schema.tag("ephemeral"),
   ttl: Schema.optional(Schema.Literals(["5m", "1h"])),
 })
-const AnthropicServiceTier = knownString<"auto" | "standard_only">()
 
 const AnthropicTextBlock = Schema.Struct({
   type: Schema.tag("text"),
@@ -243,11 +286,7 @@ type AnthropicToolResultBlock = Schema.Schema.Type<typeof AnthropicToolResultBlo
 const AnthropicMessage = Schema.Union([
   Schema.Struct({ role: Schema.Literal("user"), content: Schema.Array(AnthropicUserBlock) }),
   Schema.Struct({ role: Schema.Literal("assistant"), content: Schema.Array(AnthropicAssistantBlock) }),
-  Schema.Struct({
-    role: Schema.Literal("system"),
-    content: Schema.Array(AnthropicTextBlock),
-    output_config: Schema.optional(Schema.Struct({ effort: Schema.String })),
-  }),
+  Schema.Struct({ role: Schema.Literal("system"), content: Schema.Array(AnthropicTextBlock) }),
 ]).pipe(Schema.toTaggedUnion("role"))
 type AnthropicMessage = Schema.Schema.Type<typeof AnthropicMessage>
 
@@ -272,21 +311,25 @@ const AnthropicToolChoice = Schema.Union([
 ])
 
 const AnthropicThinkingBlockBinding = Schema.Struct({
-  prefix_mismatch_behavior: Schema.optional(knownString<"error" | "drop_block">()),
+  prefix_mismatch_behavior: Schema.optional(Schema.String),
 })
 
-const AnthropicThinkingFields = {
-  display: Schema.optional(knownString<"summarized" | "omitted">()),
-  block_binding: Schema.optional(AnthropicThinkingBlockBinding),
-}
-const AnthropicThinkingEnabled = Schema.Struct({
-  type: Schema.tag("enabled"),
-  budget_tokens: Schema.Number,
-  ...AnthropicThinkingFields,
-})
-const AnthropicThinkingAdaptive = Schema.Struct({ type: Schema.tag("adaptive"), ...AnthropicThinkingFields })
-const AnthropicThinkingDisabled = Schema.Struct({ type: Schema.tag("disabled") })
-const AnthropicThinking = Schema.Union([AnthropicThinkingEnabled, AnthropicThinkingAdaptive, AnthropicThinkingDisabled])
+const AnthropicThinking = Schema.Union([
+  Schema.Struct({
+    type: Schema.tag("enabled"),
+    budget_tokens: Schema.Number,
+    display: Schema.optional(Schema.Literals(["summarized", "omitted"])),
+    block_binding: Schema.optional(AnthropicThinkingBlockBinding),
+  }),
+  Schema.Struct({
+    type: Schema.tag("adaptive"),
+    display: Schema.optional(Schema.Literals(["summarized", "omitted"])),
+    block_binding: Schema.optional(AnthropicThinkingBlockBinding),
+  }),
+  Schema.Struct({
+    type: Schema.tag("disabled"),
+  }),
+])
 type AnthropicThinking = typeof AnthropicThinking.Type
 
 // SDK OutputConfig:2684 {effort?: "low"|"medium"|"high"|"xhigh"|"max"|null, format?: JSONOutputFormat:2399}
@@ -310,53 +353,6 @@ const AnthropicContainer = Schema.Union([
     skills: optionalNull(Schema.Array(JsonObject)),
   }),
 ])
-
-// =============================================================================
-// Provider Options
-// =============================================================================
-// Callers spell the budget as `budgetTokens` or the wire `budget_tokens`; the
-// keys are disjoint per variant so the input type requires exactly one and the
-// transform can narrow on it. Decoding straight to the wire block keeps the
-// alias out of the rest of the file.
-const ThinkingEnabledInput = Schema.Union([
-  Schema.Struct({ type: Schema.tag("enabled"), budgetTokens: Schema.Number, ...AnthropicThinkingFields }),
-  Schema.Struct({ type: Schema.tag("enabled"), budget_tokens: Schema.Number, ...AnthropicThinkingFields }),
-]).pipe(
-  Schema.decodeTo(AnthropicThinkingEnabled, {
-    decode: SchemaGetter.transform((input) => ({
-      type: "enabled" as const,
-      budget_tokens: "budgetTokens" in input ? input.budgetTokens : input.budget_tokens,
-      display: input.display,
-      block_binding: input.block_binding,
-    })),
-    encode: SchemaGetter.passthrough({ strict: false }),
-  }),
-)
-const Thinking = Schema.Union([ThinkingEnabledInput, AnthropicThinkingAdaptive, AnthropicThinkingDisabled])
-
-const OutputConfigInput = Schema.Struct({
-  effort: optionalNull(Schema.String),
-  format: optionalNull(AnthropicJsonOutputFormat),
-})
-
-// Both key spellings are accepted; `fromRequest` prefers the snake_case one.
-const Options = Schema.Struct({
-  /** Advanced in-band compaction. The caller owns checkpoint persistence and recovery. */
-  contextManagement: Schema.optional(ContextManagement),
-  thinking: Schema.optional(Thinking),
-  effort: Schema.optional(Schema.String),
-  service_tier: Schema.optional(AnthropicServiceTier),
-  serviceTier: Schema.optional(AnthropicServiceTier),
-  metadata: Schema.optional(AnthropicMetadata),
-  container: Schema.optional(AnthropicContainer),
-  inference_geo: optionalNull(Schema.String),
-  inferenceGeo: optionalNull(Schema.String),
-  cache_control: Schema.optional(AnthropicCacheControl),
-  cacheControl: Schema.optional(AnthropicCacheControl),
-  output_config: Schema.optional(OutputConfigInput),
-  outputConfig: Schema.optional(OutputConfigInput),
-})
-const decodeOptions = ProviderShared.validateWith(Schema.decodeUnknownEffect(Options))
 
 const AnthropicBodyFields = {
   context_management: Schema.optional(
@@ -389,7 +385,7 @@ const AnthropicBodyFields = {
   container: Schema.optional(Schema.NullOr(AnthropicContainer)),
   inference_geo: Schema.optional(Schema.NullOr(Schema.String)),
   metadata: Schema.optional(AnthropicMetadata),
-  service_tier: Schema.optional(AnthropicServiceTier),
+  service_tier: Schema.optional(Schema.Literals(["auto", "standard_only"])),
 }
 export const AnthropicMessagesBody = Schema.Struct(AnthropicBodyFields)
 export type AnthropicMessagesBody = Schema.Schema.Type<typeof AnthropicMessagesBody>
@@ -881,12 +877,6 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
 
   for (const [index, message] of request.messages.entries()) {
     if (message.role === "system") {
-      const update = effortUpdate(message)
-      if (update) {
-        // Accepted at any position, so the text-update placement rules do not apply.
-        messages.push({ role: "system", content: [], output_config: { effort: update.effort ?? DEFAULT_EFFORT } })
-        continue
-      }
       if (splitsLocalToolResults(request.messages, index))
         return yield* invalid("Anthropic Messages system updates cannot split a local tool call from its tool result")
       if (supportsNativeSystemUpdates(request) && canUseNativeSystemUpdate(request, index)) {
@@ -999,30 +989,80 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
   return messages
 })
 
-// Accept gateway namespaces and Vertex suffixes without treating a snapshot date as a minor version.
-const claudeVersion = (id: string) => {
-  const match = /(?:^|[./])claude-(?<family>[a-z]+)-(?<major>\d+)(?:[.-](?<minor>\d{1,2}))?(?:$|[-:@])/.exec(
-    id.toLowerCase(),
-  )?.groups
-  if (!match) return undefined
-  return { family: match.family, major: Number(match.major), minor: Number(match.minor ?? 0) }
-}
+const resolveOptions = Effect.fn("AnthropicMessages.resolveOptions")(function* (request: LLMRequest) {
+  const input = request.providerOptions as Record<string, unknown> | undefined
+  const rawServiceTier =
+    (input as Record<string, unknown> | undefined)?.service_tier ??
+    (input as Record<string, unknown> | undefined)?.serviceTier
+  const service_tier =
+    rawServiceTier === "auto" || rawServiceTier === "standard_only"
+      ? (rawServiceTier as "auto" | "standard_only")
+      : undefined
+  const rawMetadata = (input as Record<string, unknown> | undefined)?.metadata
+  const metadata =
+    ProviderShared.isRecord(rawMetadata) && (typeof rawMetadata.user_id === "string" || rawMetadata.user_id === null)
+      ? { user_id: rawMetadata.user_id as string | null }
+      : undefined
+  const container =
+    typeof (input as Record<string, unknown> | undefined)?.container === "string" ||
+    ProviderShared.isRecord((input as Record<string, unknown> | undefined)?.container)
+      ? ((input as Record<string, unknown>).container as
+          | string
+          | { id?: string | null; skills?: ReadonlyArray<Record<string, unknown>> | null })
+      : undefined
+  const rawInferenceGeo =
+    (input as Record<string, unknown> | undefined)?.inference_geo ??
+    (input as Record<string, unknown> | undefined)?.inferenceGeo
+  const inference_geo = typeof rawInferenceGeo === "string" ? rawInferenceGeo : undefined
+  const rawCacheControl =
+    (input as Record<string, unknown> | undefined)?.cache_control ??
+    (input as Record<string, unknown> | undefined)?.cacheControl
+  const cache_control =
+    ProviderShared.isRecord(rawCacheControl) && rawCacheControl.type === "ephemeral"
+      ? (rawCacheControl as { type: "ephemeral"; ttl?: "5m" | "1h" })
+      : undefined
+  const rawOutputConfig =
+    (input as Record<string, unknown> | undefined)?.output_config ??
+    (input as Record<string, unknown> | undefined)?.outputConfig
+  const outputConfigEffort =
+    typeof (input as Record<string, unknown> | undefined)?.effort === "string"
+      ? ((input as Record<string, unknown>).effort as string)
+      : ProviderShared.isRecord(rawOutputConfig) && typeof rawOutputConfig.effort === "string"
+        ? (rawOutputConfig.effort as string)
+        : undefined
+  const outputConfigFormat =
+    ProviderShared.isRecord(rawOutputConfig) && ProviderShared.isRecord(rawOutputConfig.format)
+      ? (rawOutputConfig.format as { type: "json_schema"; schema: Record<string, unknown> })
+      : undefined
+  const output_config =
+    outputConfigEffort === undefined && outputConfigFormat === undefined
+      ? undefined
+      : {
+          ...(outputConfigEffort === undefined ? {} : { effort: outputConfigEffort }),
+          ...(outputConfigFormat === undefined ? {} : { format: outputConfigFormat }),
+        }
+  const thinking = yield* resolveThinking(input?.thinking)
+  return {
+    thinking: applyThinkingBindingDefault(request.model, thinking),
+    effort: outputConfigEffort,
+    output_config,
+    service_tier,
+    metadata,
+    container,
+    inference_geo,
+    cache_control,
+  }
+})
 
 const supportsThinkingBlockBinding = (model: LLMRequest["model"]) => {
   const override = model.compatibility?.supportsThinkingBlockBinding
   if (override !== undefined) return override
-  const version = claudeVersion(model.id)
-  return version !== undefined && (version.major > 5 || (version.major === 5 && version.minor >= 1))
-}
-
-const supportsEffortUpdates = (model: LLMRequest["model"]) => {
-  const override = model.compatibility?.supportsEffortUpdates
-  if (override !== undefined) return override
-  const version = claudeVersion(model.id)
-  if (version === undefined) return false
-  if (version.family === "opus") return version.major >= 5
-  if (version.family !== "fable" && version.family !== "mythos") return false
-  return version.major > 5 || (version.major === 5 && version.minor >= 1)
+  // Accept gateway namespaces and Vertex suffixes without treating a snapshot date as a minor version.
+  const version = /(?:^|[./])claude-[a-z]+-(?<major>\d+)(?:[.-](?<minor>\d{1,2}))?(?:$|[-:@])/i.exec(model.id)?.groups
+  if (!version) return false
+  const major = Number(version.major)
+  const minor = Number(version.minor ?? 0)
+  return major > 5 || (major === 5 && minor >= 1)
 }
 
 const applyThinkingBindingDefault = (model: LLMRequest["model"], thinking: AnthropicThinking | undefined) => {
@@ -1037,19 +1077,40 @@ const applyThinkingBindingDefault = (model: LLMRequest["model"], thinking: Anthr
   }
 }
 
+const resolveThinking = Effect.fn("AnthropicMessages.resolveThinking")(function* (input: unknown) {
+  if (!ProviderShared.isRecord(input)) return undefined
+  if (input.type === "disabled") return { type: "disabled" as const }
+  if (input.type !== "adaptive" && input.type !== "enabled") return undefined
+  const block_binding = yield* ProviderShared.validateWith(
+    Schema.decodeUnknownEffect(Schema.UndefinedOr(AnthropicThinkingBlockBinding)),
+  )(input.block_binding)
+  const display =
+    input.display === "summarized" || input.display === "omitted"
+      ? (input.display as "summarized" | "omitted")
+      : undefined
+  if (input.type === "adaptive") return { type: "adaptive" as const, display, block_binding }
+  const budget =
+    typeof input.budgetTokens === "number"
+      ? input.budgetTokens
+      : typeof input.budget_tokens === "number"
+        ? input.budget_tokens
+        : undefined
+  if (budget === undefined)
+    return yield* ProviderShared.invalidRequest("Anthropic thinking provider option requires budgetTokens")
+  return { type: "enabled" as const, budget_tokens: budget, display, block_binding }
+})
+
 const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (request: LLMRequest) {
-  const options = yield* decodeOptions(request.providerOptions ?? {})
-  const management = options.contextManagement
-  const outputConfig = options.output_config ?? options.outputConfig
-  const format = outputConfig?.format ?? undefined
-  const updates = resolveEffortUpdates(request, options.effort ?? outputConfig?.effort ?? undefined)
+  const management = yield* ProviderShared.validateWith(
+    Schema.decodeUnknownEffect(Schema.UndefinedOr(ContextManagement)),
+  )(request.providerOptions?.contextManagement)
   const generation = request.generation
   const toolSchemaCompatibility = request.model.compatibility?.toolSchema
   // Allocate the 4-breakpoint budget in invalidation order: tools → system →
   // messages. Tools live highest in the cache hierarchy, so when callers
   // over-mark we keep their tool hints and shed the message-tail ones first.
   const breakpoints = Cache.newBreakpoints(ANTHROPIC_BREAKPOINT_CAP)
-  const flattened = ProviderShared.flattenToolRequest(updates.request)
+  const flattened = ProviderShared.flattenToolRequest(request)
   const tools =
     flattened.tools.length === 0
       ? undefined
@@ -1077,8 +1138,7 @@ const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (reques
       `Anthropic Messages: dropped ${breakpoints.dropped} cache breakpoint(s); the API allows at most ${ANTHROPIC_BREAKPOINT_CAP} per request.`,
     )
   }
-  const output_config =
-    updates.effort === undefined && format === undefined ? undefined : { effort: updates.effort, format }
+  const options = yield* resolveOptions(request)
   const body = {
     model: request.model.id,
     system,
@@ -1091,14 +1151,14 @@ const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (reques
     top_p: generation?.topP,
     top_k: generation?.topK,
     stop_sequences: generation?.stop,
-    thinking: applyThinkingBindingDefault(request.model, options.thinking),
-    output_config,
+    thinking: options.thinking,
+    output_config: options.output_config,
     // top-level passthrough per SDK MessageCreateParamsBase:4638,4643,4649,4654,4670
-    cache_control: options.cache_control ?? options.cacheControl,
+    cache_control: options.cache_control,
     container: options.container,
-    inference_geo: options.inference_geo ?? options.inferenceGeo ?? undefined,
+    inference_geo: options.inference_geo,
     metadata: options.metadata,
-    service_tier: options.service_tier ?? options.serviceTier,
+    service_tier: options.service_tier,
   }
   if (!management) return body
   return {
@@ -1617,7 +1677,6 @@ export const protocol = Protocol.make({
     }),
     step,
   },
-  supportsEffortUpdates: (request) => supportsEffortUpdates(request.model),
 })
 
 export const transport = <
@@ -1658,9 +1717,6 @@ function requiredBetaHeaders(body: Pick<AnthropicMessagesBody, "messages" | "con
     message.content.some((block) => block.type === "compaction"),
   )
   if (requestsCompaction || replaysCompaction) betas.push("compact-2026-01-12")
-
-  if (body.messages.some((message) => message.role === "system" && message.output_config !== undefined))
-    betas.push("mid-conversation-output-config-2026-07-01")
 
   const thinking = body.thinking
   if (thinking && thinking.type !== "disabled" && thinking.block_binding)

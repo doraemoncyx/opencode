@@ -1,19 +1,19 @@
 import { Effect } from "effect"
 import { constructor, type Method, methods, prototypeFrom, receiver } from "../interpreter/native.js"
-import { checkArrayLength, checkStringLength, MAX_ARRAY_LENGTH } from "../interpreter/limits.js"
-import { invalidData, IteratorSymbol, rangeError, typeError } from "../interpreter/model.js"
-import { define, get, hidden, Arr, GeneratorObj, IteratorObj, Obj } from "../interpreter/objects.js"
+import { invalidData, rangeError, typeError } from "../interpreter/model.js"
+import { get, ProgramArray, ProgramGenerator, ProgramObject } from "../interpreter/objects.js"
 import { describeValue, rejectCircularInsertion } from "../interpreter/references.js"
-import { applyCollectionCallback, invoke, preserveConsumerError } from "../interpreter/callback.js"
-import type { Interpreter } from "../interpreter/interpreter.js"
+import { applyCollectionCallback, preserveConsumerError, type Runner } from "../interpreter/runner.js"
 import { compareText } from "../tool-runtime.js"
 import { coerceToNumber, coerceToString } from "./value.js"
 
-const arrayLikeSource = (source: unknown): { readonly length: number; readonly source: Obj } => {
-  if (source instanceof Obj && typeof get(source, "length") === "number") {
+const MAX_LENGTH = 4_294_967_295
+
+const arrayLikeSource = (source: unknown): { readonly length: number; readonly source: ProgramObject } => {
+  if (source instanceof ProgramObject && typeof get(source, "length") === "number") {
     const length = get(source, "length") as number
     const normalized = Number.isNaN(length) || length <= 0 ? 0 : Math.trunc(length)
-    checkArrayLength(normalized)
+    if (normalized > MAX_LENGTH) throw new RangeError("Invalid array length")
     return { length: normalized, source }
   }
   throw invalidData(
@@ -21,15 +21,15 @@ const arrayLikeSource = (source: unknown): { readonly length: number; readonly s
   )
 }
 
-const arrayFrom = <R>(ctx: Interpreter<R>, args: Array<unknown>): Effect.Effect<unknown, unknown, R> => {
+const arrayFrom = <R>(runner: Runner<R>, args: Array<unknown>): Effect.Effect<unknown, unknown, R> => {
   const source = args[0]
-  const proto = ctx.builtins.Array
+  const proto = runner.prototypes.Array
   const apply =
-    args.length < 2 || args[1] === undefined ? undefined : applyCollectionCallback(ctx, args[1], "Array.from")
+    args.length < 2 || args[1] === undefined ? undefined : applyCollectionCallback(runner, args[1], "Array.from")
   return Effect.gen(function* () {
-    const cursor = yield* ctx.iterate(source)
+    const cursor = yield* runner.syncIterator(source)
     if (cursor === undefined) {
-      if (source instanceof GeneratorObj) {
+      if (source instanceof ProgramGenerator) {
         throw typeError("Array.from expects a synchronous iterable or array-like value.")
       }
       const arrayLike = arrayLikeSource(source)
@@ -38,13 +38,13 @@ const arrayFrom = <R>(ctx: Interpreter<R>, args: Array<unknown>): Effect.Effect<
         const item = get(arrayLike.source, index)
         values.push(apply === undefined ? item : yield* apply([item, index]))
       }
-      return new Arr(proto, values)
+      return new ProgramArray(proto, values)
     }
     const values: Array<unknown> = []
     let index = 0
     while (true) {
       const step = yield* cursor.next
-      if (step.done) return new Arr(proto, values)
+      if (step.done) return new ProgramArray(proto, values)
       values.push(apply === undefined ? step.value : yield* preserveConsumerError(cursor, apply([step.value, index])))
       index += 1
     }
@@ -52,7 +52,7 @@ const arrayFrom = <R>(ctx: Interpreter<R>, args: Array<unknown>): Effect.Effect<
 }
 
 export const sortArray = <R>(
-  ctx: Interpreter<R>,
+  runner: Runner<R>,
   target: Array<unknown>,
   comparator: unknown,
   name: string,
@@ -60,7 +60,7 @@ export const sortArray = <R>(
   if (comparator === undefined) {
     return Effect.sync(() => [...target].sort((a, b) => compareText(coerceToString(a), coerceToString(b))))
   }
-  const apply = applyCollectionCallback(ctx, comparator, name)
+  const apply = applyCollectionCallback(runner, comparator, name)
   const mergeSort = (items: Array<unknown>): Effect.Effect<Array<unknown>, unknown, R> => {
     if (items.length <= 1) return Effect.succeed(items)
     const midpoint = Math.floor(items.length / 2)
@@ -85,31 +85,31 @@ export const sortArray = <R>(
 }
 
 // Array constructs identically with or without new, like JS.
-export const arrayGlobal = <R>(ctx: Interpreter<R>) => {
-  const builtins = ctx.builtins
-  const proto = builtins.Array
-  const wrap = (items: Array<unknown>) => new Arr(proto, items)
-  const construct = (args: Array<unknown>, into: Obj): Arr => {
-    if (args.length !== 1) return new Arr(into, [...args])
+export const arrayGlobal = <R>(runner: Runner<R>) => {
+  const protos = runner.prototypes
+  const proto = protos.Array
+  const wrap = (items: Array<unknown>) => new ProgramArray(proto, items)
+  const construct = (args: Array<unknown>, into: ProgramObject): ProgramArray => {
+    if (args.length !== 1) return new ProgramArray(into, [...args])
     const first = args[0]
-    if (typeof first !== "number") return new Arr(into, [first])
-    if (!Number.isInteger(first) || first < 0 || first > MAX_ARRAY_LENGTH) throw rangeError("Invalid array length.")
+    if (typeof first !== "number") return new ProgramArray(into, [first])
+    if (!Number.isInteger(first) || first < 0 || first > MAX_LENGTH) throw rangeError("Invalid array length.")
     // Sparse like JS: Array(3) has holes, and combinator loops already skip them.
-    return new Arr(into, new Array(first))
+    return new ProgramArray(into, new Array(first))
   }
-  const array = constructor<R>(builtins, proto, {
+  const array = constructor<R>(protos, proto, {
     name: "Array",
     length: 1,
     call: (_, args) => Effect.sync(() => construct(args, proto)),
     construct: (args, newTarget) => Effect.sync(() => construct(args, prototypeFrom(newTarget, proto))),
   })
-  methods(builtins, array, [
-    ["isArray", 1, (_, args) => args[0] instanceof Arr],
+  methods(protos, array, [
+    ["isArray", 1, (_, args) => args[0] instanceof ProgramArray],
     ["of", 0, (_, args) => wrap([...args])],
-    ["from", 1, (_, args) => arrayFrom(ctx, args)],
+    ["from", 1, (_, args) => arrayFrom(runner, args)],
   ])
 
-  const self = (thisValue: unknown, name: string) => receiver(Arr, thisValue, `Array.prototype.${name}`)
+  const self = (thisValue: unknown, name: string) => receiver(ProgramArray, thisValue, `Array.prototype.${name}`)
   const optNumber = (name: string, value: unknown, label: string): number | undefined => {
     if (value === undefined) return undefined
     if (typeof value !== "number") {
@@ -123,7 +123,7 @@ export const arrayGlobal = <R>(ctx: Interpreter<R>) => {
     length: number,
     body: (
       target: Array<unknown>,
-      receiver: Arr,
+      receiver: ProgramArray,
       apply: (args: Array<unknown>) => Effect.Effect<unknown, unknown, R>,
       args: Array<unknown>,
     ) => Effect.Effect<unknown, unknown, R>,
@@ -132,11 +132,11 @@ export const arrayGlobal = <R>(ctx: Interpreter<R>) => {
     length,
     (thisValue, args) => {
       const target = self(thisValue, name)
-      return body(target.items, target, applyCollectionCallback(ctx, args[0], `Array.${name}`), args)
+      return body(target.items, target, applyCollectionCallback(runner, args[0], `Array.${name}`), args)
     },
   ]
 
-  methods(builtins, proto, [
+  methods(protos, proto, [
     [
       "join",
       1,
@@ -145,11 +145,7 @@ export const arrayGlobal = <R>(ctx: Interpreter<R>) => {
         if (args.length > 1 || (args.length === 1 && typeof args[0] !== "string")) {
           throw typeError("Array.join expects zero arguments or one string separator.")
         }
-        const joined = target
-          .map((item) => coerceToString(item ?? ""))
-          .join(args.length === 0 ? "," : (args[0] as string))
-        checkStringLength(joined.length)
-        return joined
+        return target.map((item) => coerceToString(item ?? "")).join(args.length === 0 ? "," : (args[0] as string))
       },
     ],
     [
@@ -202,23 +198,20 @@ export const arrayGlobal = <R>(ctx: Interpreter<R>) => {
     [
       "concat",
       1,
-      (thisValue, args) => {
-        const joined = self(thisValue, "concat").items.concat(
-          ...args.map((item) => (item instanceof Arr ? item.items : item)),
-        )
-        checkArrayLength(joined.length)
-        return wrap(joined)
-      },
+      (thisValue, args) =>
+        wrap(
+          self(thisValue, "concat").items.concat(
+            ...args.map((item) => (item instanceof ProgramArray ? item.items : item)),
+          ),
+        ),
     ],
     [
       "flat",
       0,
       (thisValue, args) => {
         const flatten = (items: Array<unknown>, depth: number): Array<unknown> =>
-          items.flatMap((item) => (item instanceof Arr && depth > 0 ? flatten(item.items, depth - 1) : [item]))
-        const flattened = flatten(self(thisValue, "flat").items, optNumber("flat", args[0], "depth") ?? 1)
-        checkArrayLength(flattened.length)
-        return wrap(flattened)
+          items.flatMap((item) => (item instanceof ProgramArray && depth > 0 ? flatten(item.items, depth - 1) : [item]))
+        return wrap(flatten(self(thisValue, "flat").items, optNumber("flat", args[0], "depth") ?? 1))
       },
     ],
     [
@@ -239,7 +232,7 @@ export const arrayGlobal = <R>(ctx: Interpreter<R>) => {
         const length = items.length
         const holeCount = Array.from({ length }, (_, index) => Object.hasOwn(items, index)).filter((o) => !o).length
         const itemCount = length - holeCount
-        return Effect.map(sortArray(ctx, items, args[0], "Array.sort"), (sorted) => {
+        return Effect.map(sortArray(runner, items, args[0], "Array.sort"), (sorted) => {
           sorted.slice(0, itemCount).forEach((item, index) => {
             items[index] = item
           })
@@ -254,7 +247,7 @@ export const arrayGlobal = <R>(ctx: Interpreter<R>) => {
       "toSorted",
       1,
       (thisValue, args) =>
-        Effect.map(sortArray(ctx, self(thisValue, "toSorted").items, args[0], "Array.toSorted"), wrap),
+        Effect.map(sortArray(runner, self(thisValue, "toSorted").items, args[0], "Array.toSorted"), wrap),
     ],
     ["toReversed", 0, (thisValue) => wrap([...self(thisValue, "toReversed").items].reverse())],
     [
@@ -340,31 +333,13 @@ export const arrayGlobal = <R>(ctx: Interpreter<R>) => {
         return target
       },
     ],
-    [
-      "toLocaleString",
-      0,
-      (thisValue) =>
-        Effect.map(
-          Effect.forEach(self(thisValue, "toLocaleString").items, (item) =>
-            item === null || item === undefined
-              ? Effect.succeed("")
-              : Effect.map(invoke(ctx, item, "toLocaleString", "Array.prototype.toLocaleString"), coerceToString),
-          ),
-          (parts) => parts.join(","),
-        ),
-    ],
-    ["keys", 0, (thisValue) => new IteratorObj(builtins.Iterator, self(thisValue, "keys").items.keys())],
-    ["values", 0, (thisValue) => new IteratorObj(builtins.Iterator, self(thisValue, "values").items.values())],
+    ["keys", 0, (thisValue) => wrap(Array.from(self(thisValue, "keys").items.keys()))],
+    ["values", 0, (thisValue) => wrap([...self(thisValue, "values").items])],
     [
       "entries",
       0,
       (thisValue) =>
-        new IteratorObj(
-          builtins.Iterator,
-          self(thisValue, "entries")
-            .items.entries()
-            .map(([index, item]) => wrap([index, item])),
-        ),
+        wrap(Array.from(self(thisValue, "entries").items.entries(), ([index, item]) => wrap([index, item]))),
     ],
     iterate("map", 1, (target, receiver, apply) =>
       Effect.gen(function* () {
@@ -385,7 +360,7 @@ export const arrayGlobal = <R>(ctx: Interpreter<R>) => {
         for (let index = 0; index < length; index += 1) {
           if (!(index in target)) continue
           const mapped = yield* apply([target[index], index, receiver])
-          if (mapped instanceof Arr) values.push(...mapped.items)
+          if (mapped instanceof ProgramArray) values.push(...mapped.items)
           else values.push(mapped)
         }
         return wrap(values)
@@ -508,6 +483,5 @@ export const arrayGlobal = <R>(ctx: Interpreter<R>) => {
       }),
     ),
   ])
-  define(proto, IteratorSymbol, get(proto, "values"), hidden)
   return array
 }

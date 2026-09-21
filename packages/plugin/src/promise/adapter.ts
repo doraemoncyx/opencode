@@ -237,26 +237,25 @@ export function fromPromise(plugin: Plugin) {
         const VcsEndpoints = ClientApi.groups["server.vcs"].endpoints
         const WebSearchEndpoints = ClientApi.groups["server.websearch"].endpoints
         const WorktreeEndpoints = ClientApi.groups["server.worktree"].endpoints
-        const runtime = yield* Effect.context<Scope.Scope>()
+        const context = yield* Effect.context<Scope.Scope>()
         const streams = yield* makeStreams()
 
         // Run a hook registration on the plugin scope and resolve once it is registered.
         const register = (effect: Effect.Effect<HostRegistration, never, Scope.Scope>): Promise<Registration> =>
-          Effect.runPromiseWith(runtime)(effect).then((registration) => ({
-            dispose: () => Effect.runPromiseWith(runtime)(registration.dispose),
+          Effect.runPromiseWith(context)(effect).then((registration) => ({
+            dispose: () => Effect.runPromiseWith(context)(registration.dispose),
           }))
 
-        const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromiseWith(runtime)(effect)
+        const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromiseWith(context)(effect)
 
         const promiseExecutor =
           (execute: Tool.Info["execute"]): Info["execute"] =>
           (input, context) =>
-            Effect.runPromiseWith(runtime)(
+            run(
               execute(input, {
                 ...context,
                 progress: (update) => Effect.promise(() => context.progress(update)),
               }),
-              { signal: context.signal },
             )
 
         const adaptApiMethod = <PromiseMethod>(
@@ -274,7 +273,7 @@ export function fromPromise(plugin: Plugin) {
               const result = yield* method(Object.assign({}, ...decoded) as never)
               if (compiled.noContent) return undefined
               return yield* compiled.encode(result)
-            }).pipe(Effect.runPromiseWith(runtime))) as PromiseMethod
+            }).pipe(Effect.runPromiseWith(context))) as PromiseMethod
         }
 
         const transform =
@@ -303,6 +302,18 @@ export function fromPromise(plugin: Plugin) {
               register(
                 host.aisdk.hook(name, (event) => Effect.promise(() => Promise.resolve(callback(event))), options),
               ),
+          },
+          catalog: {
+            provider: {
+              list: adaptApiMethod(ProviderEndpoints["provider.list"], host.catalog.provider.list),
+              get: adaptApiMethod(ProviderEndpoints["provider.get"], host.catalog.provider.get),
+            },
+            model: {
+              list: adaptApiMethod(ModelEndpoints["model.list"], host.catalog.model.list),
+              default: adaptApiMethod(ModelEndpoints["model.default"], host.catalog.model.default),
+            },
+            transform: transform(host.catalog),
+            reload: () => run(host.catalog.reload()),
           },
           command: {
             list: adaptApiMethod(CommandEndpoints["command.list"], host.command.list),
@@ -338,18 +349,6 @@ export function fromPromise(plugin: Plugin) {
           },
           generate: {
             text: adaptApiMethod(GenerateEndpoints["generate.text"], host.generate.text),
-          },
-          model: {
-            list: adaptApiMethod(ModelEndpoints["model.list"], host.model.list),
-            default: adaptApiMethod(ModelEndpoints["model.default"], host.model.default),
-            transform: transform(host.model),
-            reload: () => run(host.model.reload()),
-          },
-          provider: {
-            list: adaptApiMethod(ProviderEndpoints["provider.list"], host.provider.list),
-            get: adaptApiMethod(ProviderEndpoints["provider.get"], host.provider.get),
-            transform: transform(host.provider),
-            reload: () => run(host.provider.reload()),
           },
           integration: {
             list: adaptApiMethod(IntegrationEndpoints["integration.list"], host.integration.list),
@@ -425,8 +424,8 @@ export function fromPromise(plugin: Plugin) {
               ),
             reload: () => run(host.integration.reload()),
             connection: {
-              active: (id) => Effect.runPromiseWith(runtime)(host.integration.connection.active(id)),
-              resolve: (connection) => Effect.runPromiseWith(runtime)(host.integration.connection.resolve(connection)),
+              active: (id) => Effect.runPromiseWith(context)(host.integration.connection.active(id)),
+              resolve: (connection) => Effect.runPromiseWith(context)(host.integration.connection.resolve(connection)),
             },
           },
           mcp: {
@@ -440,6 +439,7 @@ export function fromPromise(plugin: Plugin) {
             list: adaptApiMethod(PermissionEndpoints["session.permission.list"], host.permission.list),
             get: adaptApiMethod(PermissionEndpoints["session.permission.get"], host.permission.get),
             reply: adaptApiMethod(PermissionEndpoints["session.permission.reply"], host.permission.reply),
+            rules: adaptApiMethod(PermissionEndpoints["session.permission.rules"], host.permission.rules),
           },
           plugin: {
             list: adaptApiMethod(PluginEndpoints["plugin.list"], host.plugin.list),
@@ -463,10 +463,6 @@ export function fromPromise(plugin: Plugin) {
           },
           tool: {
             reload: () => run(host.tool.reload()),
-            list: () =>
-              run(host.tool.list()).then((tools) =>
-                tools.map((tool) => ({ ...tool, execute: promiseExecutor(tool.execute) })),
-              ),
             transform: (callback) =>
               register(
                 host.tool.transform((editor) =>
@@ -506,9 +502,7 @@ export function fromPromise(plugin: Plugin) {
           vcs: {
             get: adaptApiMethod(VcsEndpoints["vcs.get"], host.vcs.get),
             base: adaptApiMethod(VcsEndpoints["vcs.base"], host.vcs.base),
-            branch: {
-              list: adaptApiMethod(VcsEndpoints["vcs.branch.list"], host.vcs.branch.list),
-            },
+            branches: adaptApiMethod(VcsEndpoints["vcs.branches"], host.vcs.branches),
             status: adaptApiMethod(VcsEndpoints["vcs.status"], host.vcs.status),
             diff: adaptApiMethod(VcsEndpoints["vcs.diff"], host.vcs.diff),
             reload: () => run(host.vcs.reload()),
@@ -587,7 +581,7 @@ export function fromPromise(plugin: Plugin) {
             command: adaptApiMethod(SessionEndpoints["session.command"], host.session.command),
             synthetic: adaptApiMethod(SessionEndpoints["session.synthetic"], host.session.synthetic),
             interrupt: adaptApiMethod(SessionEndpoints["session.interrupt"], host.session.interrupt),
-            update: adaptApiMethod(SessionEndpoints["session.update"], host.session.update),
+            rename: adaptApiMethod(SessionEndpoints["session.rename"], host.session.rename),
             move: adaptApiMethod(SessionEndpoints["session.move"], host.session.move),
             wait: adaptApiMethod(SessionEndpoints["session.wait"], host.session.wait),
             context: adaptApiMethod(SessionEndpoints["session.context"], host.session.context),
@@ -613,10 +607,9 @@ function attempt<A>(evaluate: (signal: AbortSignal) => PromiseLike<A>) {
 type RuntimeSchema = Schema.Codec<unknown, unknown>
 
 const executePromiseTool = (tool: Info, input: any, context: Tool.Context) =>
-  Effect.promise((signal) =>
+  Effect.promise(() =>
     tool.execute(input, {
       ...context,
-      signal,
-      progress: (update) => Effect.runPromise(context.progress(update), { signal }),
+      progress: (update) => Effect.runPromise(context.progress(update)),
     }),
   )

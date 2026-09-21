@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { InputRenderable, TextareaRenderable } from "@opentui/core"
-import type { FormFields, LocationRef } from "@opencode/client"
+import type { LocationRef } from "@opencode/client"
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { onMount } from "solid-js"
@@ -44,31 +44,6 @@ test("opens the key connection prompt from the initially focused add account row
     await fixture.app.waitForFrame((frame) => frame.includes("API key") && !frame.includes("Connected accounts"))
 
     expect(fixture.requests).toEqual([])
-  } finally {
-    fixture.app.renderer.destroy()
-  }
-})
-
-test("skips hidden authentication fields and sends their defaults", async () => {
-  const fixture = await renderIntegration(undefined, [
-    { type: "string", key: "server", title: "Console URL", hidden: true, default: "https://example.com/console" },
-    { type: "string", key: "optional", hidden: true },
-  ])
-
-  try {
-    fixture.app.mockInput.pressEnter()
-    await fixture.app.waitFor(() => fixture.app.renderer.currentFocusedEditor instanceof TextareaRenderable)
-    expect(fixture.app.captureCharFrame()).not.toContain("Console URL")
-    await fixture.app.mockInput.typeText("test-key")
-    fixture.app.mockInput.pressEnter()
-    await fixture.app.waitFor(() => fixture.requests.length === 1)
-    expect(fixture.requests).toEqual([
-      {
-        method: "POST",
-        path: "/api/integration/openai/connect/key",
-        body: { key: "test-key", answer: { server: "https://example.com/console" } },
-      },
-    ])
   } finally {
     fixture.app.renderer.destroy()
   }
@@ -229,7 +204,7 @@ test("hides account rename and delete actions while the add account row is selec
   }
 })
 
-test("uses the active location for integration data without scoping credential requests", async () => {
+test("uses the active location for integration data and credential requests", async () => {
   const location = { directory: "/remote/project" }
   const fixture = await renderIntegration(location)
 
@@ -241,17 +216,15 @@ test("uses the active location for integration data without scoping credential r
     await fixture.app.waitFor(() => fixture.requests.length === 1)
     expect(fixture.locations).toContainEqual(location)
     expect(fixture.locations.at(-1)).toEqual(location)
-    expect(fixture.credentialQueries).toEqual([""])
   } finally {
     fixture.app.renderer.destroy()
   }
 })
 
-async function renderIntegration(activeLocation?: LocationRef, form?: FormFields) {
+async function renderIntegration(activeLocation?: LocationRef) {
   const events = createEventStream()
-  const requests: Array<{ method: string; path: string; body?: unknown }> = []
+  const requests: Array<{ method: string; path: string; body?: { label: string } }> = []
   const locations: LocationRef[] = []
-  const credentialQueries: string[] = []
   const reads = { integration: 0, model: 0, provider: 0 }
   let accounts = [
     { type: "credential" as const, id: "cred_personal", label: "Personal" },
@@ -277,16 +250,11 @@ async function renderIntegration(activeLocation?: LocationRef, form?: FormFields
           {
             id: "openai",
             name: "OpenAI",
-            methods: [{ type: "key", label: "API key", form }],
+            methods: [{ type: "key", label: "API key" }],
             connections: [...accounts, { type: "env", name: "OPENAI_API_KEY" }],
           },
         ],
       })
-    }
-
-    if (request.method === "POST" && url.pathname === "/api/integration/openai/connect/key") {
-      requests.push({ method: request.method, path: url.pathname, body: await request.json() })
-      return new Response(null, { status: 204 })
     }
 
     if (url.pathname === "/api/model") {
@@ -300,7 +268,7 @@ async function renderIntegration(activeLocation?: LocationRef, form?: FormFields
     }
 
     if (request.method === "POST" && /^\/api\/credential\/[^/]+\/activate$/.test(url.pathname)) {
-      credentialQueries.push(url.search)
+      locations.push(requestedLocation)
       const id = url.pathname.split("/")[3]
       const active = accounts.find((account) => account.id === id)
       if (!active) throw new Error(`unknown credential: ${id}`)
@@ -392,7 +360,6 @@ async function renderIntegration(activeLocation?: LocationRef, form?: FormFields
     reads,
     requests,
     locations,
-    credentialQueries,
     get accounts() {
       return accounts
     },

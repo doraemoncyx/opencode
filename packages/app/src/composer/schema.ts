@@ -61,12 +61,11 @@ const ImageFields = {
 }
 const Image = Persistence.struct({
   ...ImageFields,
-  // An empty URL is an image whose bytes are still in the draft store; see `resolveBlobUrl`.
-  blob: Schema.Struct({ id: Schema.NonEmptyString, url: Schema.String.check(Schema.isPattern(/^(blob:|data:|$)/)) }),
+  blob: Schema.Struct({ id: Schema.NonEmptyString, url: Schema.String.check(Schema.isPattern(/^(blob:|data:)/)) }),
 })
 
-// Draft storage keeps content-addressed blobs in the store until an image is shown or sent; a
-// reference without a URL resolves through `resolveBlobUrl`. Legacy inline data remains usable.
+// Draft storage hydrates content-addressed blobs before this codec runs. Legacy
+// inline data remains usable, but unresolved references are not renderable.
 export const ImageAttachmentPart = Schema.Struct({
   ...ImageFields,
   blob: Persistence.optional(
@@ -95,24 +94,7 @@ export const ImageAttachmentPart = Schema.Struct({
 )
 export type ImageAttachmentPart = typeof ImageAttachmentPart.Type
 
-// A file the model receives as a path on the server: its bytes never enter the draft store.
-export const PathAttachmentPart = Persistence.struct({
-  type: Schema.Literal("path"),
-  id: Schema.String,
-  filename: Schema.String,
-  mime: Schema.String,
-  path: Schema.String,
-})
-export type PathAttachmentPart = typeof PathAttachmentPart.Type
-
-export const ContentPart = Schema.Union([
-  TextPart,
-  FileAttachmentPart,
-  AgentPart,
-  SkillPart,
-  ImageAttachmentPart,
-  PathAttachmentPart,
-])
+export const ContentPart = Schema.Union([TextPart, FileAttachmentPart, AgentPart, SkillPart, ImageAttachmentPart])
 export type ContentPart = typeof ContentPart.Type
 export const Prompt = Persistence.array(ContentPart)
 export type Prompt = typeof Prompt.Type

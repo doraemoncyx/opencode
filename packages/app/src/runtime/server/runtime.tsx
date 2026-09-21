@@ -139,18 +139,17 @@ function createServerController(
   function enrich(project: { worktree: string; expanded: boolean }) {
     const [childStore] = sync.child(project.worktree, { bootstrap: false })
     const projectID = childStore.project
+    // The tracked directory comes from persisted client state, so it can spell the
+    // project's canonical directory differently by case or separator.
+    const worktreeKey = pathKey(project.worktree)
     const metadata = projectID
       ? sync.data.project.find((x) => x.id === projectID)
-      : sync.data.project.find((x) => x.worktree === project.worktree)
+      : sync.data.project.find((x) => pathKey(x.worktree) === worktreeKey)
 
     // Preserve local icon override from per-workspace localStorage cache (childStore.icon).
     // Without this, different subdirectories of the same git repo would share the same
     // icon from the database instead of using their individual overrides.
-    const base = {
-      ...metadata,
-      ...(!metadata || metadata.id === "global" ? childStore.projectMeta : undefined),
-      ...project,
-    }
+    const base = { ...metadata, ...project }
     if (childStore.icon) {
       return { ...base, icon: { ...base.icon, override: childStore.icon } }
     }
@@ -178,7 +177,6 @@ function createServerController(
     projects: {
       ...projects,
       list: projectsList,
-      resolve: enrich,
       recentlyClosed: recentlyClosedList,
     },
     notification,

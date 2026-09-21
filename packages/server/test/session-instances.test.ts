@@ -295,7 +295,7 @@ it.live(
         ).toBe(404)
         expect(
           (yield* request(`/api/session/${entry.session.id}/permission/${entry.foreignPermission.id}/reply`, {
-            decision: "once",
+            reply: "once",
           })).status,
         ).toBe(404)
         yield* Effect.gen(function* () {
@@ -315,7 +315,7 @@ it.live(
         ).toBe(204)
         expect(
           (yield* request(`/api/session/${entry.session.id}/permission/${entry.permission.id}/reply`, {
-            decision: "once",
+            reply: "once",
           })).status,
         ).toBe(204)
         yield* Effect.gen(function* () {

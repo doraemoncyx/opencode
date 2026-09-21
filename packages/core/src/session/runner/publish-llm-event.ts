@@ -20,7 +20,6 @@ type Input = {
   readonly model: Model.Ref
   readonly providerMetadataKey: string
   readonly snapshot?: Snapshot.ID
-  readonly started: number
   readonly assistantMessageID: SessionMessage.ID
 }
 
@@ -105,7 +104,6 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       model: input.model,
       assistantMessageID,
       snapshot: input.snapshot,
-      started: input.started,
     })
     return assistantMessageID
   })

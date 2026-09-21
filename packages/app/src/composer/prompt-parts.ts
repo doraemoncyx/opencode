@@ -1,9 +1,4 @@
-import type { ContentPart, ImageAttachmentPart, PathAttachmentPart, Prompt } from "./state"
-
-/** Parts that sit beside the text rather than inside it. */
-export function isAttachment(part: ContentPart): part is ImageAttachmentPart | PathAttachmentPart {
-  return part.type === "image" || part.type === "path"
-}
+import type { Prompt } from "./state"
 
 export function clonePrompt(prompt: Prompt): Prompt {
   return prompt.map((part) =>
@@ -22,7 +17,7 @@ export function appendPrompt(prompt: Prompt, following: Prompt): Prompt {
     ...clonePrompt(prompt),
     { type: "text", content: "\n\n", start, end: offset },
     ...clonePrompt(following).map((part) =>
-      isAttachment(part) ? part : { ...part, start: part.start + offset, end: part.end + offset },
+      part.type === "image" ? part : { ...part, start: part.start + offset, end: part.end + offset },
     ),
   ]
 }

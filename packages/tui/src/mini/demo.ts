@@ -1006,14 +1006,14 @@ export function createRunDemo(input: Input) {
 
   const permission = (input: PermissionReply): boolean => {
     const item = state.perms.get(input.requestID)
-    if (!item || !input.decision) {
+    if (!item || !input.reply) {
       return false
     }
 
     state.perms.delete(input.requestID)
     clearBlocker(state)
 
-    if (input.decision === "reject") {
+    if (input.reply === "reject") {
       failTool(state, item.ref, input.message || "permission rejected")
       return true
     }

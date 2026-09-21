@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
+import iconv from "iconv-lite"
 import path from "path"
 import { Environment } from "@opencode/core/environment/index"
 import { AbsolutePath } from "@opencode/core/schema"
@@ -20,6 +21,7 @@ const fixture = Effect.gen(function* () {
   return { environment: Environment.makeFiles(Environment.makeLocalDriver(spawner)), files, directory }
 })
 const absolute = (value: string) => AbsolutePath.make(value)
+const gbk = (text: string) => Buffer.from(iconv.encode(text, "gbk"))
 
 describe("ReadTool text serialization", () => {
   const cases = [
@@ -141,7 +143,7 @@ describe("ReadToolFileSystem", () => {
     }),
   )
 
-  it.effect("reads malformed UTF-8 lossily and still rejects null-byte binary content", () =>
+  it.effect("decodes non-UTF-8 bytes by the detected encoding and still rejects null-byte binary content", () =>
     Effect.gen(function* () {
       const { environment, files, directory } = yield* fixture
       const binary = path.join(directory, "archive.dat")
@@ -154,7 +156,89 @@ describe("ReadToolFileSystem", () => {
 
       expect(binaryError).toBeInstanceOf(ReadToolFileSystem.BinaryFileError)
       expect(binaryError.message).toBe("Cannot read binary file: archive.dat")
-      expect(malformedResult).toMatchObject({ type: "file", content: "hi\uFFFD", encoding: "utf8" })
+      expect(malformedResult).toMatchObject({ type: "file", content: "hi\u20AC", encoding: "utf8" })
+    }),
+  )
+
+  it.effect("reads a whole GBK file as Chinese text", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "gbk.txt")
+      const text = "这是中文\n第二行的内容\n第三行的内容"
+      yield* files.writeFile(file, gbk(text))
+
+      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "gbk.txt")
+
+      expect(result).toMatchObject({ type: "file", content: text, encoding: "utf8" })
+    }),
+  )
+
+  it.effect("pages GBK text by line without mojibake or splitting characters", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "gbk-paged.txt")
+      const lines = ["第一行的中文内容", "第二行的中文内容", "第三行的中文内容", "第四行的中文内容"]
+      yield* files.writeFile(file, gbk(lines.join("\n")))
+
+      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "gbk-paged.txt", {
+        offset: 2,
+        limit: 2,
+      })
+
+      expect(result).toMatchObject({
+        type: "text-page",
+        content: lines.slice(1, 3).join("\n"),
+        offset: 2,
+        truncated: true,
+        next: 4,
+      })
+    }),
+  )
+
+  it.effect("pages a GBK file larger than the first chunk with correct characters", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "gbk-large.txt")
+      const text = `第一行中文\n${"a".repeat(300 * 1024)}\n第二行中文\n第三行中文\n`
+      yield* files.writeFile(file, gbk(text))
+
+      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "gbk-large.txt", {
+        offset: 3,
+        limit: 2,
+      })
+
+      expect(result).toMatchObject({ type: "text-page", content: "第二行中文\n第三行中文", offset: 3 })
+    }),
+  )
+
+  it.effect("keeps a large UTF-8 file correct when a character straddles the first chunk", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "utf8-large.txt")
+      const text = `${"a".repeat(256 * 1024 - 1)}中\n第二行\n`
+      yield* files.writeFileString(file, text)
+
+      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "utf8-large.txt", {
+        offset: 2,
+        limit: 1,
+      })
+
+      expect(result).toMatchObject({ type: "text-page", content: "第二行", offset: 2 })
+    }),
+  )
+
+  it.effect("decodes UTF-8 Chinese text unchanged in whole and paged reads", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "utf8.txt")
+      const text = "这是 UTF-8 中文\n第二行的内容"
+      yield* files.writeFileString(file, text)
+
+      const whole = yield* ReadToolFileSystem.read(environment, absolute(file), "utf8.txt")
+      const page = yield* ReadToolFileSystem.read(environment, absolute(file), "utf8.txt", { offset: 2, limit: 1 })
+
+      expect(whole).toMatchObject({ type: "file", content: text, encoding: "utf8" })
+      expect(page).toMatchObject({ type: "text-page", content: "第二行的内容", offset: 2 })
     }),
   )
 

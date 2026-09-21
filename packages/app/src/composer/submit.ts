@@ -1,5 +1,6 @@
 import { SessionMessage } from "@opencode/schema/session-message"
 import type { SessionMessageUser } from "@opencode/client/promise"
+import { Event } from "@opencode/schema/event"
 import type { Accessor } from "solid-js"
 import type { PromptHistoryComment } from "./history/entry"
 import type { ImageAttachmentPart, Prompt } from "./state"
@@ -8,8 +9,7 @@ import type { ComposerAdapter, ComposerDelivery, ComposerSelection, ComposerSess
 import { createComposerSubmission } from "./submission-state"
 import { buildPromptRequest } from "./request"
 import { setCursorPosition } from "./editor/dom"
-import { blobDataUrl, resolveBlobUrl } from "@/runtime/persistence/drafts"
-import { isAttachment } from "./prompt-parts"
+import { blobDataUrl } from "@/runtime/persistence/drafts"
 import type { ModelSelection } from "@/providers/models/selection"
 
 const submitting = new WeakSet<object>()
@@ -32,7 +32,6 @@ type ComposerSubmitInput = {
   editor: () => HTMLDivElement | undefined
   queueScroll: () => void
   addToHistory: (prompt: Prompt, mode: "normal" | "shell") => void
-  removeFromHistory: (prompt: Prompt, mode: "normal" | "shell", comments: PromptHistoryComment[]) => void
   resetHistory: () => void
   setMode: (mode: "normal" | "shell") => void
   closePopover: () => void
@@ -60,22 +59,12 @@ export function createComposerSubmit(input: ComposerSubmitInput) {
         selection: item.selection ? { ...item.selection } : undefined,
       })),
     })
-    const read = readSubmission(input, submission.prompt, submission.context, options?.alternate ?? false)
-    if (!read) {
+    const value = readSubmission(input, submission.prompt, submission.context, options?.alternate ?? false)
+    if (!value) {
       if (input.adapter.working() && input.adapter.kind === "active-session") void input.adapter.interrupt()
       return
     }
     if (submitting.has(input.adapter.state)) return
-    // Images restored from a draft or history carry ids only; the optimistic message shows their URLs.
-    const value = {
-      ...read,
-      images: await Promise.all(
-        read.images.map(async (image) => ({
-          ...image,
-          blob: { ...image.blob, url: (await resolveBlobUrl(image.blob)) ?? image.blob.url },
-        })),
-      ),
-    }
     submitting.add(input.adapter.state)
     const comments = input.comments.capture()
     // Capture command intent before starting a session in a worktree whose catalog has not loaded.
@@ -163,9 +152,6 @@ function handoffMessage(value: ComposerSubmission): SessionMessageUser {
     })),
     metadata: {
       displayText: value.text,
-      attachments: value.prompt.flatMap((part) =>
-        part.type === "path" ? [{ name: part.filename, mime: part.mime, path: part.path }] : [],
-      ),
       comments: value.context.flatMap((item) =>
         item.comment?.trim()
           ? [
@@ -200,7 +186,7 @@ function readSubmission(
   if (mode === "shell" && !text.trim()) return
   const images = prompt.filter((part): part is ImageAttachmentPart => part.type === "image")
   const comments = context.filter((item) => !!item.comment?.trim()).length
-  if (!text.trim() && !prompt.some(isAttachment) && comments === 0) return
+  if (!text.trim() && images.length === 0 && comments === 0) return
 
   const controls = input.adapter.controls()
   const model = controls.model.selection.current()
@@ -251,8 +237,6 @@ function restoreSubmission(
 ) {
   const restored = submission.restore()
   if (!restored) return false
-  // The prompt is back in the composer; its history entry would only keep attachments referenced.
-  input.removeFromHistory(value.prompt, value.mode, comments)
   restored.target.set(restored.prompt, promptLength(restored.prompt))
   restored.target.mode.set(value.mode)
   restored.target.context.replaceComments(
@@ -294,7 +278,7 @@ function restoreSubmission(
 }
 
 async function sendShell(session: ComposerSession, value: ComposerSubmission) {
-  await session.api.shell({ sessionID: session.id, id: value.id, command: value.text })
+  await session.api.shell({ sessionID: session.id, id: Event.ID.create(), command: value.text })
 }
 
 function findCommand(commands: ReturnType<ComposerSubmitInput["commands"]>, text: string) {
@@ -317,7 +301,7 @@ async function sendCommand(
   if (value.delivery === "steer") await applySelection(session, value.selection, track)
   await session.api.command({
     sessionID: session.id,
-    name: command.command,
+    command: command.command,
     text: command.arguments,
     files: request.files.map((file) => ({ uri: file.uri, name: file.name, mention: file.mention })),
     agents: request.agents,
@@ -375,7 +359,6 @@ async function sendPrompt(
     metadata: {
       displayText: request.displayText,
       comments: request.comments,
-      attachments: request.attachments,
       agent: value.selection.agent,
       model: {
         ...value.selection.model,
@@ -390,15 +373,19 @@ async function sendPrompt(
 
 async function buildSubmissionRequest(session: ComposerSession, value: ComposerSubmission) {
   const images = await Promise.all(
-    value.images.map(async (attachment) => ({ ...attachment, dataUrl: await blobDataUrl(attachment.blob, attachment.mime) })),
+    value.images.map(async (attachment) => ({
+      ...attachment,
+      dataUrl: await blobDataUrl(attachment.blob, attachment.mime),
+    })),
   )
-  return buildPromptRequest({
+  const request = buildPromptRequest({
     prompt: value.prompt,
     context: value.context,
     images,
     text: value.text,
     sessionDirectory: session.directory,
   })
+  return request
 }
 
 function failSubmission(

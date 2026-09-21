@@ -1,7 +1,7 @@
 import type { BrowserWindow } from "electron"
 import { SidecarCredentials } from "../service/sidecar-credentials"
 import { addRendererHeaders, hasHeader, upsertHeader } from "./headers"
-import { isRendererUrl } from "./scheme"
+import { isRendererUrl } from "./protocol"
 
 const rendererPermissions = new Set(["clipboard-sanitized-write", "notifications"])
 

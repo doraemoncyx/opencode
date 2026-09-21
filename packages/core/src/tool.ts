@@ -39,7 +39,6 @@ type Data = {
 }
 
 export interface Interface extends State.Transformable<Editor> {
-  readonly list: () => Effect.Effect<ReadonlyArray<Tool.Info & { readonly id: string }>>
   readonly snapshot: (permissions?: Permission.Ruleset) => Effect.Effect<Snapshot>
 }
 
@@ -155,7 +154,6 @@ const layer = Layer.effect(
       }
     })
 
-    let catalog: { data: Data; names: string; value: CodeModeCatalog.Inventory } | undefined
     const state = State.create<Data, Editor>({
       name: "tool",
       initial: () => ({
@@ -203,9 +201,8 @@ const layer = Layer.effect(
           editor.tools.delete(id)
         },
       }),
-      notify: (value) => {
-        catalog = undefined
-        return Effect.forEach(
+      notify: (value) =>
+        Effect.forEach(
           value.errors,
           ({ kind, name, namespace, error }) =>
             Effect.logError(`Skipping invalid ${kind} registration`, {
@@ -214,27 +211,24 @@ const layer = Layer.effect(
               error: error.message,
             }),
           { discard: true },
-        )
-      },
+        ),
     })
 
     return Service.of({
       transform: state.transform,
       reload: state.reload,
-      list: () => Effect.sync(() => Array.from(state.get().tools.values())),
       snapshot: Effect.fn("Tool.snapshot")((permissions) =>
         Effect.sync(() => {
-          const data = state.get()
           const active = new Map<string, Tool.Info>()
           const rules = permissions ?? []
-          for (const [name, tool] of data.tools) {
+          for (const [name, tool] of state.get().tools) {
             if (whollyDisabled(tool.options?.permission ?? name, rules)) continue
             active.set(name, tool)
           }
           const direct = new Map(Array.from(active).filter(([, tool]) => tool.options?.codemode === false))
           const codeModeTools = new Map(Array.from(active).filter(([, tool]) => tool.options?.codemode !== false))
-          const namespaces = data.namespaces
-          const codeModeInventory = { tools: codeModeTools, namespaces }
+          const namespaces = state.get().namespaces
+          const codeModeInventory = { tools: codeModeTools, namespaces, direct: new Set(direct.keys()) }
           const codeModeEnabled = !whollyDisabled("execute", rules)
           const codeModeTool = codeModeEnabled
             ? CodeModeTool.create(codeModeInventory, (name, tool, input, context) =>
@@ -243,15 +237,7 @@ const layer = Layer.effect(
                 ),
               )
             : undefined
-          const names = Array.from(codeModeTools.keys()).join("\0")
-          // Discovery is immutable for a registry revision and visible tool set. Keep request
-          // definitions/executors fresh, but share the much larger rendered catalog across steps.
-          const codeModeCatalog = !codeModeEnabled
-            ? undefined
-            : catalog?.data === data && catalog.names === names
-              ? catalog.value
-              : CodeModeTool.catalog(codeModeInventory)
-          if (codeModeCatalog) catalog = { data, names, value: codeModeCatalog }
+          const codeModeCatalog = codeModeEnabled ? CodeModeTool.catalog(codeModeInventory) : undefined
           return {
             ...(codeModeCatalog === undefined ? {} : { codeModeCatalog }),
             definitions: [
@@ -278,8 +264,14 @@ const layer = Layer.effect(
                 return yield* executeTool(codeModeTool, name, event.input, context)
               const tool = direct.get(name)
               if (tool) return yield* executeTool(tool, name, event.input, context)
+              const suggestion = nearestToolName(
+                name,
+                input.definitions === undefined ? direct.keys() : input.definitions.keys(),
+              )
               return yield* new Tool.Error({
-                message: `No tool named "${name}" is currently available. Please use a tool from the available tool list.`,
+                message: suggestion
+                  ? `No tool named "${name}" is currently available. Did you mean "${suggestion}"? Please use a tool from the available tool list.`
+                  : `No tool named "${name}" is currently available. Please use a tool from the available tool list.`,
               })
             }),
           }
@@ -292,6 +284,29 @@ const layer = Layer.effect(
 const whollyDisabled = (action: string, rules: Permission.Ruleset) => {
   const rule = rules.findLast((rule) => Wildcard.match(action, rule.action))
   return rule?.resource === "*" && rule.effect === "deny"
+}
+
+// V1 tool names that V2 renamed, so a model calling one from memory still gets a useful hint.
+const RENAMED_TOOL_NAMES: Record<string, string> = { bash: "shell", task: "subagent" }
+
+const comparableToolName = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+
+/** The advertised name closest to `name`, or undefined when nothing is close enough to suggest. */
+function nearestToolName(name: string, available: Iterable<string>) {
+  const names = Array.from(available)
+  const renamed = RENAMED_TOOL_NAMES[name]
+  if (renamed !== undefined && names.includes(renamed)) return renamed
+  const key = comparableToolName(name)
+  return names
+    .filter((candidate) => {
+      const comparable = comparableToolName(candidate)
+      return comparable === key || comparable.endsWith(`_${key}`)
+    })
+    .toSorted((left, right) => left.length - right.length)[0]
 }
 
 const formatSchemaIssue = SchemaIssue.makeFormatterDefault()

@@ -5,10 +5,9 @@ import { HttpClientError } from "effect/unstable/http"
 import { HttpApiClient } from "effect/unstable/httpapi"
 import { ClientApi } from "../../contract"
 import type {
-  ServerInfoOutput,
+  ServerStatusOutput,
   LocationGetInput,
   LocationGetOutput,
-  LocationReloadOutput,
   AgentListInput,
   AgentListOutput,
   AgentGetInput,
@@ -40,8 +39,8 @@ import type {
   SessionSwitchAgentOutput,
   SessionSwitchModelInput,
   SessionSwitchModelOutput,
-  SessionUpdateInput,
-  SessionUpdateOutput,
+  SessionRenameInput,
+  SessionRenameOutput,
   SessionMoveInput,
   SessionMoveOutput,
   SessionPromptInput,
@@ -72,8 +71,10 @@ import type {
   SessionInboxListOutput,
   SessionInboxCancelInput,
   SessionInboxCancelOutput,
-  SessionInboxUpdateInput,
-  SessionInboxUpdateOutput,
+  SessionInboxSteerInput,
+  SessionInboxSteerOutput,
+  SessionInboxQueueInput,
+  SessionInboxQueueOutput,
   SessionInstructionsEntryListInput,
   SessionInstructionsEntryListOutput,
   SessionInstructionsEntryPutInput,
@@ -88,18 +89,8 @@ import type {
   SessionInterruptOutput,
   SessionBackgroundInput,
   SessionBackgroundOutput,
-  SessionMessageGetInput,
-  SessionMessageGetOutput,
-  SessionFormListInput,
-  SessionFormListOutput,
-  SessionFormCreateInput,
-  SessionFormCreateOutput,
-  SessionFormGetInput,
-  SessionFormGetOutput,
-  SessionFormReplyInput,
-  SessionFormReplyOutput,
-  SessionFormCancelInput,
-  SessionFormCancelOutput,
+  SessionMessageInput,
+  SessionMessageOutput,
   SessionEnvironmentInput,
   SessionEnvironmentOutput,
   SessionViewInput,
@@ -159,8 +150,20 @@ import type {
   ProjectListOutput,
   ProjectUpdateInput,
   ProjectUpdateOutput,
+  FormRequestListInput,
+  FormRequestListOutput,
   FormListInput,
   FormListOutput,
+  FormCreateInput,
+  FormCreateOutput,
+  FormGetInput,
+  FormGetOutput,
+  FormStateInput,
+  FormStateOutput,
+  FormReplyInput,
+  FormReplyOutput,
+  FormCancelInput,
+  FormCancelOutput,
   PermissionRequestListInput,
   PermissionRequestListOutput,
   PermissionSavedListInput,
@@ -175,6 +178,8 @@ import type {
   PermissionGetOutput,
   PermissionReplyInput,
   PermissionReplyOutput,
+  PermissionRulesInput,
+  PermissionRulesOutput,
   FileListInput,
   FileListOutput,
   FileFindInput,
@@ -222,6 +227,8 @@ import type {
   ShellCreateOutput,
   ShellGetInput,
   ShellGetOutput,
+  ShellTimeoutInput,
+  ShellTimeoutOutput,
   ShellOutputInput,
   ShellOutputOutput,
   ShellRemoveInput,
@@ -242,8 +249,8 @@ import type {
   VcsBaseOutput,
   VcsStatusInput,
   VcsStatusOutput,
-  VcsBranchListInput,
-  VcsBranchListOutput,
+  VcsBranchesInput,
+  VcsBranchesOutput,
   VcsDiffInput,
   VcsDiffOutput,
   DebugLocationListOutput,
@@ -278,23 +285,17 @@ const preserveStream =
   <E, R>(stream: Stream.Stream<A, E, R>) =>
     stream
 
-const EndpointServerInfo = (raw: RawClient["server.server"]) => () =>
-  preserveEffect<ServerInfoOutput>()(raw["server.info"]({}).pipe(Effect.mapError(mapClientError)))
+const EndpointServerStatus = (raw: RawClient["server.server"]) => () =>
+  preserveEffect<ServerStatusOutput>()(raw["server.status"]({}).pipe(Effect.mapError(mapClientError)))
 
-const adaptGroupServer = (raw: RawClient["server.server"]) => ({ info: EndpointServerInfo(raw) })
+const adaptGroupServer = (raw: RawClient["server.server"]) => ({ status: EndpointServerStatus(raw) })
 
 const EndpointLocationGet = (raw: RawClient["server.location"]) => (input?: LocationGetInput) =>
   preserveEffect<LocationGetOutput>()(
     raw["location.get"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
   )
 
-const EndpointLocationReload = (raw: RawClient["server.location"]) => () =>
-  preserveEffect<LocationReloadOutput>()(raw["location.reload"]({}).pipe(Effect.mapError(mapClientError)))
-
-const adaptGroupLocation = (raw: RawClient["server.location"]) => ({
-  get: EndpointLocationGet(raw),
-  reload: EndpointLocationReload(raw),
-})
+const adaptGroupLocation = (raw: RawClient["server.location"]) => ({ get: EndpointLocationGet(raw) })
 
 const EndpointAgentList = (raw: RawClient["server.agent"]) => (input?: AgentListInput) =>
   preserveEffect<AgentListOutput>()(
@@ -429,7 +430,7 @@ const EndpointSessionRemove = (raw: RawClient["server.session"]) => (input: Sess
 
 const EndpointSessionFork = (raw: RawClient["server.session"]) => (input: SessionForkInput) =>
   preserveEffect<SessionForkOutput>()(
-    raw["session.fork"]({ params: { sessionID: input["sessionID"] }, payload: { before: input["before"] } }).pipe(
+    raw["session.fork"]({ params: { sessionID: input["sessionID"] }, payload: { boundary: input["boundary"] } }).pipe(
       Effect.mapError(mapClientError),
       Effect.map((value) => value.data),
     ),
@@ -449,12 +450,11 @@ const EndpointSessionSwitchModel = (raw: RawClient["server.session"]) => (input:
     ),
   )
 
-const EndpointSessionUpdate = (raw: RawClient["server.session"]) => (input: SessionUpdateInput) =>
-  preserveEffect<SessionUpdateOutput>()(
-    raw["session.update"]({
-      params: { sessionID: input["sessionID"] },
-      payload: { title: input["title"], permissions: input["permissions"] },
-    }).pipe(Effect.mapError(mapClientError)),
+const EndpointSessionRename = (raw: RawClient["server.session"]) => (input: SessionRenameInput) =>
+  preserveEffect<SessionRenameOutput>()(
+    raw["session.rename"]({ params: { sessionID: input["sessionID"] }, payload: { title: input["title"] } }).pipe(
+      Effect.mapError(mapClientError),
+    ),
   )
 
 const EndpointSessionMove = (raw: RawClient["server.session"]) => (input: SessionMoveInput) =>
@@ -490,7 +490,7 @@ const EndpointSessionCommand = (raw: RawClient["server.session"]) => (input: Ses
     raw["session.command"]({
       params: { sessionID: input["sessionID"] },
       payload: {
-        name: input["name"],
+        command: input["command"],
         text: input["text"],
         files: input["files"],
         agents: input["agents"],
@@ -504,7 +504,7 @@ const EndpointSessionSkill = (raw: RawClient["server.session"]) => (input: Sessi
   preserveEffect<SessionSkillOutput>()(
     raw["session.skill"]({
       params: { sessionID: input["sessionID"] },
-      payload: { id: input["id"], resume: input["resume"] },
+      payload: { id: input["id"], skill: input["skill"], resume: input["resume"] },
     }).pipe(Effect.mapError(mapClientError)),
   )
 
@@ -605,12 +605,18 @@ const EndpointSessionInboxCancel = (raw: RawClient["server.session"]) => (input:
     ),
   )
 
-const EndpointSessionInboxUpdate = (raw: RawClient["server.session"]) => (input: SessionInboxUpdateInput) =>
-  preserveEffect<SessionInboxUpdateOutput>()(
-    raw["session.inbox.update"]({
-      params: { sessionID: input["sessionID"], inboxID: input["inboxID"] },
-      payload: { delivery: input["delivery"] },
-    }).pipe(Effect.mapError(mapClientError)),
+const EndpointSessionInboxSteer = (raw: RawClient["server.session"]) => (input: SessionInboxSteerInput) =>
+  preserveEffect<SessionInboxSteerOutput>()(
+    raw["session.inbox.steer"]({ params: { sessionID: input["sessionID"], inboxID: input["inboxID"] } }).pipe(
+      Effect.mapError(mapClientError),
+    ),
+  )
+
+const EndpointSessionInboxQueue = (raw: RawClient["server.session"]) => (input: SessionInboxQueueInput) =>
+  preserveEffect<SessionInboxQueueOutput>()(
+    raw["session.inbox.queue"]({ params: { sessionID: input["sessionID"], inboxID: input["inboxID"] } }).pipe(
+      Effect.mapError(mapClientError),
+    ),
   )
 
 const EndpointSessionInstructionsEntryList =
@@ -662,9 +668,10 @@ const EndpointSessionLog = (raw: RawClient["server.session"]) => (input: Session
 
 const EndpointSessionInterrupt = (raw: RawClient["server.session"]) => (input: SessionInterruptInput) =>
   preserveEffect<SessionInterruptOutput>()(
-    raw["session.interrupt"]({ params: { sessionID: input["sessionID"] }, query: { resume: input["resume"] } }).pipe(
-      Effect.mapError(mapClientError),
-    ),
+    raw["session.interrupt"]({
+      params: { sessionID: input["sessionID"] },
+      query: { continue: input["continue"] },
+    }).pipe(Effect.mapError(mapClientError)),
   )
 
 const EndpointSessionBackground = (raw: RawClient["server.session"]) => (input: SessionBackgroundInput) =>
@@ -672,53 +679,11 @@ const EndpointSessionBackground = (raw: RawClient["server.session"]) => (input: 
     raw["session.background"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError)),
   )
 
-const EndpointSessionMessageGet = (raw: RawClient["server.session"]) => (input: SessionMessageGetInput) =>
-  preserveEffect<SessionMessageGetOutput>()(
+const EndpointSessionMessage = (raw: RawClient["server.session"]) => (input: SessionMessageInput) =>
+  preserveEffect<SessionMessageOutput>()(
     raw["session.message"]({ params: { sessionID: input["sessionID"], messageID: input["messageID"] } }).pipe(
       Effect.mapError(mapClientError),
       Effect.map((value) => value.data),
-    ),
-  )
-
-const EndpointSessionFormList = (raw: RawClient["server.session"]) => (input: SessionFormListInput) =>
-  preserveEffect<SessionFormListOutput>()(
-    raw["session.form.list"]({ params: { sessionID: input["sessionID"] } }).pipe(
-      Effect.mapError(mapClientError),
-      Effect.map((value) => value.data),
-    ),
-  )
-
-const EndpointSessionFormCreate = (raw: RawClient["server.session"]) => (input: SessionFormCreateInput) =>
-  preserveEffect<SessionFormCreateOutput>()(
-    raw["session.form.create"]({
-      params: { sessionID: input["sessionID"] },
-      payload: { id: input["id"], title: input["title"], metadata: input["metadata"], fields: input["fields"] },
-    }).pipe(
-      Effect.mapError(mapClientError),
-      Effect.map((value) => value.data),
-    ),
-  )
-
-const EndpointSessionFormGet = (raw: RawClient["server.session"]) => (input: SessionFormGetInput) =>
-  preserveEffect<SessionFormGetOutput>()(
-    raw["session.form.get"]({ params: { sessionID: input["sessionID"], formID: input["formID"] } }).pipe(
-      Effect.mapError(mapClientError),
-      Effect.map((value) => value.data),
-    ),
-  )
-
-const EndpointSessionFormReply = (raw: RawClient["server.session"]) => (input: SessionFormReplyInput) =>
-  preserveEffect<SessionFormReplyOutput>()(
-    raw["session.form.reply"]({
-      params: { sessionID: input["sessionID"], formID: input["formID"] },
-      payload: { answer: input["answer"] },
-    }).pipe(Effect.mapError(mapClientError)),
-  )
-
-const EndpointSessionFormCancel = (raw: RawClient["server.session"]) => (input: SessionFormCancelInput) =>
-  preserveEffect<SessionFormCancelOutput>()(
-    raw["session.form.cancel"]({ params: { sessionID: input["sessionID"], formID: input["formID"] } }).pipe(
-      Effect.mapError(mapClientError),
     ),
   )
 
@@ -749,7 +714,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
   fork: EndpointSessionFork(raw),
   switchAgent: EndpointSessionSwitchAgent(raw),
   switchModel: EndpointSessionSwitchModel(raw),
-  update: EndpointSessionUpdate(raw),
+  rename: EndpointSessionRename(raw),
   move: EndpointSessionMove(raw),
   prompt: EndpointSessionPrompt(raw),
   command: EndpointSessionCommand(raw),
@@ -768,7 +733,8 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
   inbox: {
     list: EndpointSessionInboxList(raw),
     cancel: EndpointSessionInboxCancel(raw),
-    update: EndpointSessionInboxUpdate(raw),
+    steer: EndpointSessionInboxSteer(raw),
+    queue: EndpointSessionInboxQueue(raw),
   },
   instructions: {
     entry: {
@@ -781,14 +747,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
   log: EndpointSessionLog(raw),
   interrupt: EndpointSessionInterrupt(raw),
   background: EndpointSessionBackground(raw),
-  message: { get: EndpointSessionMessageGet(raw) },
-  form: {
-    list: EndpointSessionFormList(raw),
-    create: EndpointSessionFormCreate(raw),
-    get: EndpointSessionFormGet(raw),
-    reply: EndpointSessionFormReply(raw),
-    cancel: EndpointSessionFormCancel(raw),
-  },
+  message: EndpointSessionMessage(raw),
   environment: EndpointSessionEnvironment(raw),
   view: EndpointSessionView(raw),
 })
@@ -1010,20 +969,25 @@ const EndpointCredentialUpdate = (raw: RawClient["server.credential"]) => (input
   preserveEffect<CredentialUpdateOutput>()(
     raw["credential.update"]({
       params: { credentialID: input["credentialID"] },
+      query: { location: input["location"] },
       payload: { label: input["label"] },
     }).pipe(Effect.mapError(mapClientError)),
   )
 
 const EndpointCredentialActivate = (raw: RawClient["server.credential"]) => (input: CredentialActivateInput) =>
   preserveEffect<CredentialActivateOutput>()(
-    raw["credential.activate"]({ params: { credentialID: input["credentialID"] } }).pipe(
-      Effect.mapError(mapClientError),
-    ),
+    raw["credential.activate"]({
+      params: { credentialID: input["credentialID"] },
+      query: { location: input["location"] },
+    }).pipe(Effect.mapError(mapClientError)),
   )
 
 const EndpointCredentialRemove = (raw: RawClient["server.credential"]) => (input: CredentialRemoveInput) =>
   preserveEffect<CredentialRemoveOutput>()(
-    raw["credential.remove"]({ params: { credentialID: input["credentialID"] } }).pipe(Effect.mapError(mapClientError)),
+    raw["credential.remove"]({
+      params: { credentialID: input["credentialID"] },
+      query: { location: input["location"] },
+    }).pipe(Effect.mapError(mapClientError)),
   )
 
 const adaptGroupCredential = (raw: RawClient["server.credential"]) => ({
@@ -1048,12 +1012,70 @@ const adaptGroupProject = (raw: RawClient["server.project"]) => ({
   update: EndpointProjectUpdate(raw),
 })
 
-const EndpointFormList = (raw: RawClient["server.form"]) => (input?: FormListInput) =>
-  preserveEffect<FormListOutput>()(
-    raw["form.list"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
+const EndpointFormRequestList = (raw: RawClient["server.form"]) => (input?: FormRequestListInput) =>
+  preserveEffect<FormRequestListOutput>()(
+    raw["form.request.list"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
   )
 
-const adaptGroupForm = (raw: RawClient["server.form"]) => ({ list: EndpointFormList(raw) })
+const EndpointFormList = (raw: RawClient["server.form"]) => (input: FormListInput) =>
+  preserveEffect<FormListOutput>()(
+    raw["session.form.list"]({ params: { sessionID: input["sessionID"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointFormCreate = (raw: RawClient["server.form"]) => (input: FormCreateInput) =>
+  preserveEffect<FormCreateOutput>()(
+    raw["session.form.create"]({
+      params: { sessionID: input["sessionID"] },
+      payload: { id: input["id"], title: input["title"], metadata: input["metadata"], fields: input["fields"] },
+    }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointFormGet = (raw: RawClient["server.form"]) => (input: FormGetInput) =>
+  preserveEffect<FormGetOutput>()(
+    raw["session.form.get"]({ params: { sessionID: input["sessionID"], formID: input["formID"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointFormState = (raw: RawClient["server.form"]) => (input: FormStateInput) =>
+  preserveEffect<FormStateOutput>()(
+    raw["session.form.state"]({ params: { sessionID: input["sessionID"], formID: input["formID"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointFormReply = (raw: RawClient["server.form"]) => (input: FormReplyInput) =>
+  preserveEffect<FormReplyOutput>()(
+    raw["session.form.reply"]({
+      params: { sessionID: input["sessionID"], formID: input["formID"] },
+      payload: { answer: input["answer"] },
+    }).pipe(Effect.mapError(mapClientError)),
+  )
+
+const EndpointFormCancel = (raw: RawClient["server.form"]) => (input: FormCancelInput) =>
+  preserveEffect<FormCancelOutput>()(
+    raw["session.form.cancel"]({ params: { sessionID: input["sessionID"], formID: input["formID"] } }).pipe(
+      Effect.mapError(mapClientError),
+    ),
+  )
+
+const adaptGroupForm = (raw: RawClient["server.form"]) => ({
+  request: { list: EndpointFormRequestList(raw) },
+  list: EndpointFormList(raw),
+  create: EndpointFormCreate(raw),
+  get: EndpointFormGet(raw),
+  state: EndpointFormState(raw),
+  reply: EndpointFormReply(raw),
+  cancel: EndpointFormCancel(raw),
+})
 
 const EndpointPermissionRequestList = (raw: RawClient["server.permission"]) => (input?: PermissionRequestListInput) =>
   preserveEffect<PermissionRequestListOutput>()(
@@ -1112,7 +1134,15 @@ const EndpointPermissionReply = (raw: RawClient["server.permission"]) => (input:
   preserveEffect<PermissionReplyOutput>()(
     raw["session.permission.reply"]({
       params: { sessionID: input["sessionID"], requestID: input["requestID"] },
-      payload: { decision: input["decision"], message: input["message"] },
+      payload: { reply: input["reply"], message: input["message"] },
+    }).pipe(Effect.mapError(mapClientError)),
+  )
+
+const EndpointPermissionRules = (raw: RawClient["server.permission"]) => (input: PermissionRulesInput) =>
+  preserveEffect<PermissionRulesOutput>()(
+    raw["session.permission.rules"]({
+      params: { sessionID: input["sessionID"] },
+      payload: { permissions: input["permissions"] },
     }).pipe(Effect.mapError(mapClientError)),
   )
 
@@ -1123,6 +1153,7 @@ const adaptGroupPermission = (raw: RawClient["server.permission"]) => ({
   list: EndpointPermissionList(raw),
   get: EndpointPermissionGet(raw),
   reply: EndpointPermissionReply(raw),
+  rules: EndpointPermissionRules(raw),
 })
 
 const EndpointFileList = (raw: RawClient["server.fs"]) => (input?: FileListInput) =>
@@ -1368,6 +1399,15 @@ const EndpointShellGet = (raw: RawClient["server.shell"]) => (input: ShellGetInp
     ),
   )
 
+const EndpointShellTimeout = (raw: RawClient["server.shell"]) => (input: ShellTimeoutInput) =>
+  preserveEffect<ShellTimeoutOutput>()(
+    raw["shell.timeout"]({
+      params: { id: input["id"] },
+      query: { location: input["location"] },
+      payload: { timeout: input["timeout"] },
+    }).pipe(Effect.mapError(mapClientError)),
+  )
+
 const EndpointShellOutput = (raw: RawClient["server.shell"]) => (input: ShellOutputInput) =>
   preserveEffect<ShellOutputOutput>()(
     raw["shell.output"]({
@@ -1387,6 +1427,7 @@ const adaptGroupShell = (raw: RawClient["server.shell"]) => ({
   list: EndpointShellList(raw),
   create: EndpointShellCreate(raw),
   get: EndpointShellGet(raw),
+  timeout: EndpointShellTimeout(raw),
   output: EndpointShellOutput(raw),
   remove: EndpointShellRemove(raw),
 })
@@ -1398,20 +1439,21 @@ const EndpointReferenceList = (raw: RawClient["server.reference"]) => (input?: R
 
 const adaptGroupReference = (raw: RawClient["server.reference"]) => ({ list: EndpointReferenceList(raw) })
 
-const EndpointWorktreeList = (raw: RawClient["server.worktree"]) => (input: WorktreeListInput) =>
+const EndpointWorktreeList = (raw: RawClient["server.worktree"]) => (input?: WorktreeListInput) =>
   preserveEffect<WorktreeListOutput>()(
-    raw["worktree.list"]({ query: { projectID: input["projectID"] } }).pipe(Effect.mapError(mapClientError)),
+    raw["worktree.list"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
   )
 
-const EndpointWorktreeCreate = (raw: RawClient["server.worktree"]) => (input: WorktreeCreateInput) =>
+const EndpointWorktreeCreate = (raw: RawClient["server.worktree"]) => (input?: WorktreeCreateInput) =>
   preserveEffect<WorktreeCreateOutput>()(
     raw["worktree.create"]({
+      query: { location: input?.["location"] },
       payload: {
-        projectID: input["projectID"],
-        from: input["from"],
-        branch: input["branch"],
-        directory: input["directory"],
-        name: input["name"],
+        strategy: input?.["strategy"],
+        from: input?.["from"],
+        branch: input?.["branch"],
+        directory: input?.["directory"],
+        name: input?.["name"],
       },
     }).pipe(Effect.mapError(mapClientError)),
   )
@@ -1419,13 +1461,14 @@ const EndpointWorktreeCreate = (raw: RawClient["server.worktree"]) => (input: Wo
 const EndpointWorktreeRemove = (raw: RawClient["server.worktree"]) => (input: WorktreeRemoveInput) =>
   preserveEffect<WorktreeRemoveOutput>()(
     raw["worktree.remove"]({
-      payload: { projectID: input["projectID"], directory: input["directory"], force: input["force"] },
+      query: { location: input["location"] },
+      payload: { directory: input["directory"], force: input["force"] },
     }).pipe(Effect.mapError(mapClientError)),
   )
 
-const EndpointWorktreeRefresh = (raw: RawClient["server.worktree"]) => (input: WorktreeRefreshInput) =>
+const EndpointWorktreeRefresh = (raw: RawClient["server.worktree"]) => (input?: WorktreeRefreshInput) =>
   preserveEffect<WorktreeRefreshOutput>()(
-    raw["worktree.refresh"]({ payload: { projectID: input["projectID"] } }).pipe(Effect.mapError(mapClientError)),
+    raw["worktree.refresh"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
   )
 
 const adaptGroupWorktree = (raw: RawClient["server.worktree"]) => ({
@@ -1450,9 +1493,9 @@ const EndpointVcsStatus = (raw: RawClient["server.vcs"]) => (input?: VcsStatusIn
     raw["vcs.status"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
   )
 
-const EndpointVcsBranchList = (raw: RawClient["server.vcs"]) => (input?: VcsBranchListInput) =>
-  preserveEffect<VcsBranchListOutput>()(
-    raw["vcs.branch.list"]({
+const EndpointVcsBranches = (raw: RawClient["server.vcs"]) => (input?: VcsBranchesInput) =>
+  preserveEffect<VcsBranchesOutput>()(
+    raw["vcs.branches"]({
       query: { location: input?.["location"], search: input?.["search"], limit: input?.["limit"] },
     }).pipe(Effect.mapError(mapClientError)),
   )
@@ -1468,7 +1511,7 @@ const adaptGroupVcs = (raw: RawClient["server.vcs"]) => ({
   get: EndpointVcsGet(raw),
   base: EndpointVcsBase(raw),
   status: EndpointVcsStatus(raw),
-  branch: { list: EndpointVcsBranchList(raw) },
+  branches: EndpointVcsBranches(raw),
   diff: EndpointVcsDiff(raw),
 })
 

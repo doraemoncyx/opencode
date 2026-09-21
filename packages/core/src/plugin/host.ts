@@ -9,6 +9,7 @@ import { App } from "../app.js"
 import { Effect, Schema, Stream } from "effect"
 import { Agent } from "../agent.js"
 import { AISDK } from "../aisdk.js"
+import { Catalog } from "../catalog.js"
 import { Command } from "../command.js"
 import { Credential } from "../credential.js"
 import { Bus } from "../bus.js"
@@ -30,7 +31,6 @@ import { Workspace } from "../workspace.js"
 import { Vcs } from "../vcs.js"
 import { WebSearch } from "../websearch.js"
 import { Worktree } from "../worktree.js"
-import { WorktreeStrategies } from "../worktree/strategies.js"
 import { Generate } from "../generate.js"
 import { Permission } from "../permission.js"
 import { PluginHooks } from "./hooks.js"
@@ -51,8 +51,7 @@ export const make = Effect.fn("PluginHost.make")(function* (
   const app = yield* App.Metadata
   const agents = yield* Agent.Service
   const aisdk = yield* AISDK.Service
-  const providers = yield* Provider.Service
-  const models = yield* Model.Service
+  const catalog = yield* Catalog.Service
   const commands = yield* Command.Service
   const bus = yield* Bus.Service
   const integration = yield* Integration.Service
@@ -72,8 +71,6 @@ export const make = Effect.fn("PluginHost.make")(function* (
   const persistentPty = yield* PersistentPty.Service
   const locations = yield* LocationServiceMap.Service
   const worktrees = yield* Worktree.Service
-  const worktreeStrategies = yield* WorktreeStrategies.Service
-  const currentWorktreeStrategies = location.workspaceID ? undefined : worktreeStrategies
   const locationInfo = () =>
     new Location.Info({
       directory: location.directory,
@@ -93,6 +90,21 @@ export const make = Effect.fn("PluginHost.make")(function* (
   const response = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(Effect.map((data) => ({ location: locationInfo(), data })))
 
+  const atWorktree = <A, E>(
+    ref: Location.Ref | undefined,
+    run: (service: Worktree.Interface) => Effect.Effect<A, E>,
+  ) => {
+    if (ref?.workspaceID) return Effect.fail(new Worktree.UnsupportedLocationError({ directory: ref.directory }))
+    if (!ref || isCurrentLocation(ref)) return run(worktrees)
+    return Effect.gen(function* () {
+      // Defer this import: Plugin's construction depends on this host. Same-location setup calls never wait on themselves.
+      const { Plugin } = yield* Effect.promise(() => import("../plugin.js"))
+      const plugins = yield* Plugin.Service
+      const target = yield* Worktree.Service
+      yield* plugins.awaitActivation
+      return yield* run(target)
+    }).pipe(Effect.provide(locations.get(ref)))
+  }
   const decodeWorktree = Schema.decodeUnknownEffect(Worktree.Info)
   const decodeWorktrees = Schema.decodeUnknownEffect(Schema.Array(Worktree.ListEntry))
 
@@ -186,66 +198,49 @@ export const make = Effect.fn("PluginHost.make")(function* (
         })
       },
     },
-    provider: {
-      list: () => response(providers.available()),
-      get: (input) =>
-        providers
-          .get(Provider.ID.make(input.providerID))
-          .pipe(
-            Effect.flatMap((provider) =>
-              provider === undefined
-                ? Effect.fail(new Error(`Provider not found: ${input.providerID}`))
-                : response(Effect.succeed(provider)),
+    catalog: {
+      provider: {
+        list: () => response(catalog.provider.available()),
+        get: (input) =>
+          catalog.provider
+            .get(Provider.ID.make(input.providerID))
+            .pipe(
+              Effect.flatMap((provider) =>
+                provider === undefined
+                  ? Effect.fail(new Error(`Provider not found: ${input.providerID}`))
+                  : response(Effect.succeed(provider)),
+              ),
             ),
-          ),
-      reload: providers.reload,
+      },
+      model: {
+        list: () => response(catalog.model.available()),
+        default: () => response(catalog.model.default()),
+      },
+      reload: catalog.reload,
       transform: (callback) =>
-        providers.transform((editor) => {
+        catalog.transform((editor) => {
           callback({
-            list: editor.list,
-            get: (id) => editor.get(Provider.ID.make(id)),
-            add: (definition) =>
-              editor.add({
-                ...definition,
-                sourceConnection:
-                  definition.sourceConnection?.type === "credential"
-                    ? { ...definition.sourceConnection, id: Credential.ID.make(definition.sourceConnection.id) }
-                    : definition.sourceConnection,
-              }),
-            update: (id, update) => editor.update(Provider.ID.make(id), update),
-            remove: (id) => editor.remove(Provider.ID.make(id)),
-            models: {
-              set: (id, models) => editor.models.set(Provider.ID.make(id), models),
+            provider: {
+              list: () => mutable(editor.provider.list()),
+              get: (id) => mutable(editor.provider.get(Provider.ID.make(id))),
+              update: (id, update) => editor.provider.update(Provider.ID.make(id), update),
+              remove: (id) => editor.provider.remove(Provider.ID.make(id)),
+            },
+            model: {
+              get: (providerID, modelID) =>
+                mutable(editor.model.get(Provider.ID.make(providerID), Model.ID.make(modelID))),
               update: (providerID, modelID, update) =>
-                editor.models.update(Provider.ID.make(providerID), Model.ID.make(modelID), update),
+                editor.model.update(Provider.ID.make(providerID), Model.ID.make(modelID), update),
               remove: (providerID, modelID) =>
-                editor.models.remove(Provider.ID.make(providerID), Model.ID.make(modelID)),
+                editor.model.remove(Provider.ID.make(providerID), Model.ID.make(modelID)),
+              default: {
+                get: editor.model.default.get,
+                set: (providerID, modelID) =>
+                  editor.model.default.set(Provider.ID.make(providerID), Model.ID.make(modelID)),
+              },
             },
           })
         }),
-    },
-    model: {
-      list: () => response(models.available()),
-      default: () => response(models.default()),
-      reload: models.reload,
-      transform: (callback) =>
-        models.transform((editor) =>
-          callback({
-            list: (providerID) => editor.list(providerID === undefined ? undefined : Provider.ID.make(providerID)),
-            get: (providerID, modelID) => editor.get(Provider.ID.make(providerID), Model.ID.make(modelID)),
-            update: (providerID, modelID, update) =>
-              editor.update(Provider.ID.make(providerID), Model.ID.make(modelID), update),
-            remove: (providerID, modelID) => editor.remove(Provider.ID.make(providerID), Model.ID.make(modelID)),
-            default: {
-              get: editor.default.get,
-              set: (providerID, modelID) => editor.default.set(Provider.ID.make(providerID), Model.ID.make(modelID)),
-            },
-            provider: {
-              list: editor.provider.list,
-              get: (id) => editor.provider.get(Provider.ID.make(id)),
-            },
-          }),
-        ),
     },
     command: {
       list: () => response(commands.list()),
@@ -411,10 +406,11 @@ export const make = Effect.fn("PluginHost.make")(function* (
           .pipe(
             Effect.flatMap((request) =>
               request?.sessionID === input.sessionID
-                ? permission.reply({ requestID: input.requestID, reply: input.decision, message: input.message })
+                ? permission.reply({ requestID: input.requestID, reply: input.reply, message: input.message })
                 : Effect.fail(new Error(`Permission request not found: ${input.requestID}`)),
             ),
           ),
+      rules: sessions.setPermissions,
     },
     plugin: {
       list: () => response(plugin.list()),
@@ -453,15 +449,12 @@ export const make = Effect.fn("PluginHost.make")(function* (
     tool: {
       transform: tools.transform,
       reload: tools.reload,
-      list: tools.list,
       hook: (name, callback) => hooks.register("tool", name, callback),
     },
     vcs: {
       get: () => response(vcs.info()),
       base: () => response(vcs.base()),
-      branch: {
-        list: (input) => response(vcs.branches({ search: input?.search, limit: input?.limit })),
-      },
+      branches: (input) => response(vcs.branches({ search: input?.search, limit: input?.limit })),
       status: () => response(vcs.status()),
       diff: (input) => response(vcs.diff(input.mode, { context: input.context, base: input.base })),
       transform: vcs.transform,
@@ -497,13 +490,13 @@ export const make = Effect.fn("PluginHost.make")(function* (
         }),
     },
     worktree: {
-      list: worktrees.list,
-      create: (input) => worktrees.create(input, currentWorktreeStrategies),
-      refresh: (input) => worktrees.refresh(input, currentWorktreeStrategies).pipe(Effect.asVoid),
-      remove: (input) => worktrees.remove(input, currentWorktreeStrategies),
-      reload: worktreeStrategies.reload,
+      list: (input) => atWorktree(locationRef(input), (service) => service.list()),
+      create: (input) => atWorktree(locationRef(input), (service) => service.create(input)),
+      refresh: (input) => atWorktree(locationRef(input), (service) => service.refresh()).pipe(Effect.asVoid),
+      remove: (input) => atWorktree(locationRef(input), (service) => service.remove(input)),
+      reload: worktrees.reload,
       transform: (callback) =>
-        worktreeStrategies.transform((editor) =>
+        worktrees.transform((editor) =>
           callback({
             add: (definition) =>
               editor.add({
@@ -533,18 +526,13 @@ export const make = Effect.fn("PluginHost.make")(function* (
       switchModel: sessions.switchModel,
       prompt: sessions.prompt,
       generate: (input) => sessions.generate(input).pipe(Effect.map((text) => ({ text }))),
-      command: (input) => sessions.command({ ...input, command: input.name }),
-      update: Effect.fn(function* (input) {
-        yield* sessions.get(input.sessionID)
-        if (input.title !== undefined) yield* sessions.rename({ sessionID: input.sessionID, title: input.title })
-        if (input.permissions !== undefined)
-          yield* sessions.setPermissions({ sessionID: input.sessionID, permissions: input.permissions })
-      }),
+      command: sessions.command,
+      rename: sessions.rename,
       move: sessions.move,
       synthetic: sessions.synthetic,
       interrupt: (input) =>
         sessions
-          .interrupt(input.sessionID, { resume: input.resume })
+          .interrupt(input.sessionID, { continue: input.continue })
           .pipe(Effect.map((interrupted) => ({ interrupted }))),
       wait: (input) => sessions.wait(input.sessionID),
       context: (input) => sessions.context(input.sessionID),
@@ -557,8 +545,7 @@ export const requirements = LayerNode.group([
   App.node,
   Agent.node,
   AISDK.node,
-  Provider.node,
-  Model.node,
+  Catalog.node,
   Command.node,
   Bus.node,
   Integration.node,
@@ -572,7 +559,6 @@ export const requirements = LayerNode.group([
   Vcs.node,
   WebSearch.node,
   Worktree.node,
-  WorktreeStrategies.node,
   Generate.node,
   Permission.node,
   PluginHooks.node,

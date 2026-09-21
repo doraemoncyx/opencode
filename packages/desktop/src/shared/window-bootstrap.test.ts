@@ -1,17 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { windowBootstrapArgument, windowBootstrapFromArguments } from "./window-bootstrap"
+import { windowIDArgument, windowIDFromArguments } from "./window-bootstrap"
 
 describe("window bootstrap", () => {
-  test("round-trips through argv", () => {
-    const bootstrap = { id: "win a/b ü", firstLaunchPending: false, defaultServerUrl: "http://127.0.0.1:1234" }
-    expect(windowBootstrapFromArguments(["electron", windowBootstrapArgument(bootstrap)])).toEqual(bootstrap)
+  test("round-trips the window ID through renderer arguments", () => {
+    const id = "window/id with spaces"
+    expect(windowIDFromArguments(["electron", windowIDArgument(id)])).toBe(id)
   })
 
-  test("keeps unknown values absent", () => {
-    expect(windowBootstrapFromArguments([windowBootstrapArgument({ id: "x" })])).toEqual({ id: "x" })
-  })
-
-  test("throws when the argument is missing", () => {
-    expect(() => windowBootstrapFromArguments(["electron"])).toThrow("Window bootstrap argument not found")
+  test("requires a window ID argument", () => {
+    expect(() => windowIDFromArguments(["electron"])).toThrow("Window ID argument not found")
   })
 })

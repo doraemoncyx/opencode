@@ -14,6 +14,10 @@ export const ServerOptions = Schema.Struct({
   hostname: Schema.optional(Schema.String),
   port: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(65_535))),
   password: Schema.optional(Schema.String),
+  // Trust requests whose peer address is loopback as already authenticated. The
+  // CLI enables this so the web UI it serves is usable without credentials on
+  // the machine that runs the server; remote peers still authenticate.
+  localAuth: Schema.optional(Schema.Boolean),
   cors: Schema.optional(Schema.Array(Schema.String)),
   simulation: Schema.optional(Schema.Boolean),
   database: Schema.optional(Database.Options),

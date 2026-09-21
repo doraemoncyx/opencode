@@ -10,7 +10,7 @@ type Progress = { label: string; numerator?: number; denominator?: number }
 export function MigrationOverlay() {
   const client = useClient()
   const toast = useToast()
-  const theme = useTheme()
+  const theme = useTheme("overlay")
   const [progress, setProgress] = createSignal<Progress>()
   const abort = new AbortController()
 
@@ -52,16 +52,16 @@ export function MigrationOverlay() {
           top={1}
           right={2}
           flexDirection="row"
-          backgroundColor={theme.background.raised.high}
+          backgroundColor={theme.background.default}
           border={["left"]}
-          borderColor={theme.text.feedback.info.base}
+          borderColor={theme.text.feedback.info.default}
           customBorderChars={SplitBorder.customBorderChars}
           paddingLeft={2}
           paddingRight={2}
           paddingTop={1}
           paddingBottom={1}
         >
-          <Spinner color={theme.text.feedback.info.base}>
+          <Spinner color={theme.text.feedback.info.default}>
             {value().label}
             {count(value())}
           </Spinner>

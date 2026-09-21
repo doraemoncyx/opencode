@@ -103,8 +103,10 @@ import { SessionTerminalsProvider } from "./context/session-terminals"
 import { PanelProvider, usePanel } from "./context/panel"
 import { SessionFrame } from "./component/session-frame"
 import { createTuiClipboard } from "./clipboard"
+import { registerSpinner } from "opentui-spinner/solid"
 
 registerOpencodeSpinner()
+registerSpinner()
 
 const appGlobalBindingCommands = ["session.list", "session.new", "open.menu"] as const
 
@@ -158,7 +160,6 @@ const appBindingCommands = [
   "opencode.update",
   "server.pair",
   "service.restart",
-  "location.reload",
   "opencode.debug",
   "theme.switch",
   "theme.switch_mode",
@@ -289,6 +290,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         const mode = handoff?.mode ?? (await renderer.waitForThemeMode(1000)) ?? "dark"
         if (renderer.isDestroyed) return
 
+        registerSpinner()
         await render(() => {
           return (
             <LogProvider log={log}>
@@ -681,7 +683,7 @@ function App(props: { pair?: DialogPairCredentials }) {
           return
         }
         void client.api.session
-          .fork({ sessionID: match })
+          .fork({ sessionID: match, boundary: { type: "through" } })
           .then((result) => route.navigate({ type: "session", sessionID: result.id, prompt: startupPrompt }))
           .catch(toast.error)
       })
@@ -694,7 +696,7 @@ function App(props: { pair?: DialogPairCredentials }) {
     if (forked || !args.sessionID || !args.fork) return
     forked = true
     void client.api.session
-      .fork({ sessionID: args.sessionID })
+      .fork({ sessionID: args.sessionID, boundary: { type: "through" } })
       .then((result) => route.navigate({ type: "session", sessionID: result.id, prompt: startupPrompt }))
       .catch(toast.error)
   })
@@ -909,7 +911,7 @@ function App(props: { pair?: DialogPairCredentials }) {
         title: "Switch model variant",
         category: "Agent",
         palette: local.model.variant.list().length === 0 ? undefined : (true as const),
-        slash: { name: "variants", aliases: ["thinking", "effort"] },
+        slash: { name: "variants", aliases: ["thinking"] },
         run: () => {
           if (local.model.variant.list().length === 0) {
             return toast.show({
@@ -968,8 +970,7 @@ function App(props: { pair?: DialogPairCredentials }) {
             {
               name: "opencode.update",
               title: "Update OpenCode",
-              description: "Update OpenCode (upgrade)",
-              slash: { name: "update" },
+              slash: { name: "update", aliases: ["upgrade"] },
               run: () => updater.open?.("manual"),
               category: "System",
             },
@@ -1005,22 +1006,6 @@ function App(props: { pair?: DialogPairCredentials }) {
             },
           ]
         : []),
-      {
-        name: "location.reload",
-        title: "Reload configuration",
-        slash: { name: "reload" },
-        run: async () => {
-          dialog.clear()
-          toast.show({ variant: "info", message: "Reloading configuration…", duration: 30000 })
-          await client.api.location
-            .reload()
-            .then(() => {
-              toast.show({ variant: "success", message: "Configuration reloaded" })
-            })
-            .catch(toast.error)
-        },
-        category: "System",
-      },
       {
         name: "opencode.debug",
         title: "View debug info",
@@ -1311,7 +1296,7 @@ function App(props: { pair?: DialogPairCredentials }) {
       width={dimensions().width}
       height={dimensions().height}
       flexDirection="column"
-      backgroundColor={theme.background.base}
+      backgroundColor={theme.background.default}
       onMouseDown={(evt) => {
         if (copyOnSelectEnabled()) return
         if (evt.button !== MouseButton.RIGHT) return

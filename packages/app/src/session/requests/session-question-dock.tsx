@@ -237,7 +237,7 @@ export const SessionQuestionDock: Component<{ request: FormInfo; onSubmit: () =>
 
   const replyMutation = useMutation(() => ({
     mutationFn: (answer: FormAnswer) =>
-      serverSDK.api.session.form.reply({ sessionID: props.request.sessionID, formID: props.request.id, answer }),
+      serverSDK.api.form.reply({ sessionID: props.request.sessionID, formID: props.request.id, answer }),
     onMutate: () => {
       props.onSubmit()
     },
@@ -249,7 +249,7 @@ export const SessionQuestionDock: Component<{ request: FormInfo; onSubmit: () =>
   }))
 
   const rejectMutation = useMutation(() => ({
-    mutationFn: () => serverSDK.api.session.form.cancel({ sessionID: props.request.sessionID, formID: props.request.id }),
+    mutationFn: () => serverSDK.api.form.cancel({ sessionID: props.request.sessionID, formID: props.request.id }),
     onMutate: () => {
       props.onSubmit()
     },

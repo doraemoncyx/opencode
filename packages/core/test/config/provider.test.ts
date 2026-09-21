@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import { Money } from "@opencode/schema/money"
 import { Document, Info, type Entry } from "@opencode/schema/config"
 import { Effect, Schema } from "effect"
+import { Catalog } from "@opencode/core/catalog"
 import { Config } from "@opencode/core/config"
 import { ConfigProviderPlugin } from "@opencode/core/config/plugin/provider"
 import { ConfigNormalize } from "@opencode/core/config/normalize"
@@ -10,9 +11,6 @@ import { Model } from "@opencode/core/model"
 import { ModelResolver } from "@opencode/core/model-resolver"
 import { Plugin } from "@opencode/core/plugin"
 import { PluginHost } from "@opencode/core/plugin/host"
-import { AzurePlugin } from "@opencode/core/plugin/provider/azure"
-import { OpenAIPlugin } from "@opencode/core/plugin/provider/openai"
-import { XAIPlugin } from "@opencode/core/plugin/provider/xai"
 import { Provider } from "@opencode/core/provider"
 import { withEnv } from "../fixture/env"
 import { testEffect } from "../lib/effect"
@@ -34,10 +32,9 @@ function required<T>(value: T | undefined): T {
 const decode = Schema.decodeUnknownSync(Info)
 
 describe("ConfigProviderPlugin.Plugin", () => {
-  it.effect("inherits the provider compaction setting with model overrides and rejects unsupported routes", () =>
+  it.effect("inherits provider compaction policy with model overrides and rejects unsupported routes", () =>
     Effect.gen(function* () {
-      const models = yield* Model.Service
-      const providers = yield* Provider.Service
+      const catalog = yield* Catalog.Service
       yield* addPlugin([
         new Document({
           type: "document",
@@ -45,10 +42,12 @@ describe("ConfigProviderPlugin.Plugin", () => {
             providers: {
               custom: {
                 package: "@opencode/ai/providers/openai/responses",
-                settings: { compaction: { type: "native" } },
+                compaction: { mode: "provider", threshold: 120_000 },
                 models: {
                   native: {},
-                  local: { settings: { compaction: { type: "summary" } }, package: "@opencode/ai/providers/openai/chat" },
+                  reset: { compaction: { mode: "provider" } },
+                  threshold: { compaction: { mode: "provider", threshold: 90_000 } },
+                  local: { compaction: { mode: "local" }, package: "@opencode/ai/providers/openai/chat" },
                   unsupported: { package: "@opencode/ai/providers/openai/chat" },
                 },
               },
@@ -57,14 +56,20 @@ describe("ConfigProviderPlugin.Plugin", () => {
           }),
         }),
       ])
-      const native = required(yield* models.get(Provider.ID.make("custom"), Model.ID.make("native")))
-      const local = required(yield* models.get(Provider.ID.make("custom"), Model.ID.make("local")))
-      const unsupported = required(yield* models.get(Provider.ID.make("custom"), Model.ID.make("unsupported")))
-      const defaultModel = required(yield* models.get(Provider.ID.make("default"), Model.ID.make("chat")))
-      expect(native.settings?.compaction).toEqual({ type: "native" })
-      expect(local.settings?.compaction).toEqual({ type: "summary" })
-      expect(defaultModel.settings?.compaction).toBeUndefined()
-      expect((yield* providers.get(Provider.ID.make("custom")))?.settings?.compaction).toEqual({ type: "native" })
+      const native = required(yield* catalog.model.get(Provider.ID.make("custom"), Model.ID.make("native")))
+      const local = required(yield* catalog.model.get(Provider.ID.make("custom"), Model.ID.make("local")))
+      const unsupported = required(yield* catalog.model.get(Provider.ID.make("custom"), Model.ID.make("unsupported")))
+      const defaultModel = required(yield* catalog.model.get(Provider.ID.make("default"), Model.ID.make("chat")))
+      expect(native.compaction).toEqual({ mode: "provider", threshold: 120_000 })
+      expect((yield* catalog.model.get(Provider.ID.make("custom"), Model.ID.make("reset")))?.compaction).toEqual({
+        mode: "provider",
+      })
+      expect((yield* catalog.model.get(Provider.ID.make("custom"), Model.ID.make("threshold")))?.compaction).toEqual({
+        mode: "provider",
+        threshold: 90_000,
+      })
+      expect(local.compaction).toEqual({ mode: "local" })
+      expect(defaultModel.compaction).toBeUndefined()
       yield* ModelResolver.fromCatalogModel(native)
       yield* ModelResolver.fromCatalogModel(local)
       yield* ModelResolver.fromCatalogModel(defaultModel)
@@ -75,10 +80,9 @@ describe("ConfigProviderPlugin.Plugin", () => {
     }),
   )
 
-  it.effect("keeps the provider websocket policy out of model settings", () =>
+  it.effect("inherits the provider websocket policy with model overrides", () =>
     Effect.gen(function* () {
-      const providers = yield* Provider.Service
-      const models = yield* Model.Service
+      const catalog = yield* Catalog.Service
       yield* addPlugin([
         new Document({
           type: "document",
@@ -86,71 +90,22 @@ describe("ConfigProviderPlugin.Plugin", () => {
             providers: {
               custom: {
                 package: "@opencode/ai/providers/openai/responses",
-                settings: { transport: "http", timeout: 100, chunkTimeout: 200, shared: "provider" },
-                models: {
-                  inherited: {
-                    settings: { transport: "websocket", timeout: 1, chunkTimeout: 2, model: true },
-                  },
-                },
+                websocket: false,
+                models: { inherited: {}, override: { websocket: true } },
               },
               default: { package: "@opencode/ai/providers/openai/responses", models: { untouched: {} } },
             },
           }),
         }),
       ])
-      const inherited = required(yield* models.get(Provider.ID.make("custom"), Model.ID.make("inherited")))
-      const untouched = required(yield* models.get(Provider.ID.make("default"), Model.ID.make("untouched")))
-      expect((yield* providers.get(Provider.ID.make("custom")))?.settings?.transport).toBe("http")
-      expect(inherited.settings).toEqual({ shared: "provider", model: true })
-      expect(untouched.settings?.transport).toBeUndefined()
+      const inherited = required(yield* catalog.model.get(Provider.ID.make("custom"), Model.ID.make("inherited")))
+      const override = required(yield* catalog.model.get(Provider.ID.make("custom"), Model.ID.make("override")))
+      const untouched = required(yield* catalog.model.get(Provider.ID.make("default"), Model.ID.make("untouched")))
+      expect(inherited.websocket).toBe(false)
+      expect(override.websocket).toBe(true)
+      expect(untouched.websocket).toBeUndefined()
     }),
   )
-
-  for (const builtin of [
-    { id: "openai", model: "gpt-5.6-sol", package: "@opencode/ai/providers/openai/responses", plugin: OpenAIPlugin },
-    { id: "xai", model: "grok-4.6", package: "@opencode/ai/providers/xai", plugin: XAIPlugin },
-    { id: "azure", model: "gpt-5.6-sol", package: "@opencode/ai/providers/azure/responses", plugin: AzurePlugin },
-    { id: "custom-azure", model: "deployment", package: "@opencode/ai/providers/azure/responses", plugin: AzurePlugin },
-  ]) {
-    it.live(`configured provider transport overrides ${builtin.id} defaults`, () =>
-      Effect.gen(function* () {
-        const providers = yield* Provider.Service
-        const models = yield* Model.Service
-        const plugin = yield* Plugin.Service
-        const host = yield* PluginHost.make(plugin)
-        const providerID = Provider.ID.make(builtin.id)
-        const modelID = Model.ID.make(builtin.model)
-        yield* providers.transform((editor) => {
-          editor.update(providerID, (provider) => {
-            provider.activation = "enabled"
-            provider.package = builtin.package
-          })
-          editor.models.update(providerID, modelID, () => {})
-        })
-        yield* builtin.plugin.effect(host)
-        expect((yield* providers.get(providerID))?.settings?.transport).toBe("websocket")
-        expect((yield* models.get(providerID, modelID))?.settings?.transport).toBeUndefined()
-
-        yield* addPlugin([
-          new Document({
-            type: "document",
-            info: decode({
-              providers: {
-                [builtin.id]: {
-                  settings: { transport: "http" },
-                  models: { override: { modelID: builtin.model } },
-                },
-              },
-            }),
-          }),
-        ])
-
-        expect((yield* providers.get(providerID))?.settings?.transport).toBe("http")
-        expect((yield* models.get(providerID, modelID))?.settings?.transport).toBeUndefined()
-        expect((yield* models.get(providerID, Model.ID.make("override")))?.settings?.transport).toBeUndefined()
-      }),
-    )
-  }
 
   it.effect("adds key auth for custom providers without env credentials", () =>
     Effect.gen(function* () {
@@ -181,7 +136,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
 
   it.effect("defaults custom model metadata", () =>
     Effect.gen(function* () {
-      const models = yield* Model.Service
+      const catalog = yield* Catalog.Service
       const providerID = Provider.ID.make("custom")
       const modelID = Model.ID.make("chat")
       const entries = [
@@ -200,7 +155,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
 
       yield* addPlugin(entries)
 
-      const model = required(yield* models.get(providerID, modelID))
+      const model = required(yield* catalog.model.get(providerID, modelID))
       expect(model.capabilities).toEqual({ tools: true, input: ["text", "image"], output: ["text"] })
       expect(model.limit).toEqual({ context: 200_000, output: 32_000 })
     }),
@@ -208,16 +163,15 @@ describe("ConfigProviderPlugin.Plugin", () => {
 
   it.effect("preserves catalog capabilities unless config overrides them", () =>
     Effect.gen(function* () {
-      const providers = yield* Provider.Service
-      const models = yield* Model.Service
+      const catalog = yield* Catalog.Service
       const providerID = Provider.ID.make("custom")
       const inheritedID = Model.ID.make("inherited")
       const overriddenID = Model.ID.make("overridden")
-      yield* providers.transform((editor) => {
-        editor.models.update(providerID, inheritedID, (model) => {
+      yield* catalog.transform((editor) => {
+        editor.model.update(providerID, inheritedID, (model) => {
           model.capabilities = { tools: false, input: ["text"], output: ["text"] }
         })
-        editor.models.update(providerID, overriddenID, (model) => {
+        editor.model.update(providerID, overriddenID, (model) => {
           model.capabilities = { tools: false, input: ["text"], output: ["text"] }
         })
       })
@@ -242,12 +196,12 @@ describe("ConfigProviderPlugin.Plugin", () => {
 
       yield* addPlugin(entries)
 
-      expect((yield* models.get(providerID, inheritedID))?.capabilities).toEqual({
+      expect((yield* catalog.model.get(providerID, inheritedID))?.capabilities).toEqual({
         tools: false,
         input: ["text"],
         output: ["text"],
       })
-      expect((yield* models.get(providerID, overriddenID))?.capabilities).toEqual({
+      expect((yield* catalog.model.get(providerID, overriddenID))?.capabilities).toEqual({
         tools: true,
         input: ["text", "image"],
         output: ["text"],
@@ -282,7 +236,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
   ]) {
     it.effect(`uses native model defaults for migrated ${scenario.name}`, () =>
       Effect.gen(function* () {
-        const models = yield* Model.Service
+        const catalog = yield* Catalog.Service
         const providerID = Provider.ID.make("custom")
         const result = ConfigNormalize.normalize({ provider: { custom: { models: { migrated: scenario.legacy } } } })
         if (result.type !== "normalized") throw new Error("Expected normalized config")
@@ -296,8 +250,8 @@ describe("ConfigProviderPlugin.Plugin", () => {
           new Document({ type: "document", info: decode(result.encoded) }),
         ])
 
-        const native = required(yield* models.get(providerID, Model.ID.make("native")))
-        const migrated = required(yield* models.get(providerID, Model.ID.make("migrated")))
+        const native = required(yield* catalog.model.get(providerID, Model.ID.make("native")))
+        const migrated = required(yield* catalog.model.get(providerID, Model.ID.make("migrated")))
         expect(migrated).toEqual({
           ...native,
           id: migrated.id,
@@ -367,7 +321,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
   ]) {
     it.effect(`matches native configuration for migrated ${scenario.name}`, () =>
       Effect.gen(function* () {
-        const models = yield* Model.Service
+        const catalog = yield* Catalog.Service
         const result = ConfigNormalize.normalize({ provider: { legacy: scenario.legacy } })
         if (result.type !== "normalized") throw new Error("Expected normalized config")
         expect(result.diagnostics).toEqual([])
@@ -377,8 +331,8 @@ describe("ConfigProviderPlugin.Plugin", () => {
           new Document({ type: "document", info: decode(result.encoded) }),
         ])
 
-        const native = required(yield* models.get(Provider.ID.make("native"), Model.ID.make("chat")))
-        const migrated = required(yield* models.get(Provider.ID.make("legacy"), Model.ID.make("chat")))
+        const native = required(yield* catalog.model.get(Provider.ID.make("native"), Model.ID.make("chat")))
+        const migrated = required(yield* catalog.model.get(Provider.ID.make("legacy"), Model.ID.make("chat")))
         expect({ ...migrated, providerID: native.providerID }).toEqual(native)
         for (const variant of native.variants) {
           const expected = yield* ModelResolver.withVariant(native, variant.id)
@@ -391,12 +345,11 @@ describe("ConfigProviderPlugin.Plugin", () => {
 
   it.effect("preserves existing catalog metadata when migrated fields are omitted", () =>
     Effect.gen(function* () {
-      const providers = yield* Provider.Service
-      const models = yield* Model.Service
+      const catalog = yield* Catalog.Service
       const providerID = Provider.ID.make("custom")
       const modelID = Model.ID.make("chat")
-      yield* providers.transform((editor) => {
-        editor.models.update(providerID, modelID, (model) => {
+      yield* catalog.transform((editor) => {
+        editor.model.update(providerID, modelID, (model) => {
           model.package = "aisdk:@ai-sdk/anthropic"
           model.settings = { baseURL: "https://catalog.example/v1" }
           model.capabilities = { tools: false, input: ["audio"], output: ["audio"] }
@@ -411,52 +364,18 @@ describe("ConfigProviderPlugin.Plugin", () => {
           model.variants = [{ id: Model.VariantID.make("high"), settings: { effort: "high" } }]
         })
       })
-      const before = required(yield* models.get(providerID, modelID))
+      const before = required(yield* catalog.model.get(providerID, modelID))
       const result = ConfigNormalize.normalize({ provider: { custom: { models: { chat: {} } } } })
       if (result.type !== "normalized") throw new Error("Expected normalized config")
       expect(result.diagnostics).toEqual([])
       yield* addPlugin([new Document({ type: "document", info: decode(result.encoded) })])
-      expect(yield* models.get(providerID, modelID)).toEqual(before)
-    }),
-  )
-
-  it.effect("generates variants after rewriting a configured model package", () =>
-    Effect.gen(function* () {
-      const models = yield* Model.Service
-      yield* addPlugin([
-        new Document({
-          type: "document",
-          info: decode({
-            providers: {
-              custom: {
-                package: "aisdk:@ai-sdk/openai",
-                models: {
-                  claude: {
-                    modelID: "claude-opus-4-8",
-                    package: "aisdk:@ai-sdk/anthropic",
-                  },
-                },
-              },
-            },
-          }),
-        }),
-      ])
-
-      const model = required(yield* models.get(Provider.ID.make("custom"), Model.ID.make("claude")))
-      expect(model.package).toBe("@opencode/ai/providers/anthropic")
-      expect(model.variants.map((variant) => variant.id)).toEqual([
-        Model.VariantID.make("low"),
-        Model.VariantID.make("medium"),
-        Model.VariantID.make("high"),
-        Model.VariantID.make("xhigh"),
-        Model.VariantID.make("max"),
-      ])
+      expect(yield* catalog.model.get(providerID, modelID)).toEqual(before)
     }),
   )
 
   it.effect("keeps configured model variant bodies unchanged", () =>
     Effect.gen(function* () {
-      const models = yield* Model.Service
+      const catalog = yield* Catalog.Service
       const providerID = Provider.ID.opencode
       const modelID = Model.ID.make("alpha-gpt-next")
       const entries = [
@@ -489,7 +408,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
 
       yield* addPlugin(entries)
 
-      const model = required(yield* models.get(providerID, modelID))
+      const model = required(yield* catalog.model.get(providerID, modelID))
       expect(model.variants).toMatchObject([
         {
           id: "high",
@@ -505,7 +424,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
 
   it.effect("keeps layered model variant bodies unchanged", () =>
     Effect.gen(function* () {
-      const models = yield* Model.Service
+      const catalog = yield* Catalog.Service
       const providerID = Provider.ID.opencode
       const modelID = Model.ID.make("alpha-gpt-next")
       const entries = [
@@ -538,7 +457,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
 
       yield* addPlugin(entries)
 
-      const model = required(yield* models.get(providerID, modelID))
+      const model = required(yield* catalog.model.get(providerID, modelID))
       expect(model.variants?.[0]).toMatchObject({
         id: "high",
         body: { reasoningEffort: "high" },
@@ -549,8 +468,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
   it.effect("loads configured providers and applies later model overrides", () =>
     withEnv({ CUSTOM_API_KEY: "secret" }, () =>
       Effect.gen(function* () {
-        const providers = yield* Provider.Service
-        const models = yield* Model.Service
+        const catalog = yield* Catalog.Service
         const integrations = yield* Integration.Service
         const providerID = Provider.ID.make("custom")
         const modelID = Model.ID.make("chat")
@@ -637,19 +555,19 @@ describe("ConfigProviderPlugin.Plugin", () => {
           }),
         ]
 
-        yield* providers.transform((editor) => {
-          editor.update(Provider.ID.anthropic, (provider) => {
+        yield* catalog.transform((editor) => {
+          editor.provider.update(Provider.ID.anthropic, (provider) => {
             provider.package = "aisdk:@ai-sdk/anthropic"
           })
-          editor.models.update(Provider.ID.anthropic, modelID, (model) => {
+          editor.model.update(Provider.ID.anthropic, modelID, (model) => {
             model.variants = [{ id: Model.VariantID.make("fast"), settings: { effort: "high" } }]
           })
         })
         yield* addPlugin(entries)
 
-        const provider = required(yield* providers.get(providerID))
-        const model = required(yield* models.get(providerID, modelID))
-        expect((yield* models.default())?.id).toBe(Model.ID.make("default"))
+        const provider = required(yield* catalog.provider.get(providerID))
+        const model = required(yield* catalog.model.get(providerID, modelID))
+        expect((yield* catalog.model.default())?.id).toBe(Model.ID.make("default"))
         expect(provider.name).toBe("Renamed")
         expect(provider.canonical).toBe(Provider.ID.anthropic)
         expect(model.canonical).toBe(Provider.ID.anthropic)

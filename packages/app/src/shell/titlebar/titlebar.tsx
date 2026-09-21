@@ -31,8 +31,6 @@ import { SessionTabAvatar } from "@/shell/layout/session-tab-avatar"
 import { SessionProgressIndicatorV2 } from "@opencode/session-ui/v2/session-progress-indicator-v2"
 import { projectForSession } from "@/shell/layout/helpers"
 import { useSettingsDialog } from "@/settings/command"
-import { updaterAction } from "@/shell/updates/action"
-import type { UpdaterState } from "@/shell/updates/types"
 import devIcon from "../../../../desktop/icons/dev/64x64.png"
 import betaIcon from "../../../../desktop/icons/beta/64x64.png"
 
@@ -45,7 +43,8 @@ const macTrafficLightsBaseWidth = 68
 const macTrafficLightsTopClearance = 28
 
 export type TitlebarUpdate = {
-  state: UpdaterState | undefined
+  version: string | undefined
+  installing: boolean
   install: () => void
 }
 
@@ -97,14 +96,13 @@ export function Titlebar(props: {
   })
 
   const updateState = createMemo<TitlebarUpdatePillState>(() => {
-    const state = props.update?.state
-    const installing = state?.status === "installing"
-    const version = state?.status === "ready" || state?.status === "download-required" ? state.version : undefined
+    const installing = props.update?.installing ?? false
+    const version = props.update?.version
     return {
       visible: version !== undefined || installing,
       installing,
       label: language.t("titlebar.update"),
-      ariaLabel: language.t(updaterAction(state).label),
+      ariaLabel: language.t("toast.update.action.installRestart"),
       title: version ? language.t("titlebar.updateVersion", { version }) : undefined,
       onInstall: () => props.update?.install(),
     }
@@ -351,10 +349,9 @@ export function Titlebar(props: {
               >
                 <button
                   type="button"
-                  data-titlebar-tab-action
                   data-action="vertical-tabs-home"
                   data-state={layout.route().type === "home" ? "pressed" : undefined}
-                  class="group mb-1 flex h-7 w-full shrink-0 items-center gap-1.5 rounded-[6px] ps-1.5 pe-2 text-[13px] leading-4 text-v2-text-text-faint hover:text-v2-text-text-base data-[state=pressed]:text-v2-text-text-base"
+                  class="group mb-1 flex h-7 w-full shrink-0 items-center gap-1.5 rounded-[6px] ps-1.5 pe-2 text-[13px] leading-4 text-v2-text-text-faint hover:bg-v2-background-bg-layer-02 hover:text-v2-text-text-base data-[state=pressed]:bg-v2-background-bg-layer-02 data-[state=pressed]:text-v2-text-text-base"
                   onClick={toggleHome}
                   aria-label={language.t("home.title")}
                   aria-pressed={layout.route().type === "home"}
@@ -651,9 +648,8 @@ export function Titlebar(props: {
                             {homeButton(true)}
                             <button
                               type="button"
-                              data-titlebar-tab-action
                               data-action="vertical-tabs-new-session"
-                              class="group flex h-7 w-full shrink-0 items-center gap-1.5 rounded-[6px] ps-1.5 pe-2 text-[13px] leading-4 text-v2-text-text-faint hover:text-v2-text-text-base"
+                              class="group flex h-7 w-full shrink-0 items-center gap-1.5 rounded-[6px] ps-1.5 pe-2 text-[13px] leading-4 text-v2-text-text-faint hover:bg-v2-background-bg-layer-02 hover:text-v2-text-text-base"
                               onClick={openNewTab}
                               aria-label={language.t("command.session.new")}
                             >
@@ -794,7 +790,7 @@ function ChannelIndicator(props: {
   if (!channel || channel === "prod") return null
 
   const label = () => language.t(`titlebar.channel.${channel}`)
-  const debug = () => (channel === "dev" || channel === "local" ? props.debugTools : undefined)
+  const debug = () => (channel === "dev" ? props.debugTools : undefined)
   return (
     <Tooltip
       placement={props.sidebar ? "right" : "bottom"}

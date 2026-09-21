@@ -64,7 +64,23 @@ export function toSessionError(cause: unknown): SessionError.Error {
   return { type: "unknown", message: cause instanceof Error ? cause.message : String(cause) }
 }
 
+/** Keep durable and logged provider bodies bounded so a large response cannot inflate storage. */
+const PROVIDER_BODY_LIMIT = 8 * 1024
+
+const boundedBody = (body: string | undefined) =>
+  body === undefined
+    ? undefined
+    : body.length <= PROVIDER_BODY_LIMIT
+      ? body
+      : `${body.slice(0, PROVIDER_BODY_LIMIT)}…(truncated)`
+
 function providerError(type: string, reason: AIError["reason"]): SessionError.Error {
   const status = reason.http?.status
-  return { type, message: reason.message, ...(status === undefined ? {} : { status }) }
+  const body = boundedBody(reason.body)
+  return {
+    type,
+    message: reason.message,
+    ...(status === undefined ? {} : { status }),
+    ...(body === undefined ? {} : { body }),
+  }
 }

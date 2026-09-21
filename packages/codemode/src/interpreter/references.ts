@@ -5,32 +5,28 @@ import {
   getOwn,
   isWrapper,
   ownKeys,
-  Arr,
-  Bytes,
-  DateObj,
-  GeneratorObj,
-  IteratorObj,
-  MapObj,
-  Obj,
-  PromiseObj,
-  RegExpObj,
-  SetObj,
-  URLObj,
-  URLSearchParamsObj,
-  HeadersObj,
+  ProgramArray,
+  ProgramDate,
+  ProgramGenerator,
+  ProgramMap,
+  ProgramObject,
+  ProgramPromise,
+  ProgramRegExp,
+  ProgramSet,
+  ProgramURL,
+  ProgramURLSearchParams,
 } from "./objects.js"
 
 /** Values that cannot cross the data boundary. */
 export const isRuntimeReference = (value: unknown): boolean =>
   value instanceof Callable ||
-  value instanceof GeneratorObj ||
-  value instanceof IteratorObj ||
+  value instanceof ProgramGenerator ||
   value instanceof ToolReference ||
-  value instanceof PromiseObj ||
+  value instanceof ProgramPromise ||
   isWrapper(value)
 
 function* childValues(value: object): Generator {
-  if (!(value instanceof Obj)) return
+  if (!(value instanceof ProgramObject)) return
   for (const key of ownKeys(value)) yield getOwn(value, key)
 }
 
@@ -79,19 +75,16 @@ export const rejectCircularInsertion = (
 
 export const describeValue = (value: unknown): string => {
   if (value === null || value === undefined) return String(value)
-  if (value instanceof Arr) return "an array"
-  if (value instanceof PromiseObj) return "an un-awaited Promise"
+  if (value instanceof ProgramArray) return "an array"
+  if (value instanceof ProgramPromise) return "an un-awaited Promise"
   if (value instanceof ToolReference) return "a tool reference"
-  if (value instanceof DateObj) return "a Date"
-  if (value instanceof RegExpObj) return "a RegExp"
-  if (value instanceof MapObj) return "a Map"
-  if (value instanceof SetObj) return "a Set"
-  if (value instanceof URLObj) return "a URL"
-  if (value instanceof URLSearchParamsObj) return "a URLSearchParams"
-  if (value instanceof HeadersObj) return "a Headers"
-  if (value instanceof Bytes) return "a Uint8Array"
-  if (value instanceof GeneratorObj) return "a generator"
-  if (value instanceof IteratorObj) return "an iterator"
+  if (value instanceof ProgramDate) return "a Date"
+  if (value instanceof ProgramRegExp) return "a RegExp"
+  if (value instanceof ProgramMap) return "a Map"
+  if (value instanceof ProgramSet) return "a Set"
+  if (value instanceof ProgramURL) return "a URL"
+  if (value instanceof ProgramURLSearchParams) return "a URLSearchParams"
+  if (value instanceof ProgramGenerator) return "a generator"
   if (isRuntimeReference(value)) return "a function"
   if (typeof value === "object") return "a data object"
   return `a ${typeof value}`

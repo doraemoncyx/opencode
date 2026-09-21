@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { CodeMode } from "../src/index.js"
+import { Data } from "../src/data.js"
 
 // Runs a CodeMode program with no host tools and returns the CodeMode.Result. These tests pin the
 // JS-parity behaviors for the "99% of ordinary defensive JavaScript just works" goal: cases where
@@ -300,22 +301,25 @@ describe("H1: NaN/Infinity flow as intermediates and normalize to null at the bo
     expect(await value(`return JSON.stringify({ x: Number("z") })`)).toBe('{"x":null}')
   })
 
-  test("the boundary normalizes non-finite numbers to null like JSON.stringify", async () => {
-    expect(await value(`return { a: Number("z"), b: [Infinity, -Infinity, 1] }`)).toEqual({
-      a: null,
-      b: [null, null, 1],
-    })
+  test("copyOut normalizes non-finite numbers to null (the shared return + tool-arg boundary)", () => {
+    // Tool-call arguments funnel through copyOut too, so this one function pins both boundaries.
+    expect(Data.toData(NaN, "value")).toBeNull()
+    expect(Data.toData(Infinity, "value")).toBeNull()
+    expect(Data.toData(-Infinity, "value", "result")).toBeNull()
+    expect(Data.toData(42, "value")).toBe(42)
+    expect(Data.toData({ a: NaN, b: [Infinity, 1] }, "value")).toEqual({ a: null, b: [null, 1] })
   })
 })
 
-describe("undefined at the boundary", () => {
-  test("vanishes like JSON.stringify", async () => {
-    expect(await value(`return { q: undefined, keep: 1, nested: { a: undefined, b: [undefined] } }`)).toStrictEqual({
-      keep: 1,
+describe("copyOut undefined handling per boundary mode", () => {
+  test("json mode mirrors JSON.stringify for undefined", () => {
+    expect(Data.toData({ q: undefined, keep: 1 }, "value")).toStrictEqual({ keep: 1 })
+    expect(Data.toData([1, undefined, 2], "value")).toStrictEqual([1, null, 2])
+    expect(Data.toData({ nested: { a: undefined, b: [undefined] } }, "value")).toStrictEqual({
       nested: { b: [null] },
     })
-    expect(await value(`return [1, undefined, 2]`)).toStrictEqual([1, null, 2])
-    expect(await value(`return undefined`)).toBeNull()
+    expect(Data.toData(undefined, "value")).toBeUndefined()
+    expect(Data.toData({ a: undefined }, "value", "result")).toStrictEqual({ a: null })
   })
 })
 
@@ -348,16 +352,6 @@ describe("Error values and instanceof", () => {
       ),
     ).toEqual([true, true, false])
     expect(await value(`return new Error("e") instanceof TypeError`)).toBe(false)
-  })
-
-  test("new Error(message, { cause }) installs a non-enumerable cause only when the option is present", async () => {
-    expect(
-      await value(`
-        const inner = new Error("root")
-        const e = new TypeError("m", { cause: inner })
-        const agg = new AggregateError([], "a", { cause: 3 })
-        return [e.cause === inner, Object.keys(e), "cause" in new Error("m"), "cause" in new Error("m", { cause: undefined }), agg.cause]`),
-    ).toEqual([true, [], false, true, 3])
   })
 
   test("thrown errors keep instanceof through try/catch", async () => {
@@ -457,9 +451,7 @@ describe("Error values and instanceof", () => {
     expect(await value(`return new Error("m")`)).toEqual({ name: "Error", message: "m" })
     expect(await value(`return JSON.stringify(new Error("m"))`)).toBe('{"name":"Error","message":"m"}')
     expect(
-      await value(
-        `try { throw new Error("m") } catch (e) { return [Object.keys(e), e.name, e.hasOwnProperty("message")] }`,
-      ),
+      await value(`try { throw new Error("m") } catch (e) { return [Object.keys(e), e.name, e.hasOwnProperty("message")] }`),
     ).toEqual([[], "Error", true])
     expect(await value(`return new Error().hasOwnProperty("message")`)).toBe(false)
   })
@@ -502,15 +494,9 @@ describe("CodeMode-specific array behavior", () => {
     expect(err.message).toContain("circular")
   })
 
-  test("indexOf and lastIndexOf with no argument search for undefined", async () => {
-    expect(await value(`return [1, undefined, 3].indexOf()`)).toBe(1)
-    expect(await value(`return [1, undefined, 3].lastIndexOf()`)).toBe(1)
-    expect(await value(`return [1, 2, 3].indexOf()`)).toBe(-1)
-  })
-
-  test("keys/values/entries return iterators usable with for...of and spread", async () => {
+  test("keys/values/entries return arrays usable with for...of and spread", async () => {
     expect(await value(`return [...["x","y","z"].keys()]`)).toEqual([0, 1, 2])
-    expect(await value(`return [...["x","y"].values()]`)).toEqual(["x", "y"])
+    expect(await value(`return ["x","y"].values()`)).toEqual(["x", "y"])
     expect(
       await value(`
       const out = []
@@ -946,12 +932,6 @@ describe("coercion parity: unknown static members read as undefined", () => {
     expect(await value(`try { JSON.rawJSON("1") } catch (e) { return e.message }`)).toBe(
       "JSON.rawJSON is not a function.",
     )
-    expect(await value(`try { search({ query: "star" }).catch(() => 1) } catch (e) { return e.message }`)).toBe(
-      "search(...).catch is not a function.",
-    )
-    expect(
-      await value(`const foo = () => ({ bar: () => ({}) }); try { foo().bar().baz() } catch (e) { return e.message }`),
-    ).toBe("foo(...).bar(...).baz is not a function.")
   })
 
   test("built-ins are objects on a real prototype chain", async () => {
@@ -970,17 +950,6 @@ describe("coercion parity: unknown static members read as undefined", () => {
         ]
       `),
     ).toEqual([true, true, true, "push", 1, 2, [], "function", true])
-  })
-})
-
-describe("async function line breaks", () => {
-  test("a line break between function and the name is an async function", async () => {
-    expect(await value(`async function\nfoo() { return 1 }\nreturn await foo()`)).toBe(1)
-  })
-
-  test("a line break between async and function is not an async function", async () => {
-    const failure = await error(`async\nfunction foo() { return 1 }\nreturn foo()`)
-    expect(failure.message).toContain("Unknown identifier 'async'")
   })
 })
 

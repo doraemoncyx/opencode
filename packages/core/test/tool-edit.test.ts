@@ -1,6 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
+import iconv from "iconv-lite"
 import { Effect, Layer } from "effect"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { LayerNode } from "@opencode/util/effect/layer-node"
@@ -559,6 +560,127 @@ describe("EditTool", () => {
           Effect.sync(() => {
             expect(overlapContent).toBe("x\na  \n")
             expect(windowsContent).toBe("x\r\n")
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.live("preserves isolated CR line endings for new lines", () =>
+    withTempDir((tmp) => {
+      const edit = makeEditFixture()
+      const target = path.join(tmp.path, "cr.txt")
+      return Effect.promise(() => fs.writeFile(target, "alpha\rbeta\rgamma\r")).pipe(
+        Effect.andThen(
+          withTool(tmp.path, edit, (registry) =>
+            executeTool(registry, call({ path: "cr.txt", oldString: "beta", newString: "beta1\nbeta2" })),
+          ),
+        ),
+        Effect.andThen(Effect.promise(() => fs.readFile(target, "utf8"))),
+        Effect.tap((content) =>
+          Effect.sync(() => {
+            expect(content).toBe("alpha\rbeta1\rbeta2\rgamma\r")
+            expect(content).not.toContain("\n")
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.live("uses the dominant CRLF ending for new lines in mixed files", () =>
+    withTempDir((tmp) => {
+      const edit = makeEditFixture()
+      const target = path.join(tmp.path, "mixed-crlf.txt")
+      return Effect.promise(() => fs.writeFile(target, "alpha\r\nbeta\r\ngamma\n")).pipe(
+        Effect.andThen(
+          withTool(tmp.path, edit, (registry) =>
+            executeTool(
+              registry,
+              call({ path: "mixed-crlf.txt", oldString: "beta", newString: "beta-updated\nextra" }),
+            ),
+          ),
+        ),
+        Effect.andThen(Effect.promise(() => fs.readFile(target, "utf8"))),
+        Effect.tap((content) =>
+          Effect.sync(() => expect(content).toBe("alpha\r\nbeta-updated\r\nextra\r\ngamma\n")),
+        ),
+      )
+    }),
+  )
+
+  it.live("uses the dominant LF ending for new lines in mixed files", () =>
+    withTempDir((tmp) => {
+      const edit = makeEditFixture()
+      const target = path.join(tmp.path, "mixed-lf.txt")
+      return Effect.promise(() => fs.writeFile(target, "alpha\nbeta\ngamma\r\n")).pipe(
+        Effect.andThen(
+          withTool(tmp.path, edit, (registry) =>
+            executeTool(
+              registry,
+              call({ path: "mixed-lf.txt", oldString: "beta", newString: "beta-updated\nextra" }),
+            ),
+          ),
+        ),
+        Effect.andThen(Effect.promise(() => fs.readFile(target, "utf8"))),
+        Effect.tap((content) => Effect.sync(() => expect(content).toBe("alpha\nbeta-updated\nextra\ngamma\r\n"))),
+      )
+    }),
+  )
+
+  it.live("keeps a GBK file in GBK when editing and skips the formatter", () =>
+    withTempDir((tmp) => {
+      const edit = makeEditFixture()
+      const target = path.join(tmp.path, "gbk.txt")
+      let formatted = 0
+      edit.formatFile = (file) =>
+        Effect.promise(async () => {
+          formatted++
+          await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace("value = 2", "value = 9"))
+          return true
+        })
+      return Effect.promise(() => fs.writeFile(target, iconv.encode("// 中文注释\nconst value = 1\n", "gbk"))).pipe(
+        Effect.andThen(
+          withTool(tmp.path, edit, (registry) =>
+            executeTool(
+              registry,
+              call({ path: "gbk.txt", oldString: "const value = 1", newString: "const value = 2" }),
+            ),
+          ),
+        ),
+        Effect.andThen((settled) =>
+          Effect.gen(function* () {
+            expect(settled.status).toBe("completed")
+            expect(formatted).toBe(0)
+            const written = yield* Effect.promise(() => fs.readFile(target))
+            expect(
+              Buffer.from(written).equals(Buffer.from(iconv.encode("// 中文注释\nconst value = 2\n", "gbk"))),
+            ).toBe(true)
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.live("does not transcode a GBK file whose bytes are valid UTF-8", () =>
+    withTempDir((tmp) => {
+      const edit = makeEditFixture()
+      const target = path.join(tmp.path, "lookalike.txt")
+      // 0xC2 0x8F 既是合法 UTF-8（U+008F 控制符）又是 GBK 汉字「聫」，旧启发式会误判为 UTF-8。
+      const original = Buffer.concat([Buffer.from("// note: "), iconv.encode("聫", "gbk"), Buffer.from("\n")])
+      return Effect.promise(() => fs.writeFile(target, original)).pipe(
+        Effect.andThen(
+          withTool(tmp.path, edit, (registry) =>
+            executeTool(
+              registry,
+              call({ path: "lookalike.txt", oldString: "// note: 聫", newString: "// note: 聫\n// 中文" }),
+            ),
+          ),
+        ),
+        Effect.andThen((settled) =>
+          Effect.gen(function* () {
+            expect(settled.status).toBe("completed")
+            const written = yield* Effect.promise(() => fs.readFile(target))
+            expect(Buffer.from(written).equals(Buffer.from(iconv.encode("// note: 聫\n// 中文\n", "gbk")))).toBe(true)
           }),
         ),
       )

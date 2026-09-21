@@ -111,20 +111,9 @@ export class CodeRequiredError extends Schema.TaggedError<CodeRequiredError>()("
 
 export class AuthorizationError extends Schema.TaggedError<AuthorizationError>()("Integration.Authorization", {
   cause: Schema.Defect(),
-}) {
-  override get message() {
-    const cause = this.cause
-    if (cause instanceof Error && cause.message) return cause.message
-    return "Authorization failed"
-  }
-}
-
-export class AttemptNotFoundError extends Schema.TaggedError<AttemptNotFoundError>()("Integration.AttemptNotFound", {
-  integrationID: ID,
-  attemptID: AttemptID,
 }) {}
 
-export type Error = CodeRequiredError | AuthorizationError | AttemptNotFoundError
+export type Error = CodeRequiredError | AuthorizationError
 
 export { Event } from "@opencode/schema/integration"
 
@@ -154,8 +143,6 @@ export type Editor = {
 }
 
 export interface Interface extends State.Transformable<Editor> {
-  /** Revision of integration definitions; credential values remain owned by Credential. */
-  readonly revision: () => number
   /** Registers a scoped transform over the integration registry. */
   /** Returns one integration with its methods and current connections. */
   readonly get: (id: ID) => Effect.Effect<Info | undefined>
@@ -201,13 +188,13 @@ export interface Interface extends State.Transformable<Editor> {
     readonly status: (input: {
       readonly integrationID: ID
       readonly attemptID: AttemptID
-    }) => Effect.Effect<AttemptStatus, AttemptNotFoundError>
+    }) => Effect.Effect<AttemptStatus>
     /** Completes the attempt and stores its credential. */
     readonly complete: (input: {
       readonly integrationID: ID
       readonly attemptID: AttemptID
       readonly code?: string
-    }) => Effect.Effect<void, CodeRequiredError | AuthorizationError | AttemptNotFoundError>
+    }) => Effect.Effect<void, CodeRequiredError | AuthorizationError>
     /** Cancels an attempt and releases its resources. */
     readonly cancel: (input: { readonly integrationID: ID; readonly attemptID: AttemptID }) => Effect.Effect<void>
   }
@@ -220,7 +207,7 @@ export interface Interface extends State.Transformable<Editor> {
     readonly status: (input: {
       readonly integrationID: ID
       readonly attemptID: AttemptID
-    }) => Effect.Effect<CommandAttemptStatus, AttemptNotFoundError>
+    }) => Effect.Effect<CommandAttemptStatus>
     readonly cancel: (input: { readonly integrationID: ID; readonly attemptID: AttemptID }) => Effect.Effect<void>
   }
 }
@@ -661,7 +648,6 @@ const layer = Layer.effect(
     return Service.of({
       transform: state.transform,
       reload: state.reload,
-      revision: state.revision,
       get: Effect.fn("Integration.get")(function* (id) {
         const entry = state.get().integrations.get(id)
         if (!entry) return undefined
@@ -732,7 +718,7 @@ const layer = Layer.effect(
         status: Effect.fn("Integration.oauth.status")(function* (input) {
           const attempt = (yield* SynchronizedRef.get(attempts)).get(input.attemptID)
           if (!attempt || attempt.integrationID !== input.integrationID)
-            return yield* new AttemptNotFoundError(input)
+            return yield* Effect.die(new Error(`OAuth attempt not found: ${input.attemptID}`))
           if (attempt.status === "failed") {
             return { status: attempt.status, message: attempt.message ?? "Authorization failed", time: attempt.time }
           }
@@ -746,7 +732,7 @@ const layer = Layer.effect(
             if (match.authorization.mode === "code" && input.code === undefined) return [match, current]
             return [match, new Map(current).set(input.attemptID, { ...match, completing: true })]
           })
-          if (!attempt) return yield* new AttemptNotFoundError(input)
+          if (!attempt) return yield* Effect.die(new Error(`OAuth attempt not found: ${input.attemptID}`))
           if (attempt.status !== "pending") return
           if (attempt.authorization.mode === "code" && input.code === undefined) {
             return yield* new CodeRequiredError({ attemptID: input.attemptID })
@@ -778,7 +764,7 @@ const layer = Layer.effect(
         status: Effect.fn("Integration.command.status")(function* (input) {
           const attempt = (yield* SynchronizedRef.get(commandAttempts)).get(input.attemptID)
           if (!attempt || attempt.integrationID !== input.integrationID)
-            return yield* new AttemptNotFoundError(input)
+            return yield* Effect.die(new Error(`Command attempt not found: ${input.attemptID}`))
           if (attempt.status === "pending") {
             return {
               status: attempt.status,

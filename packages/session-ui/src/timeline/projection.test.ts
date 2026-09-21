@@ -6,7 +6,15 @@ import type {
   SessionMessageInfo,
 } from "@opencode/client/promise"
 import { createStore } from "solid-js/store"
-import { createTimelineProjection, reuseTimelineRows, Timeline, TimelineRow, type PartGroup } from "./projection"
+import {
+  createTimelineProjection,
+  reasoningLabel,
+  reasoningSnippet,
+  reuseTimelineRows,
+  Timeline,
+  TimelineRow,
+  type PartGroup,
+} from "./projection"
 
 const context = (key: string, partIDs: string[], identity: { userMessageID?: string; messageID?: string } = {}) =>
   new TimelineRow.AssistantPart({
@@ -317,5 +325,28 @@ describe("createTimelineProjection", () => {
       "assistant-1",
       "assistant-2",
     ])
+  })
+})
+
+describe("reasoning headers", () => {
+  test("keeps the model's summary title as the label", () => {
+    expect(reasoningLabel("**Inspecting the reducer**\n\nLooking at how rows merge.")).toBe("Inspecting the reducer")
+  })
+
+  test("reads markdown headings and falls back to the first line", () => {
+    expect(reasoningLabel("## Mapping dependencies\n\nThen check imports.")).toBe("Mapping dependencies")
+    expect(reasoningLabel("Check the imports first.\nThen the callers.")).toBe("Check the imports first.")
+    expect(reasoningLabel("   ")).toBeUndefined()
+  })
+
+  test("previews body lines once the heading block is removed", () => {
+    expect(reasoningSnippet("**Inspecting the reducer**\n\nFirst line.\nSecond line.\nThird line.\nFourth line.")).toEqual(
+      ["First line.", "Second line.", "Third line."],
+    )
+    expect(reasoningSnippet("First line.\nSecond line.", 1)).toEqual(["First line."])
+  })
+
+  test("strips list and heading markers from preview lines", () => {
+    expect(reasoningSnippet("# Heading\n- alpha\n1. beta")).toEqual(["Heading", "alpha", "1. beta"])
   })
 })

@@ -46,11 +46,6 @@ type Waiter = {
 
 export type AcpProcess = {
   readonly request: <T>(method: string, params?: unknown) => Promise<JsonRpcResponse<T>>
-  readonly send: <T>(
-    method: string,
-    params?: unknown,
-  ) => { readonly id: number; readonly response: Promise<JsonRpcResponse<T>> }
-  readonly notify: (method: string, params: unknown) => Promise<void>
   readonly waitForNotification: <T>(
     method: string,
     predicate: (params: T) => boolean,
@@ -69,13 +64,10 @@ description: Verifier compatibility skill.
 # Verifier Skill
 `
 
-export async function createAcpFixture(
-  options: { readonly skill?: string; readonly respond?: (request: unknown) => string | Promise<string> } = {},
-) {
+export async function createAcpFixture(options: { readonly skill?: string } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-cli-acp-"))
   const home = path.join(root, "workspace")
   const config = path.join(root, "config")
-  const models = path.join(root, "models.json")
   const skills = path.join(root, "skills")
   await Promise.all([fs.mkdir(home, { recursive: true }), fs.mkdir(config, { recursive: true })])
   if (options.skill) {
@@ -91,9 +83,8 @@ export async function createAcpFixture(
       if (request.method !== "POST" || new URL(request.url).pathname !== "/v1/chat/completions") {
         return new Response("Not found", { status: 404 })
       }
-      const body: unknown = await request.json().catch(() => undefined)
-      requests.push(body)
-      return new Response(completion(await (options.respond?.(body) ?? "accepted")), {
+      requests.push(await request.json().catch(() => undefined))
+      return new Response(completion("accepted"), {
         headers: { "content-type": "text/event-stream" },
       })
     },
@@ -102,7 +93,6 @@ export async function createAcpFixture(
     path.join(config, "opencode.json"),
     JSON.stringify(verifierConfig(`http://127.0.0.1:${llm.port}/v1`, options.skill ? skills : undefined)),
   )
-  await Bun.write(models, "{}")
 
   const processes = new Set<AcpProcess>()
   return {
@@ -116,7 +106,7 @@ export async function createAcpFixture(
           OPENCODE_CONFIG: undefined,
           OPENCODE_CONFIG_CONTENT: undefined,
           OPENCODE_DISABLE_AUTOUPDATE: "true",
-          OPENCODE_MODELS_PATH: models,
+          OPENCODE_MODELS_PATH: undefined,
           ...extraEnv,
         }),
       })
@@ -302,28 +292,18 @@ function spawnAcp(input: { readonly env: Record<string, string | undefined> }): 
     })
   }
 
-  const write = async (message: JsonRpcRequest | JsonRpcNotification<unknown>) => {
-    if (inputClosed) throw new Error("ACP stdin is closed")
-    await child.stdin.write(encoder.encode(`${JSON.stringify(message)}\n`))
-    await child.stdin.flush()
-  }
-
-  const send = <T>(method: string, params?: unknown) => {
-    const id = nextID++
-    const request: JsonRpcRequest =
-      params === undefined ? { jsonrpc: "2.0", id, method } : { jsonrpc: "2.0", id, method, params }
-    const response = write(request).then(async () => {
+  return {
+    async request<T>(method: string, params?: unknown) {
+      if (inputClosed) throw new Error("ACP stdin is closed")
+      const id = nextID++
+      const request: JsonRpcRequest =
+        params === undefined ? { jsonrpc: "2.0", id, method } : { jsonrpc: "2.0", id, method, params }
+      await child.stdin.write(encoder.encode(`${JSON.stringify(request)}\n`))
+      await child.stdin.flush()
       const response = await take((message) => isResponse(message) && message.id === id, 20_000, `${method} response`)
       if (!isResponse<T>(response)) throw new Error(`Invalid ACP response: ${JSON.stringify(response)}`)
       return response
-    })
-    return { id, response }
-  }
-
-  return {
-    request: <T>(method: string, params?: unknown) => send<T>(method, params).response,
-    send,
-    notify: (method: string, params: unknown) => write({ jsonrpc: "2.0", method, params }),
+    },
     async waitForNotification<T>(method: string, predicate: (params: T) => boolean, timeoutMs = 20_000) {
       const notification = await take(
         (message) => isNotification<T>(message) && message.method === method && predicate(message.params),

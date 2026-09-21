@@ -7,7 +7,6 @@ import { HttpTransport } from "./transport/index.js"
 import type { HttpMiddleware, Transport, TransportRuntime, WebSocketChannelExecutor } from "./transport/index.js"
 import type { Protocol } from "./protocol.js"
 import { applyCachePolicy } from "../cache-policy.js"
-import { applyEffortUpdates } from "../effort-updates.js"
 import { normalizeToolHistory } from "../tool-history.js"
 import { sanitizeSurrogates } from "../utils/sanitize.js"
 import * as ProviderShared from "../protocols/shared.js"
@@ -56,7 +55,6 @@ export interface Route<
   readonly transport: Transport<Body, Prepared, unknown>
   readonly defaults: RouteDefaults
   readonly body: RouteBody<Body>
-  readonly supportsEffortUpdates?: (request: LLMRequest) => boolean
   readonly with: {
     <Next extends CompactionOperations | undefined>(
       patch: RoutePatch<Body, Prepared> & { readonly compact: Next },
@@ -364,11 +362,16 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
   const decodeEvent = (route: string) => (frame: Frame) =>
     decodeEventEffect(frame).pipe(
       Effect.mapError((cause) =>
+        // A frame that cannot be decoded means the byte stream did not arrive
+        // intact. Classify it separately from a cleanly-terminated stream so the
+        // runner can retry it (and continue a partial response) without treating
+        // it as a terminal provider failure.
         ProviderShared.eventError(
           input.id,
           `Invalid ${route} stream event`,
           typeof frame === "string" ? frame : ProviderShared.encodeJson(frame),
           cause,
+          "invalid-frame",
         ),
       ),
     )
@@ -390,7 +393,6 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
       transport: routeInput.transport,
       defaults: routeInput.defaults ?? {},
       body: protocol.body,
-      supportsEffortUpdates: protocol.supportsEffortUpdates,
       with: (patch: RoutePatch<Body, Prepared>) => {
         const { compact, id, provider, providerMetadataKey, auth, transport, endpoint, ...defaults } = patch
         return build({
@@ -561,9 +563,7 @@ const prepareRequest = (request: LLMRequest) => {
     [...new Map(tools.map((tool) => [`${tool.type}:${tool.name}`, tool])).values()].map((tool) =>
       tool.type === "tool" ? tool : { ...tool, tools: dedupe(tool.tools) },
     )
-  const resolved = applyCachePolicy(
-    applyEffortUpdates(LLMRequest.update(sanitized, { tools: dedupe(sanitized.tools) })),
-  )
+  const resolved = applyCachePolicy(LLMRequest.update(sanitized, { tools: dedupe(sanitized.tools) }))
   const headers = resolved.model.route.headers?.({ request: resolved })
   return headers === undefined
     ? resolved

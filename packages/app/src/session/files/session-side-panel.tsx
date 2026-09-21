@@ -595,10 +595,7 @@ export function SessionSidePanel(props: {
                           classList={{ hidden: !isSessionBrowserTab(activeTab()) }}
                           inert={!isSessionBrowserTab(activeTab()) || undefined}
                         >
-                          <SessionBrowserPane
-                            browser={props.browser}
-                            visible={reviewOpen() && isSessionBrowserTab(activeTab())}
-                          />
+                          <SessionBrowserPane browser={props.browser} visible={isSessionBrowserTab(activeTab())} />
                         </div>
                       </Show>
 

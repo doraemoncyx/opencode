@@ -5,12 +5,11 @@ import { createSimpleContext } from "@opencode/ui/context"
 import { showToast } from "@/shell/notifications/toast"
 import { useParams } from "@solidjs/router"
 import { base64Encode } from "@opencode/util/encode"
-import { getDirectory, getFilename } from "@opencode/util/path"
+import { getFilename } from "@opencode/util/path"
 import { useWorkspaceLocation } from "@/workspaces/location"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useLayout } from "@/shell/state/layout"
 import { createPathHelpers } from "./path"
-import { fileContentFromBytes } from "./artifact"
 import {
   approxBytes,
   evictContentLru,
@@ -78,7 +77,7 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
         serverSDK.api.file.list({ path: dir, location: { directory: scope() } }).then((x) =>
           x.data.map((entry) => ({
             ...entry,
-            name: getFilename(entry.path),
+            name: entry.path.split("/").at(-1) ?? entry.path,
             absolute: `${scope()}/${entry.path}`,
             ignored: false,
           })),
@@ -186,17 +185,14 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
 
       setLoading(file)
 
-      // Files outside the workspace are read from their own directory, like markdown images.
-      // The trailing separator from getDirectory keeps "/" and "C:/" valid, like readLocalImage.
-      const request = path.absolute(file)
-        ? { path: getFilename(file), location: { directory: getDirectory(file) } }
-        : { path: file, location: { directory } }
       const promise = serverSDK.api.file
-        .read(request)
+        .read({ path: file, location: { directory } })
         .then((data) => {
           if (scope() !== directory) return
-          const content = fileContentFromBytes(file, data)
+          const content = { type: "text" as const, content: new TextDecoder().decode(data) }
           setLoaded(file, content)
+
+          if (!content) return
           touchFileContent(file, approxBytes(content))
           evictContent(new Set([file]))
         })
@@ -285,7 +281,6 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
     return {
       ready: () => view().ready(),
       normalize: path.normalize,
-      absolute: path.absolute,
       tab: path.tab,
       pathFromTab: path.pathFromTab,
       tree: {

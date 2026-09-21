@@ -92,7 +92,6 @@ describe("Session.diff", () => {
               agent: Agent.defaultID,
               model: { id: Model.ID.make("test-model"), providerID: Provider.ID.make("test-provider") },
               snapshot: before,
-              started: 0,
             })
             yield* Effect.promise(edit)
             if (end === "running") return assistantMessageID
@@ -187,7 +186,7 @@ describe("Session.diff", () => {
           expect(yield* diff({ from: steer }).pipe(Effect.flip)).toMatchObject({
             _tag: "Session.MessageNotFoundError",
           })
-          const forked = yield* sessions.fork({ sessionID: created.id })
+          const forked = yield* sessions.fork({ sessionID: created.id, boundary: { type: "through" } })
           expect((yield* sessions.diff({ sessionID: forked.id, context: 0 })).map(summarize)).toEqual([
             ["third.txt", "added", 1, 0],
           ])

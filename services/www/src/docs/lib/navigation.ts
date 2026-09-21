@@ -25,8 +25,6 @@ export const docsSections: DocsSection[] = [
         items: [
           { title: "Intro", slug: "index" },
           { title: "Config", slug: "config" },
-          { title: "Migrate from V1", slug: "migrate-v1" },
-          { title: "Troubleshooting", slug: "troubleshooting" },
         ],
       },
       {
@@ -54,6 +52,12 @@ export const docsSections: DocsSection[] = [
           { title: "Warming", slug: "warming" },
         ],
       },
+      {
+        items: [
+          { title: "Migrate from V1", slug: "migrate-v1" },
+          { title: "Troubleshooting", slug: "troubleshooting" },
+        ],
+      },
     ],
   },
   {
@@ -65,7 +69,7 @@ export const docsSections: DocsSection[] = [
         items: [
           { title: "Intro", slug: "cli" },
           { title: "TUI", slug: "cli/tui" },
-          { title: "Settings", slug: "cli/config" },
+          { title: "Config", slug: "cli/config" },
           { title: "Web", slug: "cli/web" },
           { title: "Providers", slug: "cli/providers" },
           { title: "Commands", slug: "cli/commands" },

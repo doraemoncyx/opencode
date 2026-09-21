@@ -14,6 +14,7 @@ describe("SessionError", () => {
       { type: "provider.auth", message: "Authentication failed" },
       { type: "provider.future-condition", message: "A future provider failure" },
       { type: "unknown", message: "Unexpected" },
+      { type: "provider.invalid-output", message: "Bad frame", status: 200, body: "data: not-json" },
     ]
     const codec = Schema.fromJsonString(SessionError.Error)
 

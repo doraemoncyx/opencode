@@ -316,34 +316,17 @@ export const layer = Layer.effect(
               return HttpClientResponse.fromWeb(sent, after.response)
             }).pipe(Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))))
         : undefined
-      // HTTP hooks wrap every HTTP request, including the WebSocket fallback path. The route decides
-      // which transport actually carries the request, so both hook families are always offered.
+      // HTTP hooks must observe every request, so they keep the provider on HTTP.
       const webSocket =
-        input.webSocket === "session" && model.transport === "websocket"
-          ? transport.bind(session.id, {
-              handshake: (connect) =>
-                hooks
-                  .trigger("session", "experimental.ws.handshake", {
-                    ...scope,
-                    url: connect.url,
-                    headers: connect.headers,
-                  })
-                  .pipe(Effect.map((event) => ({ url: event.url, headers: event.headers }))),
-              send: (frame) =>
-                hooks
-                  .trigger("session", "experimental.ws.send", { ...scope, frame })
-                  .pipe(Effect.map((event) => event.frame)),
-              receive: (frame) =>
-                hooks
-                  .trigger("session", "experimental.ws.receive", { ...scope, frame })
-                  .pipe(Effect.map((event) => event.frame)),
-            })
-          : undefined
+        input.webSocket === "session" &&
+        !hasHttpHooks &&
+        model.capabilities.responsesWebsockets === true &&
+        model.websocket
 
       return {
         event: shaped,
         request,
-        options: { ...(http ? { http } : {}), ...(webSocket ? { webSocket } : {}) },
+        options: { ...(http ? { http } : {}), ...(webSocket ? { webSocket: transport.bind(session.id) } : {}) },
         retry: (event: Parameters<Prepared["retry"]>[0]) =>
           hooks.trigger("session", "retry", event).pipe(Effect.asVoid),
         // Permission.assert and the question tool throw declines as defects so tools cannot

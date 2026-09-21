@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { ConfigProvider, Effect, Layer, Logger, Ref, Schema, Stream } from "effect"
+import { ConfigProvider, Effect, Layer, Ref, Schema, Stream } from "effect"
 import { Headers, HttpClientRequest } from "effect/unstable/http"
 import {
   LLM,
@@ -141,7 +141,7 @@ describe("OpenAI Responses route", () => {
 
       expect(prepared.body).toEqual({
         model: "gpt-4.1-mini",
-        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Say hello." }] }],
+        input: [{ role: "user", content: [{ type: "input_text", text: "Say hello." }] }],
         instructions: "You are concise.",
         store: false,
         include: ["reasoning.encrypted_content"],
@@ -409,8 +409,8 @@ describe("OpenAI Responses route", () => {
       )
 
       expect(prepared.body.input).toEqual([
-        { type: "message", role: "user", content: [{ type: "input_text", text: "Before." }] },
-        { type: "message", role: "developer", content: "Operator update." },
+        { role: "user", content: [{ type: "input_text", text: "Before." }] },
+        { role: "developer", content: "Operator update." },
         { type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "After." }] },
       ])
     }),
@@ -504,7 +504,7 @@ describe("OpenAI Responses route", () => {
       expect(JSON.parse(sent[0])).toEqual({
         type: "response.create",
         model: "gpt-4.1-mini",
-        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Say hello." }] }],
+        input: [{ role: "user", content: [{ type: "input_text", text: "Say hello." }] }],
         store: false,
         include: ["reasoning.encrypted_content"],
       })
@@ -592,7 +592,7 @@ describe("OpenAI Responses route", () => {
           type: "response.create",
           model: "gpt-5.2",
           store: false,
-          input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Weather?" }] }],
+          input: [{ role: "user", content: [{ type: "input_text", text: "Weather?" }] }],
         }
         const first = continuationDriver(firstRequest)
         const firstCreate = yield* first.create(undefined)
@@ -642,7 +642,7 @@ describe("OpenAI Responses route", () => {
         type: "response.create",
         model: "gpt-5.2",
         store: false,
-        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Weather?" }] }],
+        input: [{ role: "user", content: [{ type: "input_text", text: "Weather?" }] }],
       }
       const first = continuationDriver(firstRequest)
       const firstCreate = yield* first.create(undefined)
@@ -689,7 +689,7 @@ describe("OpenAI Responses route", () => {
   it.effect("continues a promoted steer after assistant output with response-only text metadata", () =>
     Effect.forEach([undefined, []], (output) =>
       Effect.gen(function* () {
-        const firstInput = [{ type: "message", role: "user", content: [{ type: "input_text", text: "First" }] }]
+        const firstInput = [{ role: "user", content: [{ type: "input_text", text: "First" }] }]
         const first = continuationDriver({ type: "response.create", model: "gpt-5.2", store: false, input: firstInput })
         const create = yield* first.create(undefined)
         yield* first.observe(
@@ -711,7 +711,7 @@ describe("OpenAI Responses route", () => {
             ProviderShared.encodeJson({ type: "response.completed", response: { id: "resp_1", output } }),
           ),
         )
-        const steer = { type: "message", role: "user", content: [{ type: "input_text", text: "Actually, be brief" }] }
+        const steer = { role: "user", content: [{ type: "input_text", text: "Actually, be brief" }] }
         const next = continuationDriver({
           type: "response.create",
           model: "gpt-5.2",
@@ -732,7 +732,7 @@ describe("OpenAI Responses route", () => {
 
   it.effect("continues streamed reasoning when completion re-encrypts the same item", () =>
     Effect.gen(function* () {
-      const firstInput = [{ type: "message", role: "user", content: [{ type: "input_text", text: "Think" }] }]
+      const firstInput = [{ role: "user", content: [{ type: "input_text", text: "Think" }] }]
       const request = { type: "response.create", model: "gpt-5.2", store: false, input: firstInput }
       const reasoning = {
         type: "reasoning",
@@ -760,11 +760,7 @@ describe("OpenAI Responses route", () => {
       )
       const next = continuationDriver({
         ...request,
-        input: [
-          ...firstInput,
-          reasoning,
-          { type: "message", role: "user", content: [{ type: "input_text", text: "Continue" }] },
-        ],
+        input: [...firstInput, reasoning, { role: "user", content: [{ type: "input_text", text: "Continue" }] }],
       })
 
       const continued = yield* next.create(saved)
@@ -772,7 +768,7 @@ describe("OpenAI Responses route", () => {
       expect(continued.mode).toBe("incremental")
       expect(ProviderShared.decodeJson(continued.message)).toMatchObject({
         previous_response_id: "resp_1",
-        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Continue" }] }],
+        input: [{ role: "user", content: [{ type: "input_text", text: "Continue" }] }],
       })
       const edited = yield* continuationDriver({
         ...request,
@@ -789,7 +785,7 @@ describe("OpenAI Responses route", () => {
         model: "gpt-5.2",
         store: false,
         metadata: { source: "one" },
-        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "First" }] }],
+        input: [{ role: "user", content: [{ type: "input_text", text: "First" }] }],
       }
       const first = continuationDriver(request)
       const create = yield* first.create(undefined)
@@ -799,10 +795,7 @@ describe("OpenAI Responses route", () => {
           ProviderShared.encodeJson({ type: "response.completed", response: { id: "resp_1" } }),
         ),
       )
-      const appended = [
-        ...request.input,
-        { type: "message", role: "user", content: [{ type: "input_text", text: "Second" }] },
-      ]
+      const appended = [...request.input, { role: "user", content: [{ type: "input_text", text: "Second" }] }]
       const changes = [
         { ...request, model: "gpt-5.3", input: appended },
         { ...request, instructions: "Changed", input: appended },
@@ -811,10 +804,7 @@ describe("OpenAI Responses route", () => {
         { ...request, metadata: { source: "two" }, input: appended },
         {
           ...request,
-          input: [
-            { type: "message", role: "user", content: [{ type: "input_text", text: "Rewritten history" }] },
-            appended[1],
-          ],
+          input: [{ role: "user", content: [{ type: "input_text", text: "Rewritten history" }] }, appended[1]],
         },
       ]
 
@@ -898,7 +888,7 @@ describe("OpenAI Responses route", () => {
         type: "response.create",
         model: "gpt-5.2",
         store: false,
-        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "First" }] }],
+        input: [{ role: "user", content: [{ type: "input_text", text: "First" }] }],
       }
       const first = continuationDriver(firstRequest, classifyingChannelDriver)
       const saved = checkpoint(
@@ -910,10 +900,7 @@ describe("OpenAI Responses route", () => {
       const second = continuationDriver(
         {
           ...firstRequest,
-          input: [
-            ...firstRequest.input,
-            { type: "message", role: "user", content: [{ type: "input_text", text: "Second" }] },
-          ],
+          input: [...firstRequest.input, { role: "user", content: [{ type: "input_text", text: "Second" }] }],
         },
         classifyingChannelDriver,
       )
@@ -960,14 +947,11 @@ describe("OpenAI Responses route", () => {
         model: "grok-4.6",
         store: true,
         instructions: "You are terse.",
-        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "First" }] }],
+        input: [{ role: "user", content: [{ type: "input_text", text: "First" }] }],
       }
       const secondRequest = {
         ...firstRequest,
-        input: [
-          ...firstRequest.input,
-          { type: "message", role: "user", content: [{ type: "input_text", text: "Second" }] },
-        ],
+        input: [...firstRequest.input, { role: "user", content: [{ type: "input_text", text: "Second" }] }],
       }
       const saved = checkpoint(
         yield* continuationDriver(firstRequest).observe(
@@ -987,7 +971,7 @@ describe("OpenAI Responses route", () => {
         model: "grok-4.6",
         store: true,
         previous_response_id: "resp_1",
-        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Second" }] }],
+        input: [{ role: "user", content: [{ type: "input_text", text: "Second" }] }],
       })
 
       // Declining the continuation sends the step in full and never sends a previous_response_id.
@@ -1098,9 +1082,7 @@ describe("OpenAI Responses route", () => {
       )
 
       const expected = {
-        input: [
-          { type: "message", role: "user", content: [{ type: "input_text", text: "Say \uFFFDhello \u{1F600}." }] },
-        ],
+        input: [{ role: "user", content: [{ type: "input_text", text: "Say \uFFFDhello \u{1F600}." }] }],
         metadata: { source: "overlay\uFFFD" },
       }
       expect(JSON.parse(yield* Ref.get(message))).toMatchObject(expected)
@@ -1142,9 +1124,7 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  // Azure's WebSocket upgrade accepts the same credential header as HTTP: `api-key` for keys,
-  // `Authorization: Bearer` for Entra tokens. Rewriting a key into a bearer is rejected.
-  it.effect("builds Azure WebSocket requests with v1 URLs and the route's auth header", () =>
+  it.effect("builds Azure WebSocket requests with v1 URLs and bearer auth", () =>
     Effect.gen(function* () {
       const deps = Layer.succeed(
         RequestExecutor.Service,
@@ -1153,13 +1133,13 @@ describe("OpenAI Responses route", () => {
       const cases = [
         {
           model: Azure.configure({ resourceName: "opencode-test", apiKey: "azure-key" }).responses("deployment"),
-          headers: { "api-key": "azure-key", authorization: undefined },
+          authorization: "Bearer azure-key",
         },
         {
           model: Azure.configure({ resourceName: "opencode-test", auth: Auth.bearer("entra-token") }).responses(
             "deployment",
           ),
-          headers: { "api-key": undefined, authorization: "Bearer entra-token" },
+          authorization: "Bearer entra-token",
         },
       ]
 
@@ -1170,8 +1150,8 @@ describe("OpenAI Responses route", () => {
               Effect.gen(function* () {
                 expect(exchange.connect.url).toBe("wss://opencode-test.openai.azure.com/openai/v1/responses")
                 expect(exchange.connect.rotateAfterMs).toBe(55 * 60 * 1000)
-                expect(exchange.connect.headers.authorization).toBe(item.headers.authorization)
-                expect(exchange.connect.headers["api-key"]).toBe(item.headers["api-key"])
+                expect(exchange.connect.headers.authorization).toBe(item.authorization)
+                expect(exchange.connect.headers["api-key"]).toBeUndefined()
                 expect(exchange.connect.headers["openai-beta"]).toBeUndefined()
                 expect(JSON.parse((yield* exchange.driver.create(undefined)).message)).toMatchObject({
                   type: "response.create",
@@ -1219,11 +1199,6 @@ describe("OpenAI Responses route", () => {
         },
       ]
 
-      const warnings: string[] = []
-      const logger = Logger.make((entry) => {
-        if (entry.logLevel !== "Warn") return
-        warnings.push(String(Array.isArray(entry.message) ? entry.message[0] : entry.message))
-      })
       yield* Effect.forEach(cases, (item) =>
         LLMClient.generate(LLM.request({ model: item.model, prompt: "Say hello." }), {
           webSocket: { execute: () => Effect.die("unexpected WebSocket request") },
@@ -1239,9 +1214,6 @@ describe("OpenAI Responses route", () => {
             ),
           ),
         ),
-      ).pipe(Effect.provide(Logger.layer([logger])))
-      expect(warnings).toEqual(
-        cases.map(() => "Azure OpenAI Responses does not offer WebSocket for this endpoint; using HTTP"),
       )
     }),
   )
@@ -1541,7 +1513,7 @@ describe("OpenAI Responses route", () => {
       expect(prepared.body).toEqual({
         model: "gpt-4.1-mini",
         input: [
-          { type: "message", role: "user", content: [{ type: "input_text", text: "What is the weather?" }] },
+          { role: "user", content: [{ type: "input_text", text: "What is the weather?" }] },
           { type: "function_call", call_id: "call_1", name: "lookup", arguments: '{"query":"weather"}' },
           { type: "function_call_output", call_id: "call_1", output: '{"forecast":"sunny"}' },
         ],
@@ -1857,7 +1829,6 @@ describe("OpenAI Responses route", () => {
         instructions: "You are concise. Continue from the provided history.",
         input: [
           {
-            type: "message",
             role: "user",
             content: [
               { type: "input_text", text: "What is shown here?" },
@@ -1870,16 +1841,11 @@ describe("OpenAI Responses route", () => {
             summary: [{ type: "summary_text", text: "I inspected the previous turn." }],
           },
           { role: "assistant", content: [{ type: "output_text", text: "It shows a small test image." }] },
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "Check the weather in Paris before continuing." }],
-          },
+          { role: "user", content: [{ type: "input_text", text: "Check the weather in Paris before continuing." }] },
           { type: "function_call", call_id: "call_weather_1", name: "get_weather", arguments: '{"city":"Paris"}' },
           { type: "function_call_output", call_id: "call_weather_1", output: '{"temperature":22}' },
           { role: "assistant", content: [{ type: "output_text", text: "Paris is 22 degrees." }] },
           {
-            type: "message",
             role: "user",
             content: [{ type: "input_text", text: "Continue from this conversation in one short sentence." }],
           },
@@ -1942,30 +1908,6 @@ describe("OpenAI Responses route", () => {
       })
       expect(prepared.body.max_tool_calls).toBe(4)
       expect(prepared.body.parallel_tool_calls).toBe(false)
-    }),
-  )
-
-  it.effect("drops a malformed provider option without discarding its siblings", () =>
-    Effect.gen(function* () {
-      const prepared = yield* compileRequest(
-        LLM.request({
-          model,
-          prompt: "hi",
-          providerOptions: {
-            topLogprobs: 25,
-            metadata: { tenant: 7 },
-            reasoningEffort: "high",
-            serviceTier: "priority",
-            maxToolCalls: 4,
-          },
-        }),
-      )
-
-      expect(prepared.body.top_logprobs).toBeUndefined()
-      expect(prepared.body.metadata).toBeUndefined()
-      expect(prepared.body.reasoning).toEqual({ effort: "high" })
-      expect(prepared.body.service_tier).toBe("priority")
-      expect(prepared.body.max_tool_calls).toBe(4)
     }),
   )
 
@@ -3412,7 +3354,7 @@ describe("OpenAI Responses route", () => {
               const body = yield* Effect.promise(() => web.json())
               expect(body).toMatchObject({
                 input: [
-                  { type: "message", role: "user", content: [{ type: "input_text", text: "What changed?" }] },
+                  { role: "user", content: [{ type: "input_text", text: "What changed?" }] },
                   {
                     type: "reasoning",
                     id: "rs_1",
@@ -3420,7 +3362,7 @@ describe("OpenAI Responses route", () => {
                     summary: [{ type: "summary_text", text: "Checked the previous diff." }],
                   },
                   { role: "assistant", content: [{ type: "output_text", text: "The parser changed." }] },
-                  { type: "message", role: "user", content: [{ type: "input_text", text: "Summarize it." }] },
+                  { role: "user", content: [{ type: "input_text", text: "Summarize it." }] },
                 ],
               })
               return input.respond(
@@ -3545,7 +3487,7 @@ describe("OpenAI Responses route", () => {
 
       expect(prepared.body.input).toEqual([
         item,
-        { type: "message", role: "user", content: [{ type: "input_text", text: "Continue." }] },
+        { role: "user", content: [{ type: "input_text", text: "Continue." }] },
       ])
     }),
   )
@@ -3582,9 +3524,9 @@ describe("OpenAI Responses route", () => {
       )
 
       expect(prepared.body.input).toEqual([
-        { type: "message", role: "user", content: [{ type: "input_text", text: "Search." }] },
+        { role: "user", content: [{ type: "input_text", text: "Search." }] },
         { type: "web_search_call", id: "ws_1", status: "completed" },
-        { type: "message", role: "user", content: [{ type: "input_text", text: "Continue." }] },
+        { role: "user", content: [{ type: "input_text", text: "Continue." }] },
       ])
     }),
   )
@@ -3614,8 +3556,8 @@ describe("OpenAI Responses route", () => {
 
       expect(prepared.body.input).toEqual([
         items[0],
-        { type: "message", role: "user", content: [{ type: "input_text", text: JSON.stringify(items[1]) }] },
-        { type: "message", role: "user", content: [{ type: "input_text", text: JSON.stringify(items[2]) }] },
+        { role: "user", content: [{ type: "input_text", text: JSON.stringify(items[1]) }] },
+        { role: "user", content: [{ type: "input_text", text: JSON.stringify(items[2]) }] },
       ])
     }),
   )
@@ -3652,11 +3594,10 @@ describe("OpenAI Responses route", () => {
 
       expect(prepared.body.input).toEqual([
         {
-          type: "message",
           role: "user",
           content: [{ type: "input_text", text: '{"type":"web_search_call","id":"ws_1","status":"completed"}' }],
         },
-        { type: "message", role: "user", content: [{ type: "input_text", text: "Continue." }] },
+        { role: "user", content: [{ type: "input_text", text: "Continue." }] },
       ])
     }),
   )
@@ -3683,7 +3624,6 @@ describe("OpenAI Responses route", () => {
 
       expect(prepared.body.input).toEqual([
         {
-          type: "message",
           role: "user",
           content: [{ type: "input_text", text: '{"type":"web_search_call","id":"ws_other","status":"completed"}' }],
         },
@@ -3820,7 +3760,6 @@ describe("OpenAI Responses route", () => {
       expect(prepared.body.input).toEqual([
         { type: "web_search_call", id: "ws_1", status: "completed" },
         {
-          type: "message",
           role: "user",
           content: [{ type: "input_text", text: '{"type":"web_search_call","id":"bad ref","status":"completed"}' }],
         },
@@ -3863,9 +3802,9 @@ describe("OpenAI Responses route", () => {
 
       expect(prepared.body.store).toBe(false)
       expect(prepared.body.input).toEqual([
-        { type: "message", role: "user", content: [{ type: "input_text", text: "Generate a black triangle." }] },
-        { type: "message", role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AQID" }] },
-        { type: "message", role: "user", content: [{ type: "input_text", text: "Make it blue." }] },
+        { role: "user", content: [{ type: "input_text", text: "Generate a black triangle." }] },
+        { role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AQID" }] },
+        { role: "user", content: [{ type: "input_text", text: "Make it blue." }] },
       ])
     }),
   )
@@ -3902,7 +3841,7 @@ describe("OpenAI Responses route", () => {
       )
 
       expect(prepared.body.input).toEqual([
-        { type: "message", role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AQID" }] },
+        { role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AQID" }] },
       ])
     }),
   )
@@ -3974,7 +3913,7 @@ describe("OpenAI Responses route", () => {
 
       expect(prepared.body).toMatchObject({
         input: [
-          { type: "message", role: "user", content: [{ type: "input_text", text: "What changed?" }] },
+          { role: "user", content: [{ type: "input_text", text: "What changed?" }] },
           {
             type: "reasoning",
             id: "rs_1",
@@ -3982,7 +3921,7 @@ describe("OpenAI Responses route", () => {
             encrypted_content: null,
           },
           { role: "assistant", content: [{ type: "output_text", text: "The parser changed." }] },
-          { type: "message", role: "user", content: [{ type: "input_text", text: "Summarize it." }] },
+          { role: "user", content: [{ type: "input_text", text: "Summarize it." }] },
         ],
         store: false,
       })
@@ -4655,20 +4594,8 @@ describe("OpenAI Responses route", () => {
         compileRequest(LLM.request({ model, messages: [response.message], providerOptions: { store } })),
       )
       expect(prepared.map((request) => request.body.input)).toEqual([
-        [
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_image", image_url: "data:image/png;base64,AQID" }],
-          },
-        ],
-        [
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_image", image_url: "data:image/png;base64,AQID" }],
-          },
-        ],
+        [{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AQID" }] }],
+        [{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AQID" }] }],
       ])
     }),
   )
@@ -4702,7 +4629,6 @@ describe("OpenAI Responses route", () => {
       )
       expect(prepared.body.input).toEqual([
         {
-          type: "message",
           role: "user",
           content: [{ type: "input_text", text: '{"code":"search_failed","message":"Search unavailable"}' }],
         },
@@ -4786,7 +4712,6 @@ describe("OpenAI Responses route", () => {
 
       expect(prepared.body.input).toEqual([
         {
-          type: "message",
           role: "user",
           content: [
             { type: "input_image", image_url: "data:image/png;base64,AAECAw==" },
@@ -4819,7 +4744,6 @@ describe("OpenAI Responses route", () => {
 
       expect(prepared.body.input).toEqual([
         {
-          type: "message",
           role: "user",
           content: [
             {
@@ -4845,7 +4769,6 @@ describe("OpenAI Responses route", () => {
 
       expect(prepared.body.input).toEqual([
         {
-          type: "message",
           role: "user",
           content: [
             {
@@ -4880,7 +4803,6 @@ describe("OpenAI Responses route", () => {
 
       expect(prepared.body.input).toEqual([
         {
-          type: "message",
           role: "user",
           content: [
             { type: "input_image", image_url: "https://example.com/image.png" },

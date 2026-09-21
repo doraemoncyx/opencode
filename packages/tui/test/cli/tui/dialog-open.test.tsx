@@ -262,8 +262,7 @@ test("loads Git worktrees only when drilling into a project or its associated di
           project: { id: "proj_git", directory: current, canonical: root },
         })
       if (url.pathname !== "/api/worktree") return undefined
-      expect(url.searchParams.get("projectID")).toBe("proj_git")
-      expect(url.searchParams.has("location[directory]")).toBe(false)
+      expect(url.searchParams.get("location[directory]")).toBe(root)
       requests++
       return json([{ directory: other, strategy: "git" }, { directory: root }, { directory: current, strategy: "git" }])
     },
@@ -377,9 +376,9 @@ test("does not show the previous project's worktrees while loading another proje
         })),
       )
     if (url.pathname !== "/api/worktree") return undefined
-    if (url.searchParams.get("projectID") === "proj_Alpha")
+    if (url.searchParams.get("location[directory]") === "/tmp/opencode/Alpha")
       return json([{ directory: "/tmp/opencode/alpha-checkout", strategy: "git" }])
-    return pending.promise.then((response) => response.clone())
+    return pending.promise
   })
   try {
     await fixture.app.waitForFrame((frame) => frame.includes("Alpha") && frame.includes("Beta"))
@@ -407,7 +406,7 @@ test("does not show the previous project's worktrees while loading another proje
   }
 })
 
-test.each(["", "search-ui"])("creates a worktree named '%s' by project and opens its local directory", async (name) => {
+test.each(["", "search-ui"])("creates a worktree named '%s' and opens it", async (name) => {
   const projectID = "proj_git_create"
   const root = path.resolve("/tmp/opencode/project")
   const created = path.resolve("/tmp/opencode/created-branch")
@@ -428,12 +427,8 @@ test.each(["", "search-ui"])("creates a worktree named '%s' by project and opens
       if (url.pathname === "/api/location")
         return json({ directory: root, project: { id: projectID, directory: root, canonical: root } })
       if (url.pathname !== "/api/worktree") return undefined
-      expect(url.searchParams.has("location[directory]")).toBe(false)
-      expect(url.searchParams.has("location[workspace]")).toBe(false)
-      if (request.method === "GET") {
-        expect(url.searchParams.get("projectID")).toBe(projectID)
-        return json([{ directory: root }])
-      }
+      expect(url.searchParams.get("location[directory]")).toBe(root)
+      if (request.method === "GET") return json([{ directory: root }])
       payload = await request.json()
       return json({ directory: created })
     },
@@ -476,7 +471,7 @@ test.each(["", "search-ui"])("creates a worktree named '%s' by project and opens
     fixture.app.mockInput.pressEnter()
     await fixture.app.waitFor(() => fixture.route.data.type === "home")
 
-    expect(payload).toEqual({ projectID, ...(name ? { name } : {}) })
+    expect(payload).toEqual(name ? { name } : {})
     expect(fixture.route.data).toEqual({ type: "home", location: { directory: created } })
     expect(fixture.location.ref).toEqual({ directory: created })
   } finally {

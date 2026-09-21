@@ -43,7 +43,7 @@ function emitEvent(events: ReturnType<typeof createEventStream>, event: OpenCode
   events.emit({ ...event, location: { directory } })
 }
 
-const config = createTuiResolvedConfig({}, { terminal: false })
+const config = createTuiResolvedConfig({ session: { terminal: false } })
 
 function DataProvider(props: ParentProps) {
   return (
@@ -510,7 +510,6 @@ test("truncates committed revert messages without changing lifetime usage", asyn
       type: "session.step.started",
       durable: durable(sessionID, 1),
       data: {
-        started: 1,
         sessionID,
         assistantMessageID: "msg_revert_boundary",
         agent: "build",
@@ -546,7 +545,6 @@ test("truncates committed revert messages without changing lifetime usage", asyn
       type: "session.step.started",
       durable: durable(sessionID, 3),
       data: {
-        started: 3,
         sessionID,
         assistantMessageID: "msg_revert_later",
         agent: "build",
@@ -884,7 +882,6 @@ test("completes exploration when a queued prompt is promoted", async () => {
       type: "session.step.started",
       durable: durable(sessionID),
       data: {
-        started: 1,
         sessionID,
         assistantMessageID: "message-assistant",
         agent: "build",
@@ -1278,7 +1275,6 @@ test("tracks session status from active sessions and execution events", async ()
       type: "session.step.started",
       durable: durable("session-live"),
       data: {
-        started: 0,
         sessionID: "session-live",
         assistantMessageID: "message-live",
         agent: "build",
@@ -1344,7 +1340,6 @@ test("tracks session status from active sessions and execution events", async ()
       type: "session.step.started",
       durable: durable("session-failed"),
       data: {
-        started: 0,
         sessionID: "session-failed",
         assistantMessageID: "message-failed",
         agent: "build",
@@ -1416,7 +1411,6 @@ test("tracks session status from active sessions and execution events", async ()
       type: "session.step.started",
       durable: durable("session-retry", 1),
       data: {
-        started: 0,
         sessionID: "session-retry",
         assistantMessageID: "message-retry",
         agent: "build",
@@ -1447,7 +1441,6 @@ test("tracks session status from active sessions and execution events", async ()
       type: "session.step.started",
       durable: durable("session-retry", 1),
       data: {
-        started: 2_000,
         sessionID: "session-retry",
         assistantMessageID: "message-retry",
         agent: "build",
@@ -1676,7 +1669,7 @@ test("restores queued compaction from durable pending input", async () => {
     {
       id: "message-compaction-queued",
       sessionID,
-      time: { created: 1 },
+      timeCreated: 1,
       type: "compaction" as const,
       payload: {},
       delivery: "queue" as const,
@@ -1684,7 +1677,7 @@ test("restores queued compaction from durable pending input", async () => {
     {
       id: "message-compaction-later",
       sessionID,
-      time: { created: 2 },
+      timeCreated: 2,
       type: "compaction" as const,
       payload: {},
       delivery: "queue" as const,
@@ -1736,7 +1729,6 @@ test("restores queued compaction from durable pending input", async () => {
       type: "session.step.started",
       durable: durable(sessionID, 3),
       data: {
-        started: 2,
         sessionID,
         assistantMessageID: "message-assistant",
         agent: "build",
@@ -1944,7 +1936,7 @@ test("refreshes MCP resources after catalog updates", async () => {
   }
 })
 
-test("refreshes provider and model data independently after domain updates", async () => {
+test("refreshes effective catalog data after catalog updates", async () => {
   const events = createEventStream()
   const requests = { model: 0, provider: 0 }
   const calls = createFetch((url) => {
@@ -1973,13 +1965,8 @@ test("refreshes provider and model data independently after domain updates", asy
   try {
     await wait(() => requests.model > 0 && requests.provider > 0)
     const before = { ...requests }
-    emitEvent(events, { id: "evt_provider", created: 0, type: "provider.updated", data: {} })
-    await wait(() => requests.provider > before.provider)
-    expect(requests).toEqual({ model: before.model, provider: before.provider + 1 })
-
-    emitEvent(events, { id: "evt_model", created: 0, type: "model.updated", data: {} })
-    await wait(() => requests.model > before.model)
-    expect(requests).toEqual({ model: before.model + 1, provider: before.provider + 1 })
+    emitEvent(events, { id: "evt_catalog", created: 0, type: "catalog.updated", data: {} })
+    await wait(() => requests.model > before.model && requests.provider > before.provider)
   } finally {
     app.renderer.destroy()
   }
@@ -2355,7 +2342,7 @@ test("dismisses a permission that expired before its reply", async () => {
     await data.session.permission.reply({
       sessionID: request.sessionID,
       requestID: request.id,
-      decision: "once",
+      reply: "once",
     })
 
     expect(replies).toBe(1)
@@ -2509,7 +2496,7 @@ test("syncs global forms once for each requested location", async () => {
   const requests: URL[] = []
   const other = { directory: "/tmp/opencode-other" }
   const calls = createFetch((url) => {
-    if (url.pathname !== "/api/form") return
+    if (url.pathname !== "/api/form/request") return
     requests.push(url)
     const requestedDirectory = url.searchParams.get("location[directory]") ?? directory
     return json({
@@ -2587,7 +2574,7 @@ test("resyncs global forms only for the active location after reconnect", async 
         ],
         cursor: {},
       })
-    if (url.pathname !== "/api/form") return
+    if (url.pathname !== "/api/form/request") return
     requests.push(url)
     const requestedDirectory = url.searchParams.get("location[directory]") ?? home.directory
     const count = (counts.get(requestedDirectory) ?? 0) + 1
@@ -2762,7 +2749,6 @@ test("settles pending tools when a live failure arrives", async () => {
       type: "session.step.started",
       durable: durable("session-1", 2),
       data: {
-        started: 0,
         sessionID: "session-1",
         assistantMessageID: "msg_explicit_assistant_9",
         agent: "build",
@@ -2930,7 +2916,7 @@ test("renders admitted prompts immediately and tracks them until promoted", asyn
       {
         id: messageID,
         sessionID,
-        time: { created: 0 },
+        timeCreated: 0,
         type: "user",
         payload: { text: "hello" },
         delivery: "steer",
@@ -3284,7 +3270,7 @@ test("admits prompts optimistically and reconciles with the durable echo", async
       {
         id: messageID,
         sessionID,
-        time: { created: 5 },
+        timeCreated: 5,
         type: "user",
         payload: { text: "hello", files: [echoFile] },
         delivery: "steer",
@@ -3312,7 +3298,7 @@ test("hydrates durable pending prompts into the visible transcript", async () =>
   const item = {
     id: "msg_pending_1",
     sessionID,
-    time: { created: 5 },
+    timeCreated: 5,
     type: "user" as const,
     payload: { text: "waiting" },
     delivery: "steer" as const,
@@ -3366,7 +3352,7 @@ test("keeps the row when the response lands before the echo", async () => {
   const admission = {
     id: messageID,
     sessionID,
-    time: { created: 1 },
+    timeCreated: 1,
     type: "user",
     payload: { text: "hello" },
     delivery: "steer",
@@ -3473,7 +3459,7 @@ test("a retry under the same client-minted ID cannot duplicate rows", async () =
   const admission = {
     id: messageID,
     sessionID,
-    time: { created: 1 },
+    timeCreated: 1,
     type: "user",
     payload: { text: "hello" },
     delivery: "steer",

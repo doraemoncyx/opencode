@@ -87,9 +87,8 @@ test("custom commands commit the captured agent, model and variant before execut
     expect(mutations).toEqual([{ type: "agent", body: { agent: "plan" } }])
 
     // A later local edit must not change the in-flight command's selection.
-    await waitForFrame(setup, (frame) => frame.includes("Plan · second model Demo · low"))
     setup.mockInput.pressKey("F7")
-    await waitForFrame(setup, (frame) => frame.includes("high"))
+    await setup.waitForFrame((frame) => frame.includes("high"))
     agent.resolve(new Response(null, { status: 204 }))
     await setup.waitFor(() => mutations.length === 2)
     expect(mutations[1]).toEqual({
@@ -100,18 +99,10 @@ test("custom commands commit the captured agent, model and variant before execut
     await setup.waitFor(() => mutations.length === 3)
     expect(mutations[2]).toEqual({
       type: "command",
-      body: { name: "review", text: "selected input", files: [], agents: [], delivery: "steer" },
+      body: { command: "review", text: "selected input", files: [], agents: [], delivery: "steer" },
     })
   } finally {
     agent.resolve(new Response(null, { status: 204 }))
     model.resolve(new Response(null, { status: 204 }))
   }
 })
-
-async function waitForFrame(setup: Awaited<ReturnType<typeof createAppFixture>>, matches: (frame: string) => boolean) {
-  const started = Date.now()
-  while (!matches(setup.captureCharFrame())) {
-    if (Date.now() - started > 2_000) throw new Error("Timed out waiting for command selection frame")
-    await Bun.sleep(10)
-  }
-}

@@ -315,7 +315,7 @@ const lowerToolCall = (part: ToolCallPart, options: LoweringOptions): OpenAIChat
   type: "function",
   function: {
     name: part.name,
-    arguments: ProviderShared.encodeJson(part.input === undefined ? {} : part.input),
+    arguments: ProviderShared.encodeJson(part.input),
   },
 })
 
@@ -323,11 +323,7 @@ const lowerMedia = Effect.fn("OpenAIChat.lowerMedia")(function* (part: MediaPart
   const media = ProviderShared.normalizeMedia(part)
   if (!media.mime.startsWith("image/"))
     return yield* ProviderShared.invalidRequest(`OpenAI Chat does not support media type ${part.mediaType}`)
-  const url =
-    typeof part.data === "string" && (part.data.startsWith("https://") || part.data.startsWith("http://"))
-      ? part.data
-      : media.dataUrl
-  return { type: "image_url" as const, image_url: { url } }
+  return { type: "image_url" as const, image_url: { url: media.dataUrl } }
 })
 
 const openAICompatibleReasoningContent = (native: unknown) =>
@@ -715,10 +711,7 @@ const detectZaiToolStream = (provider: string, baseURL: string | undefined, mode
 
 const lowerOptions = (request: LLMRequest, supportsStore: boolean) => {
   const options = OpenAIOptions.resolve(request)
-  // Default off: strict providers 400 on unknown body fields, so only send
-  // the key where compatibility explicitly allows it. Header-based affinity
-  // (x-session-affinity, x-grok-conv-id, ...) is unaffected.
-  const cacheKey = (request.model.compatibility?.supportsPromptCacheKey ?? false) ? ProviderShared.promptCacheKey(request) : undefined
+  const cacheKey = ProviderShared.promptCacheKey(request)
   return {
     ...(supportsStore && options.store !== undefined ? { store: options.store } : {}),
     // For providers that support `store`, ensure stateless `store:false` is sent

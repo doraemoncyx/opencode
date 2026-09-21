@@ -20,7 +20,6 @@ export type UpdateSource = {
   readonly subscribe: (notify: (notice: ClientNotice) => void, signal: AbortSignal) => Promise<void>
   readonly check: (
     signal: AbortSignal,
-    onInstall: (version: string) => void,
   ) => Promise<ClientNotice | { readonly type: "unavailable"; readonly message: string } | undefined>
   readonly apply: (version: string) => Promise<void>
 }
@@ -75,13 +74,7 @@ export const { use: useUpdateNotification, provider: UpdateNotificationProvider 
     const check = async (signal: AbortSignal) => {
       const updater = props.updater
       if (!updater || state()?.type === "installing") return
-      const result = await updater
-        .check(signal, (version) => {
-          if (!signal.aborted) setState({ type: "installing", version })
-        })
-        .finally(() => {
-          if (state()?.type === "installing") setState(undefined)
-        })
+      const result = await updater.check(signal)
       if (signal.aborted) return
       if (result?.type === "unavailable") return result.message
       setState(result)

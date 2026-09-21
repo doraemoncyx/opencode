@@ -13,7 +13,6 @@ import type {
 import { Effect, Ref, Schema, Semaphore } from "effect"
 import { definition, normalizedName } from "../tool/runtime.js"
 import { CodeModeCatalog } from "./catalog.js"
-import { CodeModeWeb } from "./web.js"
 
 const ExecuteFile = Schema.Struct({
   data: Schema.String,
@@ -56,13 +55,15 @@ type Tools = {
 export type Inventory = {
   readonly tools: ReadonlyMap<string, Info>
   readonly namespaces?: ReadonlyMap<string, ToolNamespace>
+  /** Effective names the model calls directly, outside `execute`. */
+  readonly direct?: ReadonlySet<string>
 }
 
 // Invariant model-facing guidance; the changing tool catalog is delivered through Instructions.
 const description = [
-  "Run JavaScript in a confined Code Mode runtime to script tool calls and HTTP requests and compose their results.",
-  "`fetch` is available for HTTP requests. Imports, direct filesystem access, and timers are unavailable; all other external access goes through `tools`.",
-  "Within `{ code }`, the only callable tools are those explicitly listed in the Code Mode catalog instructions or returned by the `search` function. Inside `{ code }`, ignore tools shown outside the Code Mode catalog. They are not available in the Code Mode runtime.",
+  "Run JavaScript in a confined Code Mode runtime to orchestrate tool calls and compose their results.",
+  "Imports, direct filesystem access, and timers are unavailable. Do not use `fetch`; all external access goes through `tools`.",
+  "Within `{ code }`, the only callable tools are those listed in the Code Mode catalog instructions or returned by `search`. Other tools in your tool list, including direct tools such as `read`, `shell`, and `webfetch`, are not available inside `execute`: call those directly instead.",
   'Call tools through `tools` using only exact paths and signatures from the catalog. Do not infer or normalize tool names; preserve bracket notation such as `tools.<namespace>["tool-name"](input)`.',
   "Prefer an explicit `return`; if omitted, the final top-level expression becomes the result.",
   "Await every call whose completion matters; pending calls are interrupted when execution ends. Run independent calls concurrently with `Promise.all`.",
@@ -83,9 +84,9 @@ export const create = (
         const files = yield* Ref.make<Array<CollectedFiles>>([])
         const calls = yield* Ref.make<Array<ExecuteCall>>([])
         const lock = Semaphore.makeUnsafe(1)
-        const record = (update: (items: Array<ExecuteCall>) => Array<ExecuteCall>) =>
+        const updateCalls = (update: (items: Array<ExecuteCall>) => Array<ExecuteCall>) =>
           lock.withPermit(
-            Ref.updateAndGet(calls, update).pipe(Effect.tap((toolCalls) => context.progress({ toolCalls }))),
+            Ref.updateAndGet(calls, update).pipe(Effect.flatMap((toolCalls) => context.progress({ toolCalls }))),
           )
         const result = yield* runtime(
           inventory,
@@ -104,13 +105,33 @@ export const create = (
               const text = content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
               return text === "" ? null : text
             }),
-          progressHooks(record),
+          {
+            onToolCallStart: ({ index, name, input }) => {
+              const shown = displayInput(input)
+              return updateCalls((items) => {
+                const next = [...items]
+                next[index] = { tool: name, status: "running", ...(shown ? { input: shown } : {}) }
+                return next
+              })
+            },
+            onToolCallEnd: ({ index, name, input, outcome }) => {
+              const shown = displayInput(input)
+              return updateCalls((items) => {
+                const next = [...items]
+                next[index] = {
+                  ...(items[index] ?? { tool: name, ...(shown ? { input: shown } : {}) }),
+                  status: outcome === "success" ? "completed" : "error",
+                }
+                return next
+              })
+            },
+          },
         ).execute(code)
         const toolCalls = yield* Ref.get(calls)
         const collected = (yield* Ref.get(files))
           .toSorted((left, right) => left.index - right.index)
           .flatMap((item) => item.files)
-        const output = formatResult(result)
+        const output = formatResult(result, inventory.direct)
         const value: typeof ExecuteOutput.Type = {
           output,
           toolCalls,
@@ -137,42 +158,6 @@ export const create = (
         }
       }),
   } satisfies Info
-}
-
-// Rows appear in start order; the same call object arrives at both hooks, so a call finds its row again.
-function progressHooks(record: (update: (items: Array<ExecuteCall>) => Array<ExecuteCall>) => Effect.Effect<unknown>) {
-  const rows = new WeakMap<object, number>()
-  const start = (call: object, entry: ExecuteCall) =>
-    record((items) => {
-      rows.set(call, items.length)
-      return [...items, entry]
-    })
-  const settle = (call: object, result: CodeMode.CallResult) => {
-    const index = rows.get(call)
-    if (index === undefined) return Effect.void
-    return record((items) => {
-      const next = [...items]
-      next[index] = { ...items[index], status: result.status === "success" ? "completed" : "error" }
-      return next
-    })
-  }
-  return {
-    "tool.before": (call) => {
-      const shown = displayInput(call.input)
-      return start(call, { tool: call.name, status: "running", ...(shown ? { input: shown } : {}) })
-    },
-    "tool.after": settle,
-    // Only listed extension functions get a row; anything else stays out of the TUI.
-    "extension.before": (call) => {
-      switch (call.name) {
-        case "fetch":
-          return start(call, { tool: call.name, status: "running", input: CodeModeWeb.display(call.args) })
-        default:
-          return Effect.void
-      }
-    },
-    "extension.after": settle,
-  } satisfies CodeMode.Hooks
 }
 
 export const catalog = (inventory: Inventory) => {
@@ -221,7 +206,7 @@ function renderCatalog(root: CatalogNode): ReadonlyArray<CodeModeCatalog.Tool | 
 function runtime(
   inventory: Inventory,
   executeTool: (name: string, tool: Info, input: unknown) => Effect.Effect<unknown, unknown>,
-  hooks?: CodeMode.Hooks,
+  hooks?: CodeMode.ToolCallHooks,
 ) {
   // A path may carry namespace metadata, a callable tool, child tools, or all three.
   const root: ToolNode = { children: new Map() }
@@ -236,7 +221,7 @@ function runtime(
     })
   }
   const tools = renderTools(root)
-  return CodeMode.make<typeof tools>({ tools, extensions: [CodeModeWeb.extension], hooks })
+  return CodeMode.make<typeof tools>({ tools, ...hooks })
 }
 
 function getNode<T>(root: Node<T>, path: string) {
@@ -307,10 +292,10 @@ function displayInput(input: unknown): Record<string, typeof Schema.Json.Type> |
   return input as Record<string, typeof Schema.Json.Type>
 }
 
-function formatResult(result: CodeMode.Result) {
+function formatResult(result: CodeMode.Result, direct: ReadonlySet<string> | undefined) {
   const output = result.ok
     ? formatValue(result.value)
-    : [result.error.message, ...(result.error.suggestions ?? []).filter((hint) => !result.error.message.includes(hint))]
+    : [result.error.message, ...failureHints(result.error, direct).filter((hint) => !result.error.message.includes(hint))]
         .join("\n")
         .trim()
   const warnings =
@@ -319,6 +304,23 @@ function formatResult(result: CodeMode.Result) {
       : undefined
   const logs = result.logs && result.logs.length > 0 ? `Logs:\n${result.logs.join("\n")}` : undefined
   return [output, warnings, logs].filter((part) => part !== undefined && part !== "").join("\n\n")
+}
+
+// An unknown path is usually a direct tool or the `search` global written as `tools.search`; the
+// runtime's generic hint then points at a `search` that cannot find either. Name the real remedy.
+function failureHints(error: CodeMode.Diagnostic, direct: ReadonlySet<string> | undefined): ReadonlyArray<string> {
+  if (error.kind !== "UnknownTool") return error.suggestions ?? []
+  const fallback = error.suggestions ?? []
+  const path = /^Unknown tool '([^']+)'/.exec(error.message)?.[1]
+  const name = path?.split(".")[0]
+  const match =
+    name === undefined || direct === undefined
+      ? undefined
+      : Array.from(direct).find((tool) => tool.toLowerCase() === name.toLowerCase())
+  if (match !== undefined) return [`\`${match}\` is not a Code Mode tool. Call it directly, outside \`execute\`.`]
+  // `search` is a global function, not a member of `tools`.
+  if (path === "search") return ["`search` is a global function: call `search({ ... })`, not `tools.search`."]
+  return fallback
 }
 
 function formatValue(value: CodeMode.DataValue) {

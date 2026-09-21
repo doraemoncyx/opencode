@@ -91,10 +91,7 @@ export const configure = (input: Config = {}) => {
       .with(withOpenAIOptions(id, modelDefaults, { textVerbosity: true }))
       .model<OpenAIProviderOptionsInput>({ id })
   const chat = (id: string | ModelID) =>
-    chatRoute.with(withOpenAIOptions(id, modelDefaults)).model<OpenAIProviderOptionsInput>({
-      id,
-      compatibility: { supportsPromptCacheKey: true },
-    })
+    chatRoute.with(withOpenAIOptions(id, modelDefaults)).model<OpenAIProviderOptionsInput>({ id })
   const image = (modelID: string | ModelID) =>
     OpenAIImages.model({
       id: modelID,

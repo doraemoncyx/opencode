@@ -12,7 +12,7 @@ const server = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${pr
 type InboxRow = {
   id: string
   sessionID: string
-  time: { created: number }
+  timeCreated: number
   type: "user"
   payload: { text: string; metadata?: Record<string, unknown> }
   delivery: "steer" | "queue"
@@ -22,7 +22,7 @@ function createQueueMock(seed: string[], messages: SessionMessageInfo[] = []) {
   const rows: InboxRow[] = seed.map((text, index) => ({
     id: `inb_seed_${index + 1}`,
     sessionID,
-    time: { created: 1700000000000 + index },
+    timeCreated: 1700000000000 + index,
     type: "user",
     payload: { text },
     delivery: "queue",
@@ -59,7 +59,7 @@ function createQueueMock(seed: string[], messages: SessionMessageInfo[] = []) {
       const row: InboxRow = {
         id: typeof input.body.id === "string" ? input.body.id : `inb_mock_${sequence}`,
         sessionID: input.sessionID,
-        time: { created: Date.now() },
+        timeCreated: Date.now(),
         type: "user",
         payload: {
           text: typeof input.body.text === "string" ? input.body.text : "",
@@ -74,7 +74,7 @@ function createQueueMock(seed: string[], messages: SessionMessageInfo[] = []) {
         item: { type: "user", payload: row.payload, delivery: row.delivery },
       })
     },
-    onInboxChange: (input: { sessionID: string; inboxID: string; action: "cancel" | "steer" | "queue" }) => {
+    onInboxChange: (input: { sessionID: string; inboxID: string; action: "cancel" | "steer" }) => {
       changes.push({ inboxID: input.inboxID, action: input.action })
       log.push(`${input.action}:${input.inboxID}`)
       const index = rows.findIndex((row) => row.id === input.inboxID)
@@ -85,11 +85,11 @@ function createQueueMock(seed: string[], messages: SessionMessageInfo[] = []) {
         emit("session.inbox.cancelled", { sessionID: input.sessionID, inboxID: input.inboxID })
         return
       }
-      row.delivery = input.action
+      row.delivery = "steer"
       emit("session.inbox.delivery.changed", {
         sessionID: input.sessionID,
         inboxID: input.inboxID,
-        delivery: input.action,
+        delivery: "steer",
       })
     },
   }
@@ -284,7 +284,7 @@ for (const delivery of ["steer", "queue"] as const) {
     await expect(thinking).toHaveCount(0)
 
     // The next assistant step still belongs to U1: U2 has been admitted, not delivered.
-    mock.emit("session.step.started", { sessionID, assistantMessageID: assistantID, agent: "build", model, started: Date.now() })
+    mock.emit("session.step.started", { sessionID, assistantMessageID: assistantID, agent: "build", model })
     for (const tool of [
       { id: "tool_queue_read", name: "read", input: { path: "src/queue.ts" } },
       { id: "tool_queue_grep", name: "grep", input: { pattern: "retry", path: "src" } },
@@ -341,7 +341,7 @@ for (const delivery of ["steer", "queue"] as const) {
     )
 
     const later = { sessionID, assistantMessageID: "msg_queue_follow_up_assistant" }
-    mock.emit("session.step.started", { ...later, agent: "build", model, started: Date.now() })
+    mock.emit("session.step.started", { ...later, agent: "build", model })
     mock.emit("session.text.started", { ...later, ordinal: 0 })
     mock.emit("session.text.ended", { ...later, ordinal: 0, text: "A3: Now checking the retry path for U2." })
     const response = transcript
