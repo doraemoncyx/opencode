@@ -6,11 +6,16 @@ import { which } from "@opencode/core/util/which"
 import fs from "node:fs/promises"
 import { tmpdir } from "./fixture/tmpdir"
 
-const withWindowsApp = async (name: string, fn: (alias: string) => void | Promise<void>) => {
+const withWindowsApp = async (
+  name: string,
+  fn: (alias: string) => void | Promise<void>,
+  target?: string,
+) => {
   await using directory = await tmpdir()
   const alias = path.join(directory.path, "Microsoft", "WindowsApps", `${name}.exe`)
   await fs.mkdir(path.dirname(alias), { recursive: true })
-  await fs.writeFile(alias, "")
+  if (target) await fs.symlink(target, alias)
+  else await fs.writeFile(alias, "")
   const previous = { localAppData: process.env.LOCALAPPDATA, path: process.env.PATH, pathWin: process.env.Path }
   process.env.LOCALAPPDATA = directory.path
   process.env.PATH = directory.path
@@ -63,6 +68,28 @@ describe("shell", () => {
     await withWindowsApp("pwsh", async (alias) => {
       expect(ShellSelect.resolve({ priority: "config" }, "pwsh")).toBe(alias)
     })
+  })
+
+  test("resolves a Store app execution alias to its real target", async () => {
+    if (process.platform !== "win32") return
+    await using directory = await tmpdir()
+    // Keep the target outside PATH so `which` still misses and the alias fallback runs.
+    const target = path.join(directory.path, "real", "pwsh.exe")
+    await fs.mkdir(path.dirname(target), { recursive: true })
+    await fs.writeFile(target, "")
+    try {
+      await withWindowsApp(
+        "pwsh",
+        async () => {
+          expect(ShellSelect.resolve({ priority: "config" }, "pwsh")).toBe(target)
+        },
+        target,
+      )
+    } catch (error) {
+      // Creating symlinks requires Developer Mode or elevation.
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return
+      throw error
+    }
   })
 
   test("falls back when configured shell cannot be resolved", async () => {

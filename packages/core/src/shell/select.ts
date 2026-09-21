@@ -2,7 +2,7 @@ export * as ShellSelect from "./select.js"
 
 import path from "path"
 import { readFile } from "fs/promises"
-import { accessSync, statSync } from "fs"
+import { accessSync, readlinkSync, statSync } from "fs"
 import { Context, Effect, Layer, Schema } from "effect"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { FSUtil } from "@opencode/util/fs-util"
@@ -69,6 +69,14 @@ function accessible(file: string) {
   }
 }
 
+function readlink(file: string) {
+  try {
+    return readlinkSync(file)
+  } catch {
+    return undefined
+  }
+}
+
 function windowsApp(file: string) {
   const appData = process.env.LOCALAPPDATA
   if (!appData) return
@@ -76,7 +84,14 @@ function windowsApp(file: string) {
   // Store-installed shells (e.g. pwsh) surface only as 0-byte App Execution
   // Alias reparse points in WindowsApps that reject stat with EACCES, so `which`
   // misses them even though they spawn fine; `access` still sees them.
-  if (accessible(alias)) return alias
+  if (!accessible(alias)) return
+  // Return the alias target when it is a real file. Downstream spawners cannot
+  // resolve the reparse point either and fall back to a cmd.exe round-trip that
+  // drops everything after the first newline in the command.
+  const target = readlink(alias)
+  if (!target) return alias
+  const resolved = path.isAbsolute(target) ? target : path.resolve(path.dirname(alias), target)
+  return stat(resolved)?.isFile() ? resolved : alias
 }
 
 function findExecutable(name: string, bin?: string) {

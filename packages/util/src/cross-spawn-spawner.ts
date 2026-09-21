@@ -21,6 +21,16 @@ import { filesystem, path } from "./effect/app-node-platform.js"
 
 const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
 
+// Windows App Execution Aliases (e.g. the Store `pwsh` shim) are reparse points that
+// `which` cannot resolve. cross-spawn then routes through `cmd.exe`, whose escaping
+// ignores CR/LF and silently drops everything after the first newline in an argument.
+// An absolute `.exe`/`.com` can be spawned directly, so it never takes that detour.
+const spawnDirectly = (command: string, opts: NodeChildProcess.SpawnOptions) =>
+  process.platform === "win32" &&
+  !opts.shell &&
+  /^(?:[a-z]:[\\/]|\\\\)/i.test(command) &&
+  /\.(?:exe|com)$/i.test(command)
+
 const toTag = (err: NodeJS.ErrnoException): PlatformError.SystemErrorTag => {
   switch (err.code) {
     case "ENOENT":
@@ -271,7 +281,9 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     Effect.callback<Spawned, PlatformError.PlatformError>((resume) => {
       const closed = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
       const exited = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
-      const proc = launch(command.command, command.args, opts)
+      const proc = spawnDirectly(command.command, opts)
+        ? NodeChildProcess.spawn(command.command, command.args, opts)
+        : launch(command.command, command.args, opts)
       let end = false
       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
       proc.on("error", (err) => {

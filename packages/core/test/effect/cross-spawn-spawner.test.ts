@@ -466,6 +466,20 @@ describe("cross-spawn spawner", () => {
     )
 
     fx.effect(
+      "preserves multi-line arguments for absolute executables on Windows",
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+
+        const handle = yield* ChildProcess.make(process.execPath, [
+          "-e",
+          'console.log("line1")\nconsole.log("line2")\nconsole.log("line3")',
+        ])
+        const out = yield* decodeByteStream(handle.stdout)
+        expect(out).toBe("line1\nline2\nline3")
+      }),
+    )
+
+    fx.effect(
       "runs cmd scripts with spaces on Windows without shell",
       Effect.gen(function* () {
         if (process.platform !== "win32") return
