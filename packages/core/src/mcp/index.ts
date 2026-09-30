@@ -133,6 +133,8 @@ type ServerEntry = {
   client?: McpClient.Connection
   tools?: ReadonlyArray<Tool>
   prompts?: ReadonlyArray<Prompt>
+  /** Cached resource catalog; retained across an idle release so listing resources never starts a process. */
+  resources?: { readonly resources: ReadonlyArray<Resource>; readonly templates: ReadonlyArray<ResourceTemplate> }
   /** Cached initialize instructions; retained across an idle release so context assembly stays stable. */
   instructions?: string
   /**
@@ -656,6 +658,7 @@ export const layer = (options?: LayerOptions) =>
         entry.client = undefined
         entry.tools = undefined
         entry.prompts = undefined
+        entry.resources = undefined
         entry.instructions = undefined
         entry.idle = false
         if (scope) yield* Scope.close(scope, Exit.void)
@@ -953,20 +956,26 @@ export const layer = (options?: LayerOptions) =>
             Array.from(entries),
             ([name, entry]) =>
               Effect.gen(function* () {
-                const client = yield* acquireClient(name, entry)
-                if (!client) return { resources: [], templates: [] }
-                return yield* Effect.all(
+                // Serve the cached catalog for a released server: listing resources is a client-facing
+                // read and must not reconnect. Only a live client refreshes the cache.
+                const client = entry.client
+                if (!client) return entry.resources ?? { resources: [], templates: [] }
+                entry.lastUsed = clock.currentTimeMillisUnsafe()
+                const catalog = yield* Effect.all(
                   {
                     resources: client.resources().pipe(Effect.orElseSucceed(() => [])),
                     templates: client.resourceTemplates().pipe(Effect.orElseSucceed(() => [])),
                   },
                   { concurrency: "unbounded" },
                 ).pipe(
-                  Effect.map((catalog) => ({
-                    resources: catalog.resources.map((def) => toResource(name, def)),
-                    templates: catalog.templates.map((def) => toResourceTemplate(name, def)),
+                  Effect.map((listed) => ({
+                    resources: listed.resources.map((def) => toResource(name, def)),
+                    templates: listed.templates.map((def) => toResourceTemplate(name, def)),
                   })),
                 )
+                // Do not let a listing that raced an idle release overwrite the retained cache.
+                if (entry.client === client) entry.resources = catalog
+                return catalog
               }),
             { concurrency: "unbounded" },
           )

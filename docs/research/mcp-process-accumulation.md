@@ -431,9 +431,10 @@ Shipped in `packages/core/src/mcp/index.ts`, tested in `packages/core/test/mcp.t
 - `ServerEntry` gains `lastUsed`, `idle`, and a cached `instructions`. A scoped reaper releases a
   connected server after `idleTimeout` (default 5 minutes, swept every 1 minute), keeping the cached
   tools/prompts/instructions so the tool registry and context assembly stay stable.
-- `releaseServer` drops the process without clearing the catalogue; `callTool`/`prompt`/`readResource`/
-  `resourceCatalog` reconnect through `acquireClient` under the server lock. `tools()`/`instructions()`/
-  `prompts()` serve the cache and never start a process.
+- `releaseServer` drops the process without clearing the catalogue; `callTool`/`prompt`/`readResource`
+  reconnect through `acquireClient` under the server lock. `tools()`/`instructions()`/`prompts()`/
+  `resourceCatalog()` serve the cache and never start a process, so client re-sync (e.g. switching project
+  tabs) cannot pull a released server back.
 - Net effect: live stdio processes are bounded by "servers with a live interaction in the last
   `idleTimeout`", independent of the 60-minute Location TTL and its 98% churn (§7.2).
 

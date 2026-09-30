@@ -682,6 +682,40 @@ test("releases an idle MCP server and reconnects lazily on the next live use", a
   )
 })
 
+test("serves the cached resource catalog after idle release without reconnecting", async () => {
+  const spawns: Array<ChildProcess.Command> = []
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* Mcp.Service
+        // The first listing runs against the live server and populates the cache.
+        const live = yield* service.resourceCatalog()
+        expect(live.resources.map((resource) => resource.uri)).toEqual(["docs://readme"])
+        expect(spawns).toHaveLength(1)
+
+        // After the idle window releases the process, listing resources serves the cache and must not
+        // start a new process; only a live interaction reconnects.
+        yield* Effect.sleep("3000 millis")
+        const cached = yield* service.resourceCatalog()
+        expect(cached.resources.map((resource) => resource.uri)).toEqual(["docs://readme"])
+        expect(spawns).toHaveLength(1)
+      }),
+    ).pipe(
+      Effect.provide(
+        resourceMcpLayer(
+          new ConfigMCP.Local({
+            type: "local",
+            command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-resources.ts")],
+          }),
+          undefined,
+          { idleTimeout: "1 second", idleSweepInterval: "200 millis" },
+          { environment: recordingEnvironmentLayer(spawns) },
+        ),
+      ),
+    ),
+  )
+})
+
 test("reports a local MCP server as failed when the location has no execution plane", async () => {
   const config = new ConfigMCP.Local({ type: "local", command: ["example-mcp"] })
   const driver = Environment.makeMemoryDriver()
