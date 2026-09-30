@@ -6,6 +6,7 @@ import { Context, Effect, Layer, Schema, Types } from "effect"
 import { Pty } from "@opencode/schema/pty"
 import { Bus } from "./bus.js"
 import { Location } from "./location.js"
+import { PtyID } from "./pty/schema.js"
 import { ShellSelect } from "./shell/select.js"
 import { lazy } from "./util/lazy.js"
 
@@ -33,9 +34,6 @@ type Active = {
   subscribers: Map<object, Subscriber>
   listeners: Disp[]
 }
-
-export const ID = Pty.ID
-export type ID = Pty.ID
 
 export const Info = Pty.Info
 export type Info = Types.DeepMutable<typeof Info.Type>
@@ -71,21 +69,21 @@ export type Attachment = {
 }
 
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()("Pty.NotFoundError", {
-  ptyID: ID,
+  ptyID: PtyID,
 }) {}
 
 export class ExitedError extends Schema.TaggedError<ExitedError>()("Pty.ExitedError", {
-  ptyID: ID,
+  ptyID: PtyID,
 }) {}
 
 export interface Interface {
   readonly list: () => Effect.Effect<Info[]>
-  readonly get: (id: ID) => Effect.Effect<Info, NotFoundError>
+  readonly get: (id: PtyID) => Effect.Effect<Info, NotFoundError>
   readonly create: (input: CreateInput) => Effect.Effect<Info>
-  readonly update: (id: ID, input: UpdateInput) => Effect.Effect<Info, NotFoundError>
-  readonly remove: (id: ID) => Effect.Effect<void, NotFoundError>
-  readonly write: (id: ID, data: string) => Effect.Effect<void, NotFoundError>
-  readonly attach: (id: ID, input: AttachInput) => Effect.Effect<Attachment, NotFoundError | ExitedError>
+  readonly update: (id: PtyID, input: UpdateInput) => Effect.Effect<Info, NotFoundError>
+  readonly remove: (id: PtyID) => Effect.Effect<void, NotFoundError>
+  readonly write: (id: PtyID, data: string) => Effect.Effect<void, NotFoundError>
+  readonly attach: (id: PtyID, input: AttachInput) => Effect.Effect<Attachment, NotFoundError | ExitedError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Pty") {}
@@ -98,8 +96,8 @@ const layer = Layer.effect(
     const shell = yield* ShellSelect.Service
     const context = yield* Effect.context()
     const runFork = Effect.runForkWith(context)
-    const sessions = new Map<ID, Active>()
-    const exitOrder: ID[] = []
+    const sessions = new Map<PtyID, Active>()
+    const exitOrder: PtyID[] = []
 
     function notifyEnd(session: Active, event: { exitCode?: number }) {
       for (const subscriber of session.subscribers.values()) {
@@ -133,13 +131,13 @@ const layer = Layer.effect(
       }),
     )
 
-    const requireSession = Effect.fn("Pty.requireSession")(function* (id: ID) {
+    const requireSession = Effect.fn("Pty.requireSession")(function* (id: PtyID) {
       const session = sessions.get(id)
       if (!session) return yield* new NotFoundError({ ptyID: id })
       return session
     })
 
-    const removeSession = Effect.fnUntraced(function* (id: ID) {
+    const removeSession = Effect.fnUntraced(function* (id: PtyID) {
       const session = sessions.get(id)
       if (!session) return
       sessions.delete(id)
@@ -150,7 +148,7 @@ const layer = Layer.effect(
       yield* bus.publish(Pty.Event.Deleted, { id: session.info.id })
     })
 
-    const remove = Effect.fn("Pty.remove")(function* (id: ID) {
+    const remove = Effect.fn("Pty.remove")(function* (id: PtyID) {
       yield* requireSession(id)
       yield* removeSession(id)
     })
@@ -159,12 +157,12 @@ const layer = Layer.effect(
       return Array.from(sessions.values()).map((session) => session.info)
     })
 
-    const get = Effect.fn("Pty.get")(function* (id: ID) {
+    const get = Effect.fn("Pty.get")(function* (id: PtyID) {
       return (yield* requireSession(id)).info
     })
 
     const create = Effect.fn("Pty.create")(function* (input: CreateInput) {
-      const id = ID.ascending()
+      const id = PtyID.ascending()
       const command = input.command || (yield* shell.resolve({ priority: "config" }))
       const args = ShellSelect.login(command) ? [...(input.args ?? []), "-l"] : [...(input.args ?? [])]
       const cwd = input.cwd || location.directory
@@ -244,7 +242,7 @@ const layer = Layer.effect(
       return info
     })
 
-    const update = Effect.fn("Pty.update")(function* (id: ID, input: UpdateInput) {
+    const update = Effect.fn("Pty.update")(function* (id: PtyID, input: UpdateInput) {
       const session = yield* requireSession(id)
       if (input.title) session.info.title = input.title
       if (input.size && session.info.status === "running") session.process.resize(input.size.cols, input.size.rows)
@@ -252,12 +250,12 @@ const layer = Layer.effect(
       return session.info
     })
 
-    const write = Effect.fn("Pty.write")(function* (id: ID, data: string) {
+    const write = Effect.fn("Pty.write")(function* (id: PtyID, data: string) {
       const session = yield* requireSession(id)
       if (session.info.status === "running") session.process.write(data)
     })
 
-    const attach = Effect.fn("Pty.attach")(function* (id: ID, input: AttachInput) {
+    const attach = Effect.fn("Pty.attach")(function* (id: PtyID, input: AttachInput) {
       const session = yield* requireSession(id)
       if (session.info.status !== "running") return yield* new ExitedError({ ptyID: id })
       yield* Effect.logInfo("client attached to session", { id, directory: location.directory })

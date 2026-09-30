@@ -66,7 +66,7 @@ for (const model of [
               content: [{ type: "output_text", text: `Final ${index}` }],
             },
           ]),
-          { type: "message", role: "user", status: "incomplete", content: [{ type: "input_text", text: "Continue" }] },
+          { role: "user", status: "incomplete", content: [{ type: "input_text", text: "Continue" }] },
         ])
       }),
     )
@@ -112,7 +112,7 @@ for (const model of [
             status: "completed",
             content: [{ type: "output_text", text: "The next step is" }],
           },
-          { type: "message", role: "user", content: [{ type: "input_text", text: "Continue" }] },
+          { role: "user", content: [{ type: "input_text", text: "Continue" }] },
         ])
       }),
     )

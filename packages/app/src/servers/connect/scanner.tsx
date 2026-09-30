@@ -3,10 +3,12 @@ import { onCleanup, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Button } from "@opencode/ui/button"
 import { useLanguage } from "@/runtime/i18n/language"
-import { pairingLink, redeemPairingLink, type Pairing } from "./pairing"
-import "./scanner.css"
+import { decodePairingCode } from "./pairing"
 
-export function PairingScanner(props: { onScan: (value: Pairing) => void; onCancel: () => void }) {
+export function PairingScanner(props: {
+  onScan: (value: NonNullable<ReturnType<typeof decodePairingCode>>) => void
+  onCancel: () => void
+}) {
   const language = useLanguage()
   const [state, setState] = createStore({ error: "", ready: false })
   const video = document.createElement("video")
@@ -19,16 +21,13 @@ export function PairingScanner(props: { onScan: (value: Pairing) => void; onCanc
     const scanner = new QrScanner(
       video,
       (result) => {
-        const link = pairingLink(result.data)
-        if (!link) {
+        const pairing = decodePairingCode(result.data)
+        if (!pairing) {
           setState("error", language.t("server.connect.scan.invalid"))
           return
         }
         scanner.stop()
-        void redeemPairingLink(link).then((redeemed) => {
-          if (redeemed) return props.onScan(redeemed)
-          setState("error", language.t("server.connect.link.expired"))
-        })
+        props.onScan(pairing)
       },
       { preferredCamera: "environment", maxScansPerSecond: 10, returnDetailedScanResult: true },
     )

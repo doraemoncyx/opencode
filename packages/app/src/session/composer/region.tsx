@@ -213,10 +213,7 @@ export function createActiveSessionRegion(input: {
 
 export type ActiveSessionRegionModel = ReturnType<typeof createActiveSessionRegion>
 
-export function ActiveSessionComposerRegion(props: {
-  model: SessionComposerController
-  suggestionBoundary: () => HTMLElement | undefined
-}) {
+export function ActiveSessionComposerRegion(props: { model: SessionComposerController }) {
   return (
     <SessionComposerRegion
       controller={props.model.region}
@@ -224,12 +221,7 @@ export function ActiveSessionComposerRegion(props: {
         <div class="relative">
           <SessionQueuePanel queue={props.model.queue} />
           <div class="relative z-10">
-            <Composer
-              model={props.model.composer}
-              borderUnderlay
-              readOnly={props.model.queue.undoing()}
-              suggestionBoundary={props.suggestionBoundary}
-            />
+            <Composer model={props.model.composer} borderUnderlay />
           </div>
         </div>
       }

@@ -1,15 +1,11 @@
-import type {
-  SessionMessageAssistant,
-  SessionMessageAssistantTool,
-  SessionMessageUser,
-} from "@opencode/client/promise"
+import type { SessionMessageAssistant, SessionMessageAssistantTool, SessionMessageUser } from "@opencode/client/promise"
 import { Match, Switch, type ComponentProps } from "solid-js"
-import type { SessionUserActions, SessionUserAttachmentReference, SessionUserComment } from "../actions"
+import type { SessionUserActions, SessionUserComment } from "../actions"
 import { AssistantReasoningContent, AssistantTextContent, CurrentUserMessageDisplay } from "./message-content"
 import { CurrentContextToolGroup, CurrentFileToolGroup, ToolDisplay } from "../tools/tool-renderer"
 import { currentToolError, currentToolInput, currentToolMetadata, currentToolOutput } from "./current-tool-state"
 
-export type { SessionUserActions, SessionUserAttachmentReference, SessionUserComment } from "../actions"
+export type { SessionUserActions, SessionUserComment } from "../actions"
 export { SessionShellMessage } from "../tools/tool-renderer"
 export { currentContentDefaultOpen } from "./current-tool-state"
 
@@ -18,7 +14,6 @@ export function SessionUserMessage(props: {
   message: SessionMessageUser
   displayText?: string
   comments?: SessionUserComment[]
-  references?: SessionUserAttachmentReference[]
   historicalAgent: string
   historicalModel: SessionMessageAssistant["model"]
   actions?: SessionUserActions
@@ -29,7 +24,6 @@ export function SessionUserMessage(props: {
       message={props.message}
       text={props.displayText ?? props.message.text}
       comments={props.comments}
-      references={props.references}
       agent={props.historicalAgent}
       model={props.historicalModel}
       actions={props.actions}
@@ -45,6 +39,7 @@ export function SessionAssistantContent(props: {
   turnDurationMs?: number | null
   defaultOpen?: boolean
   reasoningDefaultOpen?: boolean
+  reasoningPreview?: boolean
   toolOpen?: boolean
   onToolOpenChange?: (open: boolean) => void
   onContentRendered?: () => void
@@ -69,6 +64,7 @@ export function SessionAssistantContent(props: {
             content={content()}
             streaming={false}
             defaultOpen={props.reasoningDefaultOpen}
+            preview={props.reasoningPreview}
             open={props.toolOpen}
             onOpenChange={props.onToolOpenChange}
             onContentRendered={props.onContentRendered}
@@ -84,6 +80,7 @@ export function SessionAssistantContent(props: {
             metadata={currentToolMetadata(tool())}
             output={currentToolOutput(tool())}
             status={tool().state.status}
+            partTime={tool().time}
             error={currentToolError(tool())}
             defaultOpen={props.defaultOpen}
             open={props.toolOpen}

@@ -1,4 +1,4 @@
-import { batch, createEffect, createMemo, createResource, createSignal, onCleanup, Show } from "solid-js"
+import { batch, createMemo, createResource, createSignal, onCleanup, Show } from "solid-js"
 import type { OpenCodeEvent, SessionInfo } from "@opencode/client"
 import path from "path"
 import { useTerminalDimensions } from "@opentui/solid"
@@ -7,11 +7,11 @@ import { dialogWidth, useDialog } from "../ui/dialog"
 import { DialogSelect, dialogSelectContentWidth, type DialogSelectRef } from "../ui/dialog-select"
 import { DialogPrompt } from "../ui/dialog-prompt"
 import { useRoute } from "../context/route"
-import { useData } from "../context/data"
+import { locationKey, useData } from "../context/data"
 import { useClient } from "../context/client"
 import { useLocation } from "../context/location"
 import { useSessionTabs } from "../context/session-tabs"
-import { useTheme } from "../context/theme"
+import { useTheme, useThemes } from "../context/theme"
 import { Keymap } from "../context/keymap"
 import { Locale } from "../util/locale"
 import { abbreviateHome } from "../runtime"
@@ -43,7 +43,9 @@ export function DialogOpen(props: { sessions: SessionInfo[]; onLoad: (sessions: 
   const location = useLocation()
   const sessionTabs = useSessionTabs()
   const toast = useToast()
-  const theme = useTheme().surface("dialog")
+  const themes = useThemes()
+  const theme = useTheme("elevated")
+  const mode = themes.mode
   const paths = useTuiPaths()
   const dimensions = useTerminalDimensions()
   const shortcuts = Keymap.useShortcuts()
@@ -118,24 +120,19 @@ export function DialogOpen(props: { sessions: SessionInfo[]; onLoad: (sessions: 
     pending = creation()
     setCreation(undefined)
   }
-  const [worktrees, worktreeActions] = createResource(projectID, (projectID) =>
-    client.api.worktree.list({ projectID }).catch((error: unknown) => {
-      toast.show({ title: "Loading worktrees failed", message: errorMessage(error), variant: "error" })
-      return []
-    }),
-  )
-
-  const refreshed = new Set<string>()
-  createEffect(() => {
-    const id = projectID()
-    if (!id || worktrees.latest === undefined || refreshed.has(id)) return
-    refreshed.add(id)
-    void client.api.worktree.refresh({ projectID: id }).catch(() => undefined)
-  })
-  onCleanup(
-    client.event.on("worktree.updated", (event) => {
-      if (event.data.projectID === projectID()) void worktreeActions.refetch()
-    }),
+  const [worktrees] = createResource(
+    () => (view().type === "worktrees" ? view() : undefined),
+    () =>
+      client.api.worktree
+        .list({
+          location: {
+            directory: data.project.get(projectID()!)!.canonical,
+          },
+        })
+        .catch((error: unknown) => {
+          toast.show({ title: "Loading worktrees failed", message: errorMessage(error), variant: "error" })
+          return []
+        }),
   )
 
   const [matched] = createResource(
@@ -199,18 +196,31 @@ export function DialogOpen(props: { sessions: SessionInfo[]; onLoad: (sessions: 
         gutter: running
           ? (color: RGBA) => <Spinner color={color} />
           : tabs.has(session.id)
-            ? () => <text fg={theme.hue.accent[200]}>▪</text>
+            ? () => <text fg={theme.hue.accent[mode() === "light" ? 800 : 200]}>▪</text>
             : undefined,
       }
     })
 
     const current = location.ref ?? data.location.default()
-    const projectOptions = data.project
-      .list()
-      .filter((project) => project.canonical !== "/")
-      // Historical project identities can share a checkout. The list is newest-active first.
-      .filter((project, index, projects) => projects.findIndex((item) => item.canonical === project.canonical) === index)
-      .map((project) => ({ directory: project.canonical, project }))
+    const seen = new Set<string>()
+    const projectOptions = [
+      ...data.project.list().flatMap((project) =>
+        [project.canonical, ...project.sandboxes].map((directory) => ({
+          directory,
+          project,
+        })),
+      ),
+      ...sessions().map((session) => ({
+        directory: session.location.directory,
+        project: data.project.get(session.projectID),
+      })),
+    ]
+      .filter((item) => {
+        const key = locationKey(item)
+        if (item.directory === "/" || seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
       .map((item) => {
         const title =
           item.directory === item.project?.canonical
@@ -234,7 +244,7 @@ export function DialogOpen(props: { sessions: SessionInfo[]; onLoad: (sessions: 
           category: "Projects",
           gutter:
             item.directory === current.directory ||
-            item.directory === location.current?.project.canonical
+            (item.directory === location.current?.project.canonical && !seen.has(locationKey(current)))
               ? () => <text fg={theme.text.formfield.selected}>●</text>
               : undefined,
         }
@@ -323,7 +333,7 @@ export function DialogOpen(props: { sessions: SessionInfo[]; onLoad: (sessions: 
             emptyView={
               <Show when={!recent.loading && !projects.loading}>
                 <box paddingLeft={4} paddingRight={4}>
-                  <text fg={theme.text.muted}>No recent sessions or projects</text>
+                  <text fg={theme.text.subdued}>No recent sessions or projects</text>
                 </box>
               </Show>
             }
@@ -337,13 +347,13 @@ export function DialogOpen(props: { sessions: SessionInfo[]; onLoad: (sessions: 
               >
                 <box>
                   <Show when={projectID() && worktrees.loading}>
-                    <Spinner color={theme.text.muted}>Loading worktrees…</Spinner>
+                    <Spinner color={theme.text.subdued}>Loading worktrees…</Spinner>
                   </Show>
                   <Show when={!projectID() && (recent.loading || projects.loading)}>
-                    <Spinner color={theme.text.muted}>Refreshing sessions and projects…</Spinner>
+                    <Spinner color={theme.text.subdued}>Refreshing sessions and projects…</Spinner>
                   </Show>
                   <Show when={!projectID() && (recent() === false || projects() === false)}>
-                    <text fg={theme.text.feedback.error.base}>
+                    <text fg={theme.text.feedback.error.default}>
                       Could not refresh{" "}
                       {recent() === false ? (projects() === false ? "sessions and projects" : "sessions") : "projects"}.
                     </text>
@@ -389,7 +399,7 @@ export function DialogOpen(props: { sessions: SessionInfo[]; onLoad: (sessions: 
             footerHints={[...(projectID() ? [{ title: "new worktree", label: "ctrl+n" }] : [])]}
             noMatchView={
               <box paddingLeft={4} paddingRight={4}>
-                <text fg={theme.text.muted}>
+                <text fg={theme.text.subdued}>
                   {projectID()
                     ? worktrees.loading
                       ? "Loading worktrees…"
@@ -421,7 +431,7 @@ export function DialogOpen(props: { sessions: SessionInfo[]; onLoad: (sessions: 
           size="large"
           title={`${projectName(data.project.get(projectID()!)) ?? "Project"} / New worktree`}
           placeholder="Worktree name (optional)"
-          description={() => <text fg={theme.text.muted}>Leave blank for a random name.</text>}
+          description={() => <text fg={theme.text.subdued}>Leave blank for a random name.</text>}
           busy={creating()}
           busyText="Creating worktree…"
           onCancel={cancelCreation}
@@ -431,7 +441,9 @@ export function DialogOpen(props: { sessions: SessionInfo[]; onLoad: (sessions: 
             setCreating(true)
             void client.api.worktree
               .create({
-                projectID: id,
+                location: {
+                  directory: data.project.get(id)!.canonical,
+                },
                 ...(value.trim() ? { name: value.trim() } : {}),
               })
               .then((created) => {

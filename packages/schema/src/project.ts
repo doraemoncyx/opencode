@@ -32,7 +32,6 @@ export interface Commands extends Schema.Schema.Type<typeof Commands> {}
 export const Time = Schema.Struct({
   created: NonNegativeInt,
   updated: NonNegativeInt,
-  active: NonNegativeInt,
 }).annotate({ identifier: "Project.Time" })
 export interface Time extends Schema.Schema.Type<typeof Time> {}
 

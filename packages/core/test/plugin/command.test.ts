@@ -55,7 +55,7 @@ describe("CommandPlugin.Plugin", () => {
                 return SessionInbox.User.make({
                   id: SessionMessage.ID.make("msg_test"),
                   sessionID: input.sessionID,
-                  time: { created: DateTime.makeUnsafe(0) },
+                  timeCreated: DateTime.makeUnsafe(0),
                   type: "user",
                   payload: { text: input.text },
                   delivery: input.delivery ?? "steer",

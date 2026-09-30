@@ -37,7 +37,6 @@ import { useSettings } from "@/settings/model"
 import { createFileTabListSync } from "@/session/files/file-tab-scroll"
 import {
   SESSION_OPEN_FILE_TAB,
-  SESSION_BTW_TAB,
   isSessionBrowserTab,
   sessionBrowserTab,
   createOpenSessionFileTab,
@@ -75,7 +74,6 @@ export function SessionSidePanel(props: {
   size: Sizing
   stacked?: boolean
   browser: ReturnType<typeof createSessionBrowser>
-  btwPanel: () => JSX.Element
 }) {
   const layout = useLayout()
   const settings = useSettings()
@@ -229,7 +227,7 @@ export function SessionSidePanel(props: {
   })
   const fileBrowserVisible = createMemo(() => {
     const active = activeTab()
-    return active === SESSION_OPEN_FILE_TAB || active === activeFileTab()
+    return active !== "review" && active !== "context" && active !== "empty" && !isSessionBrowserTab(active)
   })
   const openFileKeybind = createMemo(() => command.keybindParts("file.open"))
   const openBrowserKeybind = createMemo(() => command.keybindParts("browser.open"))
@@ -339,7 +337,7 @@ export function SessionSidePanel(props: {
                               aria-controls={activeTab() === "review" ? reviewTabPanelID : undefined}
                             >
                               {props.hasReview
-                                ? language.plural("session.review.filesChangedCount", props.reviewCount)
+                                ? language.t("session.review.filesChanged", { count: props.reviewCount })
                                 : language.t("session.tab.review")}
                             </Tabs.Trigger>
                           </Show>
@@ -387,14 +385,6 @@ export function SessionSidePanel(props: {
                                   />
                                 }
                               >
-                                <Match when={tab === SESSION_BTW_TAB}>
-                                  <SortableTab tab={tab} index={tabs().all().indexOf(tab)} onTabClose={tabs().close}>
-                                    <div class="flex items-center gap-1.5">
-                                      <Icon name="bubble-5" size="small" />
-                                      <span>{language.t("session.tab.btw")}</span>
-                                    </div>
-                                  </SortableTab>
-                                </Match>
                                 <Match when={isSessionBrowserTab(tab)}>
                                   <Show when={props.browser.tabs().find((item) => sessionBrowserTab(item.id) === tab)}>
                                     {(item) => (
@@ -593,12 +583,6 @@ export function SessionSidePanel(props: {
                         </Tabs.Content>
                       </Show>
 
-                      <Show when={activeTab() === SESSION_BTW_TAB}>
-                        <Tabs.Content value={SESSION_BTW_TAB} class="flex h-full min-h-0 flex-col overflow-hidden">
-                          {props.btwPanel()}
-                        </Tabs.Content>
-                      </Show>
-
                       <Show when={props.browser.opened()}>
                         <div
                           id={browserTabPanelID}
@@ -611,10 +595,7 @@ export function SessionSidePanel(props: {
                           classList={{ hidden: !isSessionBrowserTab(activeTab()) }}
                           inert={!isSessionBrowserTab(activeTab()) || undefined}
                         >
-                          <SessionBrowserPane
-                            browser={props.browser}
-                            visible={reviewOpen() && isSessionBrowserTab(activeTab())}
-                          />
+                          <SessionBrowserPane browser={props.browser} visible={isSessionBrowserTab(activeTab())} />
                         </div>
                       </Show>
 
@@ -670,7 +651,7 @@ export function SessionSidePanel(props: {
                   >
                     <Tabs.List>
                       <Tabs.Trigger value="changes" class="flex-1" classes={{ button: "w-full" }}>
-                        {language.plural("session.review.filesChangedCount", props.reviewCount)}
+                        {language.t("session.review.filesChanged", { count: props.reviewCount })}
                       </Tabs.Trigger>
                       <Tabs.Trigger value="all" class="flex-1" classes={{ button: "w-full" }}>
                         {language.t("session.files.all")}

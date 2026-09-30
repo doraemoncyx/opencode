@@ -1,10 +1,11 @@
 import { expect } from "bun:test"
-import { Effect } from "effect"
-import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import { createConnection, type Socket } from "node:net"
+import { Effect, Exit, Scope } from "effect"
+import { HttpServer, HttpServerError, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { it } from "../../core/test/lib/effect"
 import { ServerProcess } from "../src/process"
 
-it.live("authenticates API requests behind the frontend transform while allowing browser preflight", () =>
+it.live("authenticates API and frontend requests while allowing browser preflight", () =>
   Effect.gen(function* () {
     const fallback = "fallback".repeat(256)
     const server = yield* ServerProcess.start<never, never>(
@@ -18,16 +19,15 @@ it.live("authenticates API requests behind the frontend transform while allowing
       },
       undefined,
       (api) =>
-        Effect.gen(function* () {
-          const request = yield* HttpServerRequest.HttpServerRequest
-          const url = new URL(request.url, "http://localhost")
-          if (url.pathname === "/api" || url.pathname.startsWith("/api/") || url.pathname === "/openapi.json")
-            return yield* api
-          return HttpServerResponse.raw(fallback, { contentType: "text/plain" })
-        }),
+        api.pipe(
+          Effect.catchIf(
+            (error) => error instanceof HttpServerError.HttpServerError && error.reason._tag === "RouteNotFound",
+            () => Effect.succeed(HttpServerResponse.raw(fallback, { contentType: "text/plain" })),
+          ),
+        ),
     )
     const response = yield* Effect.promise(() =>
-      fetch(new URL("/api/info", HttpServer.formatAddress(server.address)), {
+      fetch(new URL("/api/status", HttpServer.formatAddress(server.address)), {
         method: "OPTIONS",
         headers: {
           origin: "http://localhost:3000",
@@ -42,7 +42,7 @@ it.live("authenticates API requests behind the frontend transform while allowing
     expect(response.headers.get("access-control-allow-headers")).toBe("authorization")
 
     const status = yield* Effect.promise(() =>
-      fetch(new URL("/api/info", HttpServer.formatAddress(server.address)), {
+      fetch(new URL("/api/status", HttpServer.formatAddress(server.address)), {
         headers: {
           authorization: `Basic ${btoa("opencode:secret")}`,
           origin: "http://localhost:3000",
@@ -60,7 +60,7 @@ it.live("authenticates API requests behind the frontend transform while allowing
         Effect.gen(function* () {
           const allowed = origin === "https://untrusted.example.com" ? null : origin
           const preflight = yield* Effect.promise(() =>
-            fetch(new URL("/api/info", HttpServer.formatAddress(server.address)), {
+            fetch(new URL("/api/status", HttpServer.formatAddress(server.address)), {
               method: "OPTIONS",
               headers: {
                 origin,
@@ -73,7 +73,7 @@ it.live("authenticates API requests behind the frontend transform while allowing
           expect(preflight.headers.get("access-control-allow-origin")).toBe(allowed)
 
           const status = yield* Effect.promise(() =>
-            fetch(new URL("/api/info", HttpServer.formatAddress(server.address)), {
+            fetch(new URL("/api/status", HttpServer.formatAddress(server.address)), {
               headers: { origin, authorization: `Basic ${btoa("opencode:secret")}` },
             }),
           )
@@ -82,7 +82,7 @@ it.live("authenticates API requests behind the frontend transform while allowing
           yield* Effect.promise(() => status.arrayBuffer())
 
           const denied = yield* Effect.promise(() =>
-            fetch(new URL("/api/info", HttpServer.formatAddress(server.address)), { headers: { origin } }),
+            fetch(new URL("/api/status", HttpServer.formatAddress(server.address)), { headers: { origin } }),
           )
           expect(denied.status).toBe(401)
           expect(denied.headers.get("access-control-allow-origin")).toBe(allowed)
@@ -128,10 +128,7 @@ it.live("authenticates API requests behind the frontend transform while allowing
       Effect.gen(function* () {
         const response = yield* Effect.promise(() => fetch(new URL(pathname, HttpServer.formatAddress(server.address))))
         expect(response.status).toBe(401)
-        expect(yield* Effect.promise(() => response.json())).toEqual({
-          _tag: "UnauthorizedError",
-          message: "Authentication required",
-        })
+        expect(yield* Effect.promise(() => response.text())).toBe("")
       }),
     )
 
@@ -147,9 +144,9 @@ it.live("authenticates API requests behind the frontend transform while allowing
                     headers: authorization ? { authorization } : undefined,
                   }),
                 )
-                expect(response.status).toBe(200)
-                expect(response.headers.get("www-authenticate")).toBeNull()
-                expect(yield* Effect.promise(() => response.text())).toBe(method === "HEAD" ? "" : fallback)
+                expect(response.status).toBe(401)
+                expect(response.headers.get("www-authenticate")).toBe('Basic realm="Secure Area"')
+                expect(yield* Effect.promise(() => response.text())).toBe("")
               }),
             )
             const response = yield* Effect.promise(() =>
@@ -167,67 +164,129 @@ it.live("authenticates API requests behind the frontend transform while allowing
   }),
 )
 
-it.live("pairing links sign in browsers with a cookie and API clients with a token", () =>
-  Effect.gen(function* () {
-    const server = yield* ServerProcess.start<never, never>({
-      hostname: "127.0.0.1",
-      port: 0,
-      password: "secret",
-      app: { version: "test-version" },
-      database: { path: ":memory:" },
-    })
-    const base = HttpServer.formatAddress(server.address)
-    const request = (pathname: string, init?: RequestInit) =>
-      Effect.promise(() => fetch(new URL(pathname, base), { redirect: "manual", ...init }))
-    const pair = Effect.gen(function* () {
-      const response = yield* request("/api/pair", {
-        method: "POST",
-        headers: { authorization: `Basic ${btoa("opencode:secret")}` },
-      })
-      expect(response.status).toBe(200)
-      return (yield* Effect.promise(() => response.json())) as { code: string; expires_in: number }
-    })
+// Idle keep-alive connections are dropped, and an upgraded WebSocket socket is
+// force-closed on shutdown, so the listener port can be rebound immediately.
+it.live(
+  "reclaims idle connections and force-closes upgraded sockets so the port can be rebound",
+  () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.Scope
+      const firstScope = yield* Scope.fork(scope)
+      const captured: Array<{ keepAliveTimeout: number; headersTimeout: number }> = []
+      const upgradedReady: Array<boolean> = []
+      const first = yield* ServerProcess.start<never, never>(
+        {
+          hostname: "127.0.0.1",
+          port: 0,
+          password: "secret",
+          app: { version: "test-version" },
+          database: { path: ":memory:" },
+        },
+        undefined,
+        (api) =>
+          Effect.gen(function* () {
+            const request = yield* HttpServerRequest.HttpServerRequest
+            const server = (
+              request.source as {
+                socket?: { server?: { keepAliveTimeout: number; headersTimeout: number } }
+              }
+            ).socket?.server
+            if (server)
+              captured.push({ keepAliveTimeout: server.keepAliveTimeout, headersTimeout: server.headersTimeout })
+            // A ticketed PTY connect URL skips auth because browsers cannot set
+            // headers on a WebSocket handshake. The upgrade stays open until
+            // forced shutdown destroys the underlying socket.
+            if (new URL(request.url, "http://localhost").pathname === "/api/pty/test/connect") {
+              const socket = yield* Effect.orDie(request.upgrade)
+              upgradedReady.push(true)
+              // The request fiber is uninterruptible, so drain the socket and let
+              // it complete when shutdown closes the connection.
+              yield* Effect.orDie(socket.run(() => Effect.void))
+              return HttpServerResponse.empty()
+            }
+            return yield* api
+          }),
+      ).pipe(Effect.provideService(Scope.Scope, firstScope))
 
-    const rejected = yield* request("/api/pair", { method: "POST" })
-    expect(rejected.status).toBe(401)
-    expect(rejected.headers.get("www-authenticate")).toBe('Basic realm="Secure Area"')
-    // A Basic challenge on fetch makes browsers show a native prompt instead of the app's sign-in screen.
-    const fetched = yield* request("/api/info", { headers: { "sec-fetch-mode": "cors" } })
-    expect(fetched.status).toBe(401)
-    expect(fetched.headers.get("www-authenticate")).toBeNull()
+      const base = HttpServer.formatAddress(first.address)
+      const port = new URL(base).port
 
-    const browser = yield* pair
-    expect(browser.expires_in).toBe(300)
-    const redirect = yield* request(`/auth/connect/${browser.code}`, { headers: { accept: "text/html" } })
-    expect(redirect.status).toBe(302)
-    expect(redirect.headers.get("location")).toBe("/")
-    const setCookie = redirect.headers.get("set-cookie") ?? ""
-    expect(setCookie).toContain(`opencode_session_${new URL(base).port}=`)
-    expect(setCookie).toContain("HttpOnly")
-    expect(setCookie).toContain("SameSite=Lax")
-    const cookie = setCookie.split(";")[0]
+      const socket = yield* openUpgrade(new URL(base), "/api/pty/test/connect?ticket=1")
+      yield* waitFor(() => captured.length > 0 && upgradedReady.length > 0).pipe(
+        Effect.timeoutOrElse({
+          duration: "2 seconds",
+          orElse: () => Effect.die(new Error("server never upgraded the connection")),
+        }),
+      )
+      expect(captured.at(-1)).toEqual({ keepAliveTimeout: 5_000, headersTimeout: 10_000 })
 
-    const reused = yield* request(`/auth/connect/${browser.code}`, { headers: { accept: "text/html" } })
-    expect(reused.status).toBe(401)
-    expect(yield* Effect.promise(() => reused.text())).toContain("opencode pair")
+      yield* Scope.close(firstScope, Exit.void).pipe(
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () => Effect.die(new Error("server shutdown did not settle")),
+        }),
+      )
+      yield* waitFor(() => socket.destroyed).pipe(
+        Effect.timeoutOrElse({
+          duration: "3 seconds",
+          orElse: () => Effect.die(new Error("upgraded socket survived shutdown")),
+        }),
+      )
 
-    expect((yield* request("/api/info", { headers: { cookie } })).status).toBe(200)
-    expect((yield* request("/api/info", { headers: { cookie, origin: base } })).status).toBe(200)
-    expect((yield* request("/api/info", { headers: { cookie, origin: "http://127.0.0.1:1" } })).status).toBe(401)
-    expect((yield* request("/api/info", { headers: { cookie: `${cookie}x` } })).status).toBe(401)
-
-    const client = yield* pair
-    const redeemed = yield* request(`/auth/connect/${client.code}`)
-    expect(redeemed.status).toBe(200)
-    const session = (yield* Effect.promise(() => redeemed.json())) as { token: string }
-    expect(
-      (yield* request("/api/info", { headers: { authorization: `Basic ${btoa(`opencode:${session.token}`)}` } }))
-        .status,
-    ).toBe(200)
-    expect((yield* request(`/auth/connect/${client.code}`)).status).toBe(401)
-    expect((yield* request("/auth/connect/unknown")).status).toBe(401)
-  }),
+      const secondScope = yield* Scope.fork(scope)
+      const second = yield* ServerProcess.start<never, never>({
+        hostname: "127.0.0.1",
+        port: Number(port),
+        password: "secret",
+        app: { version: "test-version" },
+        database: { path: ":memory:" },
+      }).pipe(Effect.provideService(Scope.Scope, secondScope))
+      expect(new URL(HttpServer.formatAddress(second.address)).port).toBe(port)
+      yield* Scope.close(secondScope, Exit.void).pipe(
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () => Effect.die(new Error("second server shutdown did not settle")),
+        }),
+      )
+    }),
+  20_000,
 )
+
+// Opens a TCP connection that speaks enough of the HTTP Upgrade handshake for
+// Node to emit `upgrade`. The socket is left open so shutdown must destroy it.
+function openUpgrade(origin: URL, path: string) {
+  return Effect.callback<Socket, Error>((resume) => {
+    const socket = createConnection({ host: origin.hostname, port: Number(origin.port) })
+    let settled = false
+    socket.on("error", (error) => {
+      if (settled) return
+      settled = true
+      resume(Effect.fail(error))
+    })
+    socket.once("connect", () => {
+      settled = true
+      socket.write(
+        [
+          `GET ${path} HTTP/1.1`,
+          `Host: ${origin.host}`,
+          "Connection: Upgrade",
+          "Upgrade: websocket",
+          "Sec-WebSocket-Version: 13",
+          `Sec-WebSocket-Key: ${Buffer.from("0123456789abcdef").toString("base64")}`,
+          "",
+          "",
+        ].join("\r\n"),
+      )
+      resume(Effect.succeed(socket))
+    })
+    return Effect.sync(() => socket.destroy())
+  })
+}
+
+const waitFor = (ready: () => boolean) =>
+  Effect.gen(function* () {
+    while (!ready()) yield* Effect.sleep("10 millis")
+  })
 
 async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, expected: string) {
   while (true) {

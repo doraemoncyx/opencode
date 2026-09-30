@@ -58,7 +58,6 @@ describe("Session tool progress", () => {
         assistantMessageID,
         agent: Agent.ID.make("build"),
         model,
-        started: 0,
       })
       const readAssistant = Effect.gen(function* () {
         const row = yield* db

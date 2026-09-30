@@ -131,6 +131,13 @@ export const Plugin = define({
 })
 
 function ancestorDirectories(start: string, stop: string): string[] {
-  if (start === stop) return [start]
-  return [start, ...ancestorDirectories(dirname(start), stop)]
+  // Path equality, not string equality: Windows resolves the same directory with
+  // differing drive-letter case, so `start === stop` never matches and the walk
+  // runs past the stop point to the drive root. `contains` compares the way the
+  // platform does.
+  if (FSUtil.contains(start, stop) && FSUtil.contains(stop, start)) return [start]
+  const parent = dirname(start)
+  // Filesystem root: `dirname` is a fixed point. Guard it like `FSUtil.up`.
+  if (parent === start) return [start]
+  return [start, ...ancestorDirectories(parent, stop)]
 }

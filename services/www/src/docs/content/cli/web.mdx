@@ -4,33 +4,36 @@ description: "Run OpenCode in the browser."
 ---
 
 OpenCode ships with a web ui that is served from the same server that powers the
-TUI. It's available by default and password protected.
+TUI. It's available by default.
+
+Requests that arrive from the machine running the server are treated as already
+authenticated, so opening the ui there needs no password. Requests from other
+machines to the shared service authenticate with its password.
 
 ## Access
 
+On the machine running the server, open the ui at its address. No credentials are
+required.
+
+```text
+http://127.0.0.1:49374
+```
+
+From another machine, the server has to listen on a reachable interface and you
+sign in with the service password.
+
 ```bash
+$ opencode service set hostname 0.0.0.0
+$ opencode service start
 $ opencode pair
 
-  Open a link to connect. Links work once and expire in 5 minutes.
-
-  http://127.0.0.1:49374/auth/connect/...
-
-  █▀▀▀▀▀█ ...
+  URLs      http://192.168.1.10:49374
+  Username  opencode
+  Password  ********
 ```
 
-Opening a link in a browser signs it in with a session cookie and loads the web
-ui. Scanning the QR code from the OpenCode app, or pasting the link into its
-server address field, connects the app the same way. Sessions last 30 days;
-changing the server password signs every session out.
-
-### Over SSH
-
-When the server listens only on localhost, forward its port from your machine
-and open the printed link locally:
-
-```bash
-$ ssh -L 49374:127.0.0.1:49374 my-server
-```
+`opencode pair` lists the available URLs, the username and password, and a QR
+code a client can scan.
 
 By default the server runs on port 49374 and listens only on localhost. You can
 change this config with the `opencode service` command.
@@ -81,6 +84,7 @@ Use it when you want to:
 - Run under a supervisor like systemd, Docker, or another environment that expects
   a foreground process.
 - Keep a dedicated server instead of the shared background service.
+
 
 Connect a client to it with `--server`:
 

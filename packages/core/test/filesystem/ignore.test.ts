@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { Ignore } from "@opencode/core/filesystem/ignore"
 // @ts-ignore
-import { createWrapper } from "@parcel/watcher/wrapper.js"
+import { createWrapper } from "@parcel/watcher/wrapper"
 
 test("parcel patterns ignore built-in folders at any depth", async () => {
   let ignoreGlobs: string[] = []

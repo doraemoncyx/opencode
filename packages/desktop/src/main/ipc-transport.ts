@@ -1,12 +1,13 @@
 import type { MessagePortMain, WebContents } from "electron"
-import { Context, Effect, Layer, Option, Queue, Schema, Stream } from "effect"
-import { RpcMessage, RpcServer } from "effect/unstable/rpc"
+import { Context, Effect, Layer, Option, Queue, Stream } from "effect"
+import { RpcMessage, RpcSerialization, RpcServer } from "effect/unstable/rpc"
 import { bindIpcEvents } from "./ipc-events"
 
 type PortBinding = {
   readonly id: number
   readonly sender: WebContents
   readonly port: MessagePortMain
+  readonly parser: RpcSerialization.Parser
   readonly onMessage: (event: Electron.MessageEvent) => void
   readonly onClose: () => void
   readonly unbindEvents: Effect.Effect<void>
@@ -19,9 +20,6 @@ type Handoff = {
 
 export class IpcPortHandoff extends Context.Service<IpcPortHandoff, Handoff>()("opencode/desktop/IpcPortHandoff") {}
 
-// Messages cross the port by structured clone, like Effect's worker protocol: no serialization
-// layer, so binary payloads stay binary and nothing is packed into a shared buffer. Electron's
-// MessagePortMain can only transfer ports, so byte payloads are cloned in both directions.
 export const IpcServerProtocolLive = Layer.unwrap(
   Effect.gen(function* () {
     const handoffs = yield* Queue.unbounded<readonly [WebContents, MessagePortMain]>()
@@ -32,6 +30,7 @@ export const IpcServerProtocolLive = Layer.unwrap(
       RpcServer.Protocol,
       RpcServer.Protocol.make(
         Effect.fnUntraced(function* (writeRequest) {
+          const serialization = yield* RpcSerialization.RpcSerialization
           const disconnects = yield* Queue.unbounded<number>()
           const inbound = yield* Queue.unbounded<readonly [number, RpcMessage.FromClientEncoded]>()
           const runFork = Effect.runForkWith(yield* Effect.context())
@@ -59,12 +58,21 @@ export const IpcServerProtocolLive = Layer.unwrap(
             }
 
             const id = nextClientId++
+            const parser = serialization.makeUnsafe()
             const onMessage = (event: Electron.MessageEvent) => {
-              Queue.offerUnsafe(inbound, [id, event.data as RpcMessage.FromClientEncoded] as const)
+              try {
+                parser
+                  .decode(event.data)
+                  .forEach((message) =>
+                    Queue.offerUnsafe(inbound, [id, message as RpcMessage.FromClientEncoded] as const),
+                  )
+              } catch {
+                return
+              }
             }
             const onClose = () => runFork(disconnect(id))
             const unbindEvents = yield* bindIpcEvents(sender.id)
-            const binding = { id, sender, port, onMessage, onClose, unbindEvents }
+            const binding = { id, sender, port, parser, onMessage, onClose, unbindEvents }
             bindings.set(id, binding)
             senderBindings.set(sender.id, id)
             port.on("message", onMessage)
@@ -84,11 +92,14 @@ export const IpcServerProtocolLive = Layer.unwrap(
           yield* Effect.addFinalizer(() => Effect.forEach([...bindings.keys()], disconnect, { discard: true }))
 
           return {
-            codecFor: Schema.toCodecJson,
+            codecFor: serialization.codecFor,
             disconnects,
             send: (clientId, response) =>
               Effect.sync(() => {
-                bindings.get(clientId)?.port.postMessage(response)
+                const binding = bindings.get(clientId)
+                if (!binding) return
+                const encoded = binding.parser.encode(response)
+                if (encoded !== undefined) binding.port.postMessage(encoded)
               }),
             end: disconnect,
             clientIds: Effect.sync(() => new Set(bindings.keys())),
@@ -112,4 +123,4 @@ export const IpcServerProtocolLive = Layer.unwrap(
       }),
     )
   }),
-)
+).pipe(Layer.provide(RpcSerialization.layerMsgPack))

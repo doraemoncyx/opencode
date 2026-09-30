@@ -80,13 +80,13 @@ export function createTimelineController(input: { session: TimelineSessionSource
     )
   })
   const titleValue = createMemo(() => input.session.data.info()?.title)
-  const titleLabel = createMemo(() => sessionTitle(titleValue()) ?? language.t("session.tab.session"))
+  const titleLabel = createMemo(() => sessionTitle(titleValue()) ?? language.t("command.session.new"))
   const parentMessages = createMemo(() => {
     const id = input.session.data.parentID()
     return id ? data.session.message.list(id) : emptyMessages
   })
   const parentTitle = createMemo(
-    () => sessionTitle(input.session.data.parent()?.title) ?? language.t("session.tab.session"),
+    () => sessionTitle(input.session.data.parent()?.title) ?? language.t("command.session.new"),
   )
   const childTaskDescription = createMemo(() => {
     const id = input.session.identity.sessionID()
@@ -100,7 +100,7 @@ export function createTimelineController(input: { session: TimelineSessionSource
       parentID: input.session.data.parentID(),
       taskDescription: childTaskDescription(),
       title: titleLabel(),
-      fallback: language.t("session.tab.session"),
+      fallback: language.t("command.session.new"),
     })
   })
   const showHeader = createMemo(() => !!input.session.identity.sessionID())
@@ -115,12 +115,12 @@ export function createTimelineController(input: { session: TimelineSessionSource
       tools: { ...detail.tools },
     }
   })
-  const reasoningMode = (): ReasoningMode =>
-    timelineDetail().thinking.placement === "hidden"
-      ? "hidden"
-      : timelineDetail().thinking.details === "expanded"
-        ? "full"
-        : "compact"
+  const reasoningMode = (): ReasoningMode => {
+    const thinking = timelineDetail().thinking
+    if (thinking.placement === "hidden") return "hidden"
+    if (thinking.details === "snippet") return "snippet"
+    return thinking.details === "expanded" ? "full" : "compact"
+  }
   const shellToolPartsExpanded = () => timelineDetail().shell.details === "expanded"
   const editToolPartsExpanded = () => timelineDetail().edit.details === "expanded"
   const projection = createTimelineProjection({
@@ -149,7 +149,7 @@ export function createTimelineController(input: { session: TimelineSessionSource
     if (!next || next === (titleLabel() ?? "")) return true
     setPending("rename", true)
     const success = await serverSDK.api.session
-      .update({ sessionID: id, title: next })
+      .rename({ sessionID: id, title: next })
       .then(() => true)
       .catch((error) => {
         showToast({ title: language.t("common.requestFailed"), description: errorMessage(error) })
@@ -209,7 +209,7 @@ export function createTimelineController(input: { session: TimelineSessionSource
 
   function DeleteDialog(props: { sessionID: string }) {
     const name = createMemo(
-      () => sessionTitle(data.session.get(props.sessionID)?.title) ?? language.t("session.tab.session"),
+      () => sessionTitle(data.session.get(props.sessionID)?.title) ?? language.t("command.session.new"),
     )
     const confirm = async () => {
       await remove(props.sessionID)

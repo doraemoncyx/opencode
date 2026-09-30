@@ -87,7 +87,7 @@ describe("toSessionError", () => {
     })
   })
 
-  test("preserves provider HTTP status without exposing runtime diagnostics", () => {
+  test("preserves provider HTTP status and body while dropping untyped diagnostics", () => {
     const http = new HttpContext({
       url: "https://example.com",
       status: 413,
@@ -110,7 +110,7 @@ describe("toSessionError", () => {
       type: "provider.invalid-request",
       message: "too large",
       status: 413,
-      response: { body: '{"error":"context limit"}' },
+      body: '{"error":"context limit"}',
     })
     expect(
       toSessionError(
@@ -128,36 +128,13 @@ describe("toSessionError", () => {
     })
   })
 
-  test("preserves provider response body without HTTP status", () => {
-    expect(toSessionError(llm(new RateLimitError({ message: "Slow down", body: '{"error":"rate limit"}' })))).toEqual({
-      type: "provider.rate-limit",
-      message: "Slow down",
-      response: { body: '{"error":"rate limit"}' },
-    })
-  })
+  test("bounds a large provider body for diagnostics", () => {
+    const oversized = "x".repeat(9 * 1024)
+    const error = toSessionError(llm(new InvalidProviderOutputError({ message: "bad frame", body: oversized })))
 
-  test("maps token-sharing failures while preserving HTTP and stream bodies", () => {
-    const cases = [
-      ["subscription_sharing_user_not_eligible", "token sharing isn't available for this account"],
-      ["subscription_sharing_usage_limit_exceeded", "ChatGPT usage limit reached"],
-      ["subscription_sharing_usage_unavailable", "Try again later"],
-      ["subscription_sharing_unsupported_capability", "Remove the unsupported feature"],
-      ["subscription_sharing_route_not_supported", "Check the configured endpoint"],
-      ["subscription_sharing_invalid_user", "Reconnect to ChatGPT"],
-      ["subscription_sharing_user_unavailable", "Try again later"],
-      ["chatpass_v2_scope_not_authorized", "isn't authorized for this request"],
-      ["chatpass_v2_invalid_authorization_context", "isn't authorized for this request"],
-    ] as const
-    for (const [code, guidance] of cases) {
-      for (const body of [
-        JSON.stringify({ error: { code, message: "Request failed" } }),
-        JSON.stringify({ type: "response.failed", response: { error: { code, message: "Request failed" } } }),
-      ]) {
-        const error = toSessionError(llm(new UnknownProviderError({ message: "Request failed", body })))
-        expect(error.message).toContain(guidance)
-        expect(error.response).toEqual({ body })
-      }
-    }
+    expect(error.body?.startsWith("x".repeat(8 * 1024))).toBe(true)
+    expect(error.body?.endsWith("…(truncated)")).toBe(true)
+    expect(error.body?.length).toBe(8 * 1024 + "…(truncated)".length)
   })
 
   test("preserves unresolved provider endpoint errors", () => {
@@ -177,7 +154,7 @@ describe("toSessionError", () => {
     const configuration = new ModelResolver.ModelConfigurationError({
       providerID: Provider.ID.make("azure"),
       modelID: ID.make("gpt-5.4-nano"),
-      package: "@opencode/ai/providers/azure/responses",
+      package: "aisdk:@ai-sdk/azure",
       detail: "Azure requires resourceName or baseURL",
     })
     expect(toSessionError(configuration)).toEqual({
@@ -225,7 +202,18 @@ describe("toSessionError", () => {
     expect(ineligible.map(SessionRunnerRetry.isRetryable)).toEqual([false, false, false, false, false, false, false])
   })
 
-  test("retries accepted transport reads but not accepted writes or rejected requests", () => {
+  test("retries recoverable invalid provider output but not unclassified output", () => {
+    const eligible = [
+      llm(new InvalidProviderOutputError({ message: "incomplete", classification: "incomplete-stream" })),
+      llm(new InvalidProviderOutputError({ message: "frame", classification: "invalid-frame" })),
+    ]
+    const ineligible = [llm(new InvalidProviderOutputError({ message: "output" }))]
+
+    expect(eligible.map(SessionRunnerRetry.isRetryable)).toEqual([true, true])
+    expect(ineligible.map(SessionRunnerRetry.isRetryable)).toEqual([false])
+  })
+
+  test("retries transport failures unless the provider accepted or rejected the request", () => {
     const retryable = [
       llm(new TransportError({ message: "http transport", transport: "http", operation: "request" })),
       llm(
@@ -246,6 +234,8 @@ describe("toSessionError", () => {
           phase: "send",
         }),
       ),
+    ]
+    const ineligible = [
       llm(
         new TransportError({
           message: "response interrupted",
@@ -253,17 +243,6 @@ describe("toSessionError", () => {
           operation: "read",
           delivery: "accepted",
           phase: "receive",
-        }),
-      ),
-    ]
-    const ineligible = [
-      llm(
-        new TransportError({
-          message: "accepted write failed",
-          transport: "websocket",
-          operation: "write",
-          delivery: "accepted",
-          phase: "send",
         }),
       ),
       llm(
@@ -278,7 +257,7 @@ describe("toSessionError", () => {
       ),
     ]
 
-    expect(retryable.map(SessionRunnerRetry.isRetryable)).toEqual([true, true, true, true])
+    expect(retryable.map(SessionRunnerRetry.isRetryable)).toEqual([true, true, true])
     expect(ineligible.map(SessionRunnerRetry.isRetryable)).toEqual([false, false])
   })
 

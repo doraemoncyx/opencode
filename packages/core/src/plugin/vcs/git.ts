@@ -9,7 +9,6 @@ import { AppProcess } from "@opencode/util/process"
 import { Location } from "../../location.js"
 import type { Adapter, BranchOptions, DiffOptions } from "../../vcs.js"
 import { DiffError } from "../../vcs.js"
-import { gitExecutable } from "../../util/git-executable.js"
 import {
   chunksByFile,
   emptyPatch,
@@ -169,7 +168,7 @@ function makeGit(proc: AppProcess.Interface) {
   const run = Effect.fnUntraced(
     function* (args: string[], opts: { cwd: string; maxOutputBytes?: number }) {
       const result = yield* proc.run(
-        ChildProcess.make(gitExecutable, [...cfg, ...args], {
+        ChildProcess.make("git", [...cfg, ...args], {
           cwd: opts.cwd,
           extendEnv: true,
           stdin: "ignore",

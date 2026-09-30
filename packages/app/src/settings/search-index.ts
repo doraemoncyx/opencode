@@ -17,6 +17,7 @@ export function settingsSearchIndex(input: {
   servers: readonly SettingsSearchServer[]
   desktop: boolean
   browser: boolean
+  dev: boolean
   mobile: boolean
   translate: ReturnType<typeof useLanguage>["t"]
 }) {
@@ -56,7 +57,8 @@ export function settingsSearchIndex(input: {
   clientSettings.forEach((entry) => {
     if (entry.available === "desktop" && !input.desktop) return
     if (entry.available === "browser" && !input.browser) return
-    if (entry.available === "mobile" && !input.mobile) return
+    if ((entry.available === "dev" || entry.available === "mobile-dev") && !input.dev) return
+    if (entry.available === "mobile-dev" && !input.mobile) return
     add(entry, { type: "root", tab: entry.tab, target: entry.target }, "")
   })
   input.servers.forEach((server) => {

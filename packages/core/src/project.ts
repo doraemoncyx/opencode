@@ -2,7 +2,7 @@ export * as Project from "./project.js"
 
 import { Context, Effect, Layer, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
-import { and, asc, desc, eq, gte, isNull, lte, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gte, isNull, lte } from "drizzle-orm"
 import path from "path"
 import { AbsolutePath } from "./schema.js"
 import { Bus } from "./bus.js"
@@ -14,6 +14,7 @@ import { AppProcess } from "@opencode/util/process"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { Hash } from "@opencode/util/hash"
 import { ProjectSchema } from "./project/schema.js"
+import { ProjectIdentity } from "./project/identity.js"
 import { ProjectTable, upsertProject } from "./project/sql.js"
 import { WorktreeTable } from "./worktree/sql.js"
 
@@ -57,15 +58,11 @@ export const root = Effect.fn("Project.root")(function* (
   )
 })
 
-const ACTIVATE_INTERVAL = 60_000
-
 export interface Interface {
   readonly list: () => Effect.Effect<ReadonlyArray<Info>>
   readonly update: (input: UpdateInput) => Effect.Effect<Info, NotFoundError>
-  /** Records Project activity for recency ordering, at most once per minute per Project. */
-  readonly activate: (projectID: ID) => Effect.Effect<void>
   /** Resolves and persists the owning Project. */
-  readonly resolve: (input: AbsolutePath) => Effect.Effect<Resolved>
+  readonly resolve: (input: AbsolutePath, options?: { readonly discovery?: boolean }) => Effect.Effect<Resolved>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Project") {}
@@ -89,7 +86,6 @@ function fromRow(row: typeof ProjectTable.$inferSelect): Info {
     time: {
       created: row.time_created,
       updated: row.time_updated,
-      active: row.time_active,
     },
     sandboxes: row.sandboxes,
   }
@@ -206,7 +202,7 @@ const layer = Layer.effect(
       const rows = yield* db
         .select()
         .from(ProjectTable)
-        .orderBy(desc(ProjectTable.time_active), asc(ProjectTable.id))
+        .orderBy(desc(ProjectTable.time_updated), asc(ProjectTable.id))
         .all()
         .pipe(Effect.orDie)
       return rows.map(fromRow)
@@ -236,22 +232,6 @@ const layer = Layer.effect(
       const project = fromRow(row)
       yield* bus.publish(ProjectSchema.Event.Updated, project)
       return project
-    })
-
-    const activated = new Map<ID, number>()
-    const activate = Effect.fn("Project.activate")(function* (projectID: ID) {
-      const now = Date.now()
-      if (now - (activated.get(projectID) ?? 0) < ACTIVATE_INTERVAL) return
-      activated.set(projectID, now)
-      const row = yield* db
-        .update(ProjectTable)
-        // Activity is not a metadata edit, so keep time_updated out of the implicit bump.
-        .set({ time_active: now, time_updated: sql`${ProjectTable.time_updated}` })
-        .where(eq(ProjectTable.id, projectID))
-        .returning()
-        .get()
-        .pipe(Effect.orDie)
-      if (row) yield* bus.publish(ProjectSchema.Event.Updated, fromRow(row))
     })
 
     const cached = Effect.fnUntraced(function* (dir: string) {
@@ -334,7 +314,10 @@ const layer = Layer.effect(
       }
     })
 
-    const resolve = Effect.fn("Project.resolve")(function* (input: AbsolutePath) {
+    const resolve = Effect.fn("Project.resolve")(function* (
+      input: AbsolutePath,
+      _options?: { readonly discovery?: boolean },
+    ) {
       const directory = AbsolutePath.make(yield* fs.resolve(input))
       const native = yield* fs.up({ targets: [".git", ".hg"], start: directory, mode: "first" }).pipe(
         Effect.map((matches) => matches[0]),
@@ -372,14 +355,14 @@ const layer = Layer.effect(
       }
 
       return yield* persist({
-        id: ID.make(Hash.fast(`directory:${directory}`)),
+        id: ProjectIdentity.fromDirectory(directory),
         directory,
         canonical: directory,
         vcs: undefined,
       })
     })
 
-    return Service.of({ list, update, activate, resolve })
+    return Service.of({ list, update, resolve })
   }),
 )
 

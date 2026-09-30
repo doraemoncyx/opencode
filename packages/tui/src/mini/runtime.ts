@@ -12,7 +12,6 @@ import { SessionMessage } from "@opencode/schema/session-message"
 import type { LocationRef } from "@opencode/client/promise"
 import type { Config } from "../config"
 import { newSessionLocation } from "../config/new-session-location"
-import { errorMessage } from "../util/error"
 import { loadRunAgents, loadRunCommands, loadRunReferences } from "./catalog.shared"
 import {
   resolveMiniSettings,
@@ -277,7 +276,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     onFormReply: async (next) => {
       if (state.demo?.formReply(next)) return
       try {
-        await state.sdk.session.form.reply(next, formRequestOptions(next.sessionID === "global" ? next.location : undefined))
+        await state.sdk.form.reply(next, formRequestOptions(next.sessionID === "global" ? next.location : undefined))
       } catch (error) {
         if (!formAlreadySettled(error)) throw error
       }
@@ -286,7 +285,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     onFormCancel: async (next) => {
       if (state.demo?.formCancel(next)) return
       try {
-        await state.sdk.session.form.cancel(next, formRequestOptions(next.sessionID === "global" ? next.location : undefined))
+        await state.sdk.form.cancel(next, formRequestOptions(next.sessionID === "global" ? next.location : undefined))
       } catch (error) {
         if (!formAlreadySettled(error)) throw error
       }
@@ -381,7 +380,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       void (
         state.stream
           ? state.stream.then((item) => item.handle.interruptActiveTurn())
-          : state.sdk.session.interrupt({ sessionID: state.sessionID, resume: true })
+          : state.sdk.session.interrupt({ sessionID: state.sessionID, continue: true })
       ).catch(() => {})
       return true
     },
@@ -396,11 +395,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     onQueuedPromptAction: async (action, inboxID) => {
       if (!state.sessionID) return
       log?.write(`send.pending.${action}`, { sessionID: state.sessionID, inboxID })
-      if (action === "cancel") {
-        await state.sdk.session.inbox.cancel({ sessionID: state.sessionID, inboxID })
-        return
-      }
-      await state.sdk.session.inbox.update({ sessionID: state.sessionID, inboxID, delivery: action })
+      await state.sdk.session.inbox[action]({ sessionID: state.sessionID, inboxID })
     },
     onSubagentInterrupt: (sessionID) => {
       log?.write("send.subagent.interrupt", { sessionID })
@@ -864,7 +859,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     if (signal?.aborted || footer.isClosed) return
     const text =
       (await state.stream?.then((item) => item.mod).catch(() => undefined))?.formatUnknownError(error) ??
-      errorMessage(error)
+      (error instanceof Error ? error.message : String(error))
     const commit = {
       kind: "error",
       text,
@@ -1008,7 +1003,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
               })
               const commit = {
                 kind: "error",
-                text: errorMessage(error),
+                text: error instanceof Error ? error.message : String(error),
                 phase: "start",
                 source: "system",
                 messageID: SessionMessage.ID.create(),

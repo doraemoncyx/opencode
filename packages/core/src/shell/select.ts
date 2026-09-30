@@ -2,7 +2,7 @@ export * as ShellSelect from "./select.js"
 
 import path from "path"
 import { readFile } from "fs/promises"
-import { statSync } from "fs"
+import { accessSync, statSync } from "fs"
 import { Context, Effect, Layer, Schema } from "effect"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { FSUtil } from "@opencode/util/fs-util"
@@ -53,7 +53,30 @@ export interface Interface extends State.Transformable<Editor> {
 export class Service extends Context.Service<Service, Interface>()("@opencode/ShellSelect") {}
 
 function stat(file: string) {
-  return statSync(file, { throwIfNoEntry: false }) ?? undefined
+  try {
+    return statSync(file, { throwIfNoEntry: false }) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+function accessible(file: string) {
+  try {
+    accessSync(file)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function windowsApp(file: string) {
+  const appData = process.env.LOCALAPPDATA
+  if (!appData) return
+  const alias = path.join(appData, "Microsoft", "WindowsApps", `${file}.exe`)
+  // Store-installed shells (e.g. pwsh) surface only as 0-byte App Execution
+  // Alias reparse points in WindowsApps that reject stat with EACCES, so `which`
+  // misses them even though they spawn fine; `access` still sees them.
+  if (accessible(alias)) return alias
 }
 
 function findExecutable(name: string, bin?: string) {
@@ -86,18 +109,20 @@ function rooted(file: string) {
 function executable(file: string, options?: Options, bin?: string) {
   const shell = full(file, options, bin)
   if (rooted(shell)) {
-    if (stat(shell)?.isFile()) return shell
+    const info = stat(shell)
+    if (info?.isFile()) return shell
+    if (!info && accessible(shell)) return shell
     return
   }
-  return findExecutable(shell, bin) ?? undefined
+  return findExecutable(shell, bin) ?? windowsApp(shell)
 }
 
 function win(options?: Options, bin?: string) {
   return Array.from(
     new Set(
       [
-        findExecutable("pwsh", bin),
-        findExecutable("powershell", bin),
+        findExecutable("pwsh", bin) ?? windowsApp("pwsh"),
+        findExecutable("powershell", bin) ?? windowsApp("powershell"),
         gitbash(options, bin),
         process.env.COMSPEC || "cmd.exe",
       ]

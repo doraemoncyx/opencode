@@ -5,9 +5,10 @@ import type {
   SessionStatus,
 } from "@opencode/client/promise"
 import { useI18n } from "@opencode/ui/context/i18n"
+import { Tooltip } from "@opencode/ui/tooltip"
 import { For, Show, createMemo, type Accessor, type JSX } from "solid-js"
 import { Dynamic } from "solid-js/web"
-import type { SessionUserActions, SessionUserAttachmentReference, SessionUserComment } from "../actions"
+import type { SessionUserActions, SessionUserComment } from "../actions"
 import { useData } from "../context"
 import { TimelineSeparator } from "../components/timeline-separator"
 import {
@@ -40,7 +41,6 @@ type FramedTimelineRow = Exclude<TimelineRow.TimelineRow, TimelineRow.TurnGap>
 export type SessionUserPresentation = {
   displayText?: string
   comments?: SessionUserComment[]
-  references?: SessionUserAttachmentReference[]
 }
 
 export function createSessionTimelineRowRenderer(input: {
@@ -64,24 +64,19 @@ export function createSessionTimelineRowRenderer(input: {
 }) {
   const i18n = useI18n()
   const data = useData()
-  // Cached timelines retain file-change subgroup identities alongside their disclosure choices.
+  // Cached timelines retain subgroup identities alongside their disclosure choices.
   const patchGroupKeys = input.disclosure.patchGroupKeys ?? new Map<string, string>()
   const patchPartKeys = new WeakMap<SessionMessageAssistant["content"][number], string>()
   const patchOwners = createMemo(() => {
     const owners = new Map<string, string>()
     const rows = input.projection.rows()
-    // Track status changes before a group is first opened: a failed file change can
+    // Track status changes before a group is first opened: a failed patch can
     // split an existing group without changing the projection's row identities.
     rows.forEach((row) => {
       if (row._tag !== "AssistantPart" || row.group.type !== "context") return
       row.group.refs.forEach((ref) => {
         const content = Timeline.resolveContent(input.projection.messageByID().get(ref.messageID), ref.partID)
-        if (
-          content?.type !== "tool" ||
-          !["edit", "write", "patch"].includes(content.name) ||
-          content.state.status === "error"
-        )
-          return
+        if (content?.type !== "tool" || content.name !== "patch" || content.state.status === "error") return
         const part = `${ref.messageID}:${ref.partID}`
         const key = patchGroupKeys.get(part)
         if (key && !owners.has(key)) owners.set(key, part)
@@ -190,6 +185,7 @@ export function createSessionTimelineRowRenderer(input: {
               ? input.timelineDetail().thinking.details === "expanded"
               : input.reasoningMode() === "full"
           }
+          reasoningPreview={input.reasoningMode() === "snippet"}
           reasoningOpen={(id) => input.disclosure.value(id)}
           onReasoningOpenChange={(id, open) => input.disclosure.set(id, open)}
           toolDefaultOpen={(tool) => (input.timelineDetail ? contentDefaultOpen(tool) : false)}
@@ -276,6 +272,7 @@ export function createSessionTimelineRowRenderer(input: {
                 showAssistantCopyPartID={copyContentID(row().userMessageID)}
                 turnDurationMs={duration(row().userMessageID)}
                 defaultOpen={defaultOpen()}
+                reasoningPreview={input.reasoningMode() === "snippet"}
                 toolOpen={input.disclosure.value(disclosureKey()) ?? defaultOpen()}
                 onToolOpenChange={(open) => input.disclosure.set(disclosureKey(), open)}
                 onContentRendered={onSizeChange}
@@ -315,11 +312,6 @@ export function createSessionTimelineRowRenderer(input: {
     if (message.type === "model-switched") return undefined
     if (message.type === "skill") return { label: i18n.t("ui.tool.skill"), data: message.name }
     if (message.type === "system") {
-      const sources = Array.isArray(message.metadata?.instructionSources)
-        ? message.metadata.instructionSources.filter((item): item is string => typeof item === "string")
-        : undefined
-      if (message.metadata?.notice === "instructions" && sources?.length)
-        return { label: i18n.t("ui.sessionTimeline.notice.instructionsUpdated"), items: sources }
       const prefix = "Instructions updated: "
       if (message.description?.startsWith(prefix)) {
         const keys = message.description
@@ -335,9 +327,7 @@ export function createSessionTimelineRowRenderer(input: {
       return { label: message.description ?? message.text }
     }
     if (message.type !== "synthetic") return undefined
-    if (message.metadata?.notice === "restart") return { label: i18n.t("ui.sessionTimeline.notice.restart") }
-    if (message.description === "Continuing after restart")
-      return { label: i18n.t("ui.sessionTimeline.notice.restart") }
+    if (message.description === "Continuing after restart") return { label: message.description }
     const source = typeof message.metadata?.source === "string" ? message.metadata.source : undefined
     const state = typeof message.metadata?.state === "string" ? message.metadata.state : undefined
     if (source === "subagent" || source === "shell") {
@@ -521,12 +511,25 @@ export function createSessionTimelineRowRenderer(input: {
           }
         >
           {(message) => (
-            <div data-slot="session-timeline-notice" data-type="location-switched" class={`w-full py-2 ${inset()}`}>
-              <TimelineSeparator
-                label={i18n.t("ui.sessionTimeline.notice.movedTo")}
-                value={message().location.directory}
-                tooltip={i18n.t("ui.sessionTimeline.notice.movedTooltip")}
-              />
+            <div
+              data-slot="session-timeline-notice"
+              data-type="location-switched"
+              class={`flex h-7 w-full min-w-0 items-center gap-2 py-1 text-[13px] leading-text-compact tracking-[-0.04px] text-v2-text-text-faint ${inset()}`}
+            >
+              <Tooltip
+                appearance="compact"
+                placement="top"
+                value={i18n.t("ui.sessionTimeline.notice.movedTooltip")}
+                class="shrink-0"
+                triggerTabIndex={0}
+              >
+                <bdi data-slot="session-timeline-notice-label" dir="auto" class="font-[530]">
+                  {i18n.t("ui.sessionTimeline.notice.movedTo")}
+                </bdi>
+              </Tooltip>{" "}
+              <bdi data-slot="session-timeline-notice-value" dir="ltr" class="min-w-0 truncate font-[440]">
+                {message().location.directory}
+              </bdi>
             </div>
           )}
         </Show>
@@ -590,7 +593,6 @@ export function createSessionTimelineRowRenderer(input: {
                       message={message()}
                       displayText={presentation()?.displayText}
                       comments={presentation()?.comments}
-                      references={presentation()?.references}
                       historicalAgent={context()?.agent ?? ""}
                       historicalModel={context()?.model ?? { id: "", providerID: "" }}
                       actions={input.actions}
@@ -684,6 +686,7 @@ export function createSessionTimelineRowRenderer(input: {
                     id={current().ref.partID}
                     content={content()}
                     streaming
+                    preview={input.reasoningMode() === "snippet"}
                     defaultOpen={
                       input.timelineDetail
                         ? input.timelineDetail().thinking.details === "expanded"

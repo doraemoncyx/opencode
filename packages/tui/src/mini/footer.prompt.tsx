@@ -41,7 +41,6 @@ import {
   createPromptHistory,
   displayCharAt,
   displaySlice,
-  EXIT_COMMANDS,
   isExitCommand,
   isCompactCommand,
   mentionTriggerIndex,
@@ -160,8 +159,7 @@ export type PromptState = {
   onPaste: (event: PasteEvent) => Promise<void>
   onContentChange: () => void
   onSizeChange: () => void
-  current: () => RunPrompt
-  replacePrompt: (prompt: RunPrompt, cursor?: number) => void
+  replacePrompt: (prompt: RunPrompt) => void
   bind: (area?: TextareaRenderable) => void
 }
 
@@ -533,9 +531,7 @@ export function createPromptState(input: PromptInput): PromptState {
         display: "/compact",
         description: "compact older session context to free space",
       } satisfies SlashOption,
-      ...EXIT_COMMANDS.map(
-        (name) => ({ kind: "slash", name, display: `/${name}`, description: "close OpenCode" }) satisfies SlashOption,
-      ),
+      { kind: "slash", name: "exit", display: "/exit", description: "close OpenCode" } satisfies SlashOption,
     ]
     const hidden = new Set(builtins.map((item) => item.name))
     return [
@@ -570,7 +566,11 @@ export function createPromptState(input: PromptInput): PromptState {
 
     return fuzzysort
       .go(next, mixed, {
-        keys: [(item) => (item.kind === "mention" ? item.value : item.name).trimEnd(), "display", "description"],
+        keys: [
+          (item) => (item.kind === "mention" ? item.value : item.name).trimEnd(),
+          "display",
+          "description",
+        ],
       })
       .map((item) => item.obj)
   })
@@ -1054,7 +1054,7 @@ export function createPromptState(input: PromptInput): PromptState {
 
       const cursor = area.cursorOffset
       const head = parseSlashHead(area.plainText)
-      const local = !shell() && (next.name === "new" || isExitCommand(`/${next.name}`))
+      const local = !shell() && (next.name === "new" || next.name === "exit")
       const separator = !shell() && !local && head && /\s/.test(area.plainText[head.end] ?? "") ? "" : " "
       const text = `/${next.name}${separator}`
 
@@ -1545,10 +1545,6 @@ export function createPromptState(input: PromptInput): PromptState {
       scheduleRows()
     },
     onSizeChange: scheduleRows,
-    current: () => {
-      syncDraft()
-      return promptCopy(draft)
-    },
     replacePrompt: restore,
     bind,
   }

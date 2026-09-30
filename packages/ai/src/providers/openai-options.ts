@@ -32,7 +32,10 @@ const openAIProviderOptions = (options: OpenAIOptionsInput | undefined): Provide
   return result
 }
 
-export const gpt5DefaultOptions = (modelID: string): ProviderOptions | undefined => {
+export const gpt5DefaultOptions = (
+  modelID: string,
+  options: { readonly textVerbosity?: boolean } = {},
+): ProviderOptions | undefined => {
   const id = modelID.toLowerCase()
   if (!id.includes("gpt-5") || id.includes("gpt-5-chat") || id.includes("gpt-5-pro")) return undefined
   return openAIProviderOptions({
@@ -44,19 +47,27 @@ export const gpt5DefaultOptions = (modelID: string): ProviderOptions | undefined
     // this, callers using the default model facade get reasoning summaries
     // they cannot replay statelessly.
     include: ["reasoning.encrypted_content"],
+    textVerbosity:
+      options.textVerbosity === true && id.includes("gpt-5.") && !id.includes("codex") && !id.includes("-chat")
+        ? "low"
+        : undefined,
   })
 }
 
-export const openAIDefaultOptions = (modelID: string): ProviderOptions | undefined =>
-  mergeProviderOptions(openAIProviderOptions({ store: false }), gpt5DefaultOptions(modelID))
+export const openAIDefaultOptions = (
+  modelID: string,
+  options: { readonly textVerbosity?: boolean } = {},
+): ProviderOptions | undefined =>
+  mergeProviderOptions(openAIProviderOptions({ store: false }), gpt5DefaultOptions(modelID, options))
 
 export const withOpenAIOptions = <Options extends { readonly providerOptions?: OpenAIProviderOptionsInput }>(
   modelID: string,
   options: Options,
+  defaults: { readonly textVerbosity?: boolean } = {},
 ): Omit<Options, "providerOptions"> & { readonly providerOptions?: ProviderOptions } => {
   return {
     ...options,
-    providerOptions: mergeProviderOptions(openAIDefaultOptions(modelID), options.providerOptions),
+    providerOptions: mergeProviderOptions(openAIDefaultOptions(modelID, defaults), options.providerOptions),
   }
 }
 

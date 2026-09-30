@@ -278,11 +278,7 @@ async function installMotionProbe(page: Page) {
           probe.resetAnchorOnMotion = false
         }
         probe.terminalAnchorGaps.push(anchorGap)
-        if (
-          panelGap &&
-          reviewRegion.getBoundingClientRect().height > 1 &&
-          terminalRegion.getBoundingClientRect().height > 1
-        )
+        if (panelGap && terminalRegion.getBoundingClientRect().height > 1)
           probe.panelGaps.push(panelGap.getBoundingClientRect().height)
         if (!review) return
         probe.paintGaps.push({

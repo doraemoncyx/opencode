@@ -23,10 +23,8 @@ export const Status = Schema.Literals(["running", "exited", "timeout", "killed"]
 export type Status = typeof Status.Type
 
 export const Time = Schema.Struct({
-  started: Schema.Finite.annotate({ description: "Start time in milliseconds since the Unix epoch" }),
-  completed: optional(Schema.Finite).annotate({
-    description: "Completion time in milliseconds since the Unix epoch",
-  }),
+  started: Schema.Finite,
+  completed: optional(Schema.Finite),
 })
 export interface Time extends Schema.Schema.Type<typeof Time> {}
 
@@ -45,7 +43,6 @@ export const Info = Schema.Struct({
   file: Schema.String,
   pid: optional(NonNegativeInt),
   exit: optional(Schema.Finite),
-  signal: optional(Schema.String),
   // Always present; defaults to an empty object when the creator supplies no metadata.
   metadata: Metadata,
   time: Time,
@@ -60,7 +57,7 @@ export const Event = { Created, Exited, Deleted, Definitions: inventory(Created,
 export const CreateInput = Schema.Struct({
   command: Schema.String,
   cwd: optional(Schema.String),
-  timeout: optional(NonNegativeInt),
+  timeout: NonNegativeInt,
   metadata: optional(Metadata),
 })
 export interface CreateInput extends Schema.Schema.Type<typeof CreateInput> {}

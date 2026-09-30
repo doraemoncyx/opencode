@@ -15,7 +15,7 @@ set it directly in your global CLI config:
 ```
 
 Themes belong to the terminal client. Put theme selection in `cli.json`, not `opencode.json`. See
-[CLI settings](/cli/config) for the config location and other terminal settings.
+[CLI config](/cli/config) for the config location and other terminal settings.
 
 ## Modes
 
@@ -62,19 +62,17 @@ The `system` theme is available when OpenCode can read your terminal palette.
 
 ## Files
 
-To create a global theme named `ocean`, use the theme tool to generate a complete file in the global theme directory.
-Its relevant structure looks like this:
+To create a global theme named `ocean`, save this file:
 
-```json title="~/.config/opencode/themes/ocean.json (excerpt)"
+```json title="~/.config/opencode/themes/ocean.json"
 {
-  "base": {
-    "text": {
-      "base": "#d8f3ff"
-    }
-  },
+  "version": 2,
   "dark": {
     "hue": {
       "accent": "$hue.cyan"
+    },
+    "text": {
+      "default": "#d8f3ff"
     }
   }
 }
@@ -93,28 +91,45 @@ same name.
 
 ## Format
 
-Every V2 theme declares one complete `base` token tree and at least one `light` or `dark` hue palette.
-Modes inherit only from that file's base; they do not inherit from the built-in OpenCode theme or from each other. Use
-the theme tool to generate a complete base before customizing it.
-
-The examples below show only the sections relevant to each concept; they are not complete theme files.
+Every V2 theme declares `version: 2` and at least one of `light` or `dark`:
 
 ```json title="themes/ocean.json"
 {
-  "base": {
+  "version": 2,
+  "light": {
     "text": {
-      "base": "#16324f"
+      "default": "#16324f"
     }
   },
-  "light": {
-    "hue": {}
-  },
   "dark": {
-    "hue": {},
-    "text": { "base": "#d8f3ff" }
+    "text": {
+      "default": "#d8f3ff"
+    }
   }
 }
 ```
+
+Custom themes inherit unspecified values from the built-in OpenCode theme. To base one mode on the other, add
+`mergeMode: true` to the mode containing the overrides:
+
+```json title="themes/ocean.json"
+{
+  "version": 2,
+  "light": {
+    "text": {
+      "default": "#16324f"
+    }
+  },
+  "dark": {
+    "mergeMode": true,
+    "text": {
+      "default": "#d8f3ff"
+    }
+  }
+}
+```
+
+Only one mode can use `mergeMode`, and the other mode must be present.
 
 ## Colors
 
@@ -122,13 +137,14 @@ Use a hex color, `transparent`, or a reference to another theme color:
 
 ```json title="themes/ocean.json"
 {
-  "base": {
+  "version": 2,
+  "dark": {
     "text": {
-      "base": "#d8f3ff",
-      "muted": "$hue.neutral.400"
+      "default": "#d8f3ff",
+      "subdued": "$hue.neutral.400"
     },
     "background": {
-      "base": "transparent"
+      "default": "transparent"
     }
   }
 }
@@ -143,14 +159,13 @@ Override a hue alias to change a family of related colors at once:
 
 ```json title="themes/ocean.json"
 {
-  "base": {
-    "categorical": ["accent", "purple", "green"]
-  },
+  "version": 2,
   "dark": {
     "hue": {
       "accent": "$hue.cyan",
       "interactive": "$hue.blue"
-    }
+    },
+    "categorical": ["accent", "purple", "green"]
   }
 }
 ```
@@ -161,23 +176,21 @@ Override a hue alias to change a family of related colors at once:
 | Alias   | `accent`, `interactive`, `neutral`                                 |
 | Step    | `100`, `200`, `300`, `400`, `500`, `600`, `700`, `800`, `900`      |
 
-Hue steps follow the mode's contrast direction: light themes run from dark at `100` to light at `900`, while dark
-themes run from light at `100` to dark at `900`.
-
 `categorical` sets the ordered hues used to distinguish agents and other repeated items. It must contain at least one
 base hue or alias.
 
 ## States
 
-Use state keys to change interactive colors. Unspecified states use the nearest base value:
+Use state keys to change interactive colors. Unspecified states use the nearest default value:
 
 ```json title="themes/ocean.json"
 {
-  "base": {
+  "version": 2,
+  "dark": {
     "text": {
       "action": {
         "primary": {
-          "base": "$hue.interactive.400",
+          "default": "$hue.interactive.400",
           "$hovered": "$hue.interactive.300",
           "$disabled": "$hue.neutral.600"
         }
@@ -196,14 +209,14 @@ Form fields use the same state keys directly under `text.formfield` or `backgrou
 
 ## Tokens
 
-The complete `base` contains every token group. A mode may override any part of it after providing its complete hue
-palette:
+Override only the token groups your theme needs:
 
 ```json title="themes/ocean.json"
 {
-  "base": {
+  "version": 2,
+  "dark": {
     "border": {
-      "base": "$hue.neutral.700"
+      "default": "$hue.neutral.700"
     },
     "syntax": {
       "comment": "$hue.neutral.500",
@@ -221,8 +234,8 @@ palette:
 
 | Group        | Purpose                                                       |
 | ------------ | ------------------------------------------------------------- |
-| `text`       | Base, muted, action, form-field, and feedback text         |
-| `background` | Base, surfaces, actions, form fields, and feedback fills    |
+| `text`       | Default, subdued, action, form-field, status, and feedback text |
+| `background` | Default, surfaces, actions, form fields, and feedback fills    |
 | `border`     | Borders                                                       |
 | `scrollbar`  | Scrollbars                                                    |
 | `diff`       | Added, removed, context, highlight, and line-number colors     |
@@ -233,31 +246,24 @@ Syntax keys are `comment`, `keyword`, `function`, `variable`, `string`, `number`
 `punctuation`. Markdown keys are `text`, `heading`, `link`, `linkText`, `code`, `blockQuote`, `emphasis`, `strong`,
 `horizontalRule`, `listItem`, `listEnumeration`, `image`, `imageText`, and `codeBlock`.
 
-## Raised surfaces
+## Contexts
 
-Panels, dialogs, menus, and toasts select their depth from `background.raised`. Dialogs additionally support a
-contextual `@dialog` surface. The TUI re-resolves the palette after applying `@dialog`, so tokens that reference
-`$background.base` follow the dialog background:
+Use context overrides for elevated panels and overlays while keeping the base theme elsewhere:
 
 ```json title="themes/ocean.json"
 {
-  "base": {
+  "version": 2,
+  "dark": {
     "background": {
-      "base": "#071521",
-      "raised": {
-        "base": "#0c1f2e",
-        "high": "#102a3c",
-        "max": "#16364b"
-      }
+      "default": "#071521"
     },
-    "@dialog": {
+    "@context:overlay": {
       "background": {
-        "base": "$background.raised.base"
+        "default": "#102a3c"
       }
     }
   }
 }
 ```
 
-`@dialog` accepts the same token groups as the base mode. An action's contextual `base` also becomes the fallback
-for its unspecified states; an explicit state override still wins.
+The available keys are `@context:elevated` and `@context:overlay`. Each accepts the same token groups as the base mode.

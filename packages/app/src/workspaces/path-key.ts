@@ -17,8 +17,10 @@ const isWindowsPath = (value: string) => value[1] === ":" || value.startsWith("\
 
 export const pathKey = (path: string) => {
   const value = isWindowsPath(path) ? path.replaceAll("\\", "/") : path
-  const trimmed = trimTrailingSlashes(value)
-  if (!trimmed && value.startsWith("/")) return "/" as PathKey
+  // Normalize Windows drive letter case so `f:\` and `F:\` identify the same location.
+  const normalized = value.replace(/^[a-zA-Z](?=:)/, (drive) => drive.toUpperCase())
+  const trimmed = trimTrailingSlashes(normalized)
+  if (!trimmed && normalized.startsWith("/")) return "/" as PathKey
   if (isDrive(trimmed)) return `${trimmed}/` as PathKey
   return trimmed as PathKey
 }

@@ -8,7 +8,7 @@ describe("createPtyClient", () => {
     let socketURL: URL | undefined
     const socket = { binaryType: "blob" } as unknown as WebSocket
     const api = OpenCode.make({
-      baseUrl: "https://server.example",
+      baseUrl: "https://server.example/base",
       headers: { Authorization: "Basic credential" },
       fetch: async (input, init) => {
         request = input instanceof Request ? input : new Request(input, init)
@@ -22,7 +22,7 @@ describe("createPtyClient", () => {
       },
     })
     const pty = createPtyClient(api, {
-      url: "https://server.example",
+      url: "https://server.example/base",
       openSocket(url) {
         socketURL = url
         return socket
@@ -65,31 +65,6 @@ describe("createPtyClient", () => {
     await expect(pty.connect({ ptyID: "pty_1", location: { directory: "/repo" } })).rejects.toThrow()
     expect(opened).toBe(false)
   })
-
-  test("keeps the server path prefix when opening the terminal socket", async () => {
-    let socketURL: URL | undefined
-    const api = OpenCode.make({
-      baseUrl: "https://server.example/base",
-      fetch: async () =>
-        Response.json({
-          location: {
-            directory: "/repo",
-            project: { id: "project_1", directory: "/repo", canonical: "/repo" },
-          },
-          data: { ticket: "ticket-1", expires_in: 60 },
-        }),
-    })
-    const pty = createPtyClient(api, {
-      url: "https://server.example/base",
-      openSocket(url) {
-        socketURL = url
-        return { binaryType: "blob" } as unknown as WebSocket
-      },
-    })
-
-    await pty.connect({ ptyID: "pty_1" })
-    expect(socketURL?.toString()).toBe("wss://server.example/base/api/pty/pty_1/connect?ticket=ticket-1")
-  })
 })
 
 describe("createPersistentPtyClient", () => {
@@ -98,7 +73,7 @@ describe("createPersistentPtyClient", () => {
     let socketURL: URL | undefined
     const socket = { binaryType: "blob" } as unknown as WebSocket
     const api = OpenCode.make({
-      baseUrl: "https://server.example",
+      baseUrl: "https://server.example/base",
       headers: { Authorization: "Basic credential" },
       fetch: async (input, init) => {
         request = input instanceof Request ? input : new Request(input, init)
@@ -106,7 +81,7 @@ describe("createPersistentPtyClient", () => {
       },
     })
     const pty = createPersistentPtyClient(api, {
-      url: "https://server.example",
+      url: "https://server.example/base",
       openSocket(url) {
         socketURL = url
         return socket
@@ -122,25 +97,5 @@ describe("createPersistentPtyClient", () => {
       "wss://server.example/api/experimental/persistent-pty/pty_1/connect?ticket=persistent-ticket&cursor=42&attachment_id=attachment_1&takeover=true&input_protocol=1",
     )
     expect(socket.binaryType).toBe("arraybuffer")
-  })
-
-  test("keeps the server path prefix when opening the persistent terminal socket", async () => {
-    let socketURL: URL | undefined
-    const api = OpenCode.make({
-      baseUrl: "https://server.example/base",
-      fetch: async () => Response.json({ data: { ticket: "ticket-1", expires_in: 60 } }),
-    })
-    const pty = createPersistentPtyClient(api, {
-      url: "https://server.example/base",
-      openSocket(url) {
-        socketURL = url
-        return { binaryType: "blob" } as unknown as WebSocket
-      },
-    })
-
-    await pty.connect({ ptyID: "pty_1", cursor: 0, attachmentID: "attachment_1" })
-    expect(socketURL?.toString()).toBe(
-      "wss://server.example/base/api/experimental/persistent-pty/pty_1/connect?ticket=ticket-1&cursor=0&attachment_id=attachment_1&takeover=false&input_protocol=1",
-    )
   })
 })

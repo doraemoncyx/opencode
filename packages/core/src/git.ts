@@ -1,16 +1,15 @@
 export * as Git from "./git.js"
 
 import path from "path"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schedule, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { AbsolutePath, RelativePath } from "./schema.js"
 import { FSUtil } from "@opencode/util/fs-util"
 import { AppProcess } from "@opencode/util/process"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
-import { FileDiff } from "@opencode/schema/file-diff"
+import { File } from "./file.js"
 import { KeyedMutex } from "./effect/keyed-mutex.js"
 import { VcsPatch } from "./vcs/patch.js"
-import { gitExecutable } from "./util/git-executable.js"
 
 export class Repository extends Schema.Class<Repository>("Git.Repository")({
   worktree: AbsolutePath,
@@ -152,7 +151,7 @@ export interface Interface {
       to: TreeID
       context?: number
       paths?: readonly RelativePath[]
-    }) => Effect.Effect<readonly FileDiff.Info[], OperationError>
+    }) => Effect.Effect<readonly File.Diff[], OperationError>
     readonly restore: (input: {
       repository: Repository
       files: ReadonlyMap<RelativePath, TreeID>
@@ -170,6 +169,11 @@ const layer = Layer.effect(
     const locks = KeyedMutex.makeUnsafe<string>()
     const locked = <A, E, R>(repository: Repository, effect: Effect.Effect<A, E, R>) =>
       locks.withLock(repository.gitDirectory)(effect)
+
+    // Git index locks are usually a brief concurrent-write race; retry a couple
+    // times before handing the failure to the caller's best-effort handling.
+    const captureWithRetry = <A>(effect: Effect.Effect<A, OperationError>) =>
+      effect.pipe(Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 2 }))
 
     const discover = Effect.fn("Git.repo.discover")(function* (input: AbsolutePath) {
       const dotgit = yield* fs.up({ targets: [".git"], start: input, mode: "first" }).pipe(
@@ -314,7 +318,7 @@ const layer = Layer.effect(
     ) {
       const result = yield* proc
         .run(
-          ChildProcess.make(gitExecutable, repositoryArgs(repository, args), {
+          ChildProcess.make("git", repositoryArgs(repository, args), {
             cwd: repository.worktree,
             env: options?.env,
             extendEnv: true,
@@ -442,14 +446,10 @@ const layer = Layer.effect(
       if (!input.paths.length) return new Set<RelativePath>()
       const result = yield* proc
         .run(
-          ChildProcess.make(
-            gitExecutable,
-            repositoryArgs(input.repository, ["check-ignore", "--no-index", "--stdin", "-z"]),
-            {
-              cwd: input.repository.worktree,
-              extendEnv: true,
-            },
-          ),
+          ChildProcess.make("git", repositoryArgs(input.repository, ["check-ignore", "--no-index", "--stdin", "-z"]), {
+            cwd: input.repository.worktree,
+            extendEnv: true,
+          }),
           { stdin: input.paths.join("\0") + "\0" },
         )
         .pipe(
@@ -485,10 +485,12 @@ const layer = Layer.effect(
       }) =>
         locked(
           input.repository,
-          Effect.gen(function* () {
-            yield* Effect.forEach(input.scopes, (scope) => refresh({ ...input, scope }), { discard: true })
-            return yield* writeTree(input.repository)
-          }),
+          captureWithRetry(
+            Effect.gen(function* () {
+              yield* Effect.forEach(input.scopes, (scope) => refresh({ ...input, scope }), { discard: true })
+              return yield* writeTree(input.repository)
+            }),
+          ),
         ),
     )
 
@@ -571,7 +573,7 @@ const layer = Layer.effect(
           additions: stat?.additions ?? 0,
           deletions: stat?.deletions ?? 0,
           patch: stat?.binary ? "" : (patches.get(entry.file) ?? VcsPatch.emptyPatch(entry.file)),
-        } satisfies FileDiff.Info
+        } satisfies File.Diff
       })
     })
 
@@ -630,7 +632,7 @@ const layer = Layer.effect(
       cwd = repository.worktree,
     ) {
       const result = yield* proc
-        .run(ChildProcess.make(gitExecutable, args, { cwd, extendEnv: true, stdin: "ignore" }))
+        .run(ChildProcess.make("git", args, { cwd, extendEnv: true, stdin: "ignore" }))
         .pipe(
           Effect.mapError(
             (cause) => new WorktreeError({ operation, directory: worktreeDirectory, message: cause.message, cause }),
@@ -726,7 +728,7 @@ function run(cwd: string, proc: AppProcess.Interface, args: string[]) {
 function execute(cwd: string, proc: AppProcess.Interface, args: string[]) {
   return proc
     .run(
-      ChildProcess.make(gitExecutable, args, {
+      ChildProcess.make("git", args, {
         cwd,
         extendEnv: true,
         stdin: "ignore",

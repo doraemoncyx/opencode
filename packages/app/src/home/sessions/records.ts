@@ -2,7 +2,6 @@ import type { SessionInfo } from "@opencode/client/promise"
 import type { LocalProject } from "@/shell/state/layout"
 import { compareSessionTime, displayName } from "@/shell/layout/helpers"
 import { pathKey } from "@/workspaces/path-key"
-import { getFilename } from "@opencode/util/path"
 
 export type HomeSessionRecord = {
   session: SessionInfo
@@ -10,15 +9,10 @@ export type HomeSessionRecord = {
   projectName: string
 }
 
-export function homeSessionLocation(directory: string, branch?: string) {
-  return { worktree: getFilename(directory) || directory, branch }
-}
-
 export function buildHomeSessionRecords(input: {
   sessions: () => SessionInfo[]
   projectDirectories: () => string[] | undefined
   projects: () => LocalProject[]
-  resolveProject?: (session: SessionInfo) => LocalProject | undefined
 }) {
   const selected = input.projectDirectories()
   const directories = selected ? new Set(selected.map(pathKey)) : undefined
@@ -28,12 +22,11 @@ export function buildHomeSessionRecords(input: {
   return [...new Map(sessions.map((session) => [session.id, session] as const)).values()]
     .sort(compareSessionTime)
     .map((session) => {
-      const project = input.resolveProject?.(session) ??
-        homeProjectForSession(session, input.projects()) ?? {
-          id: session.projectID,
-          worktree: session.location.directory,
-          expanded: false,
-        }
+      const project = homeProjectForSession(session, input.projects()) ?? {
+        id: session.projectID,
+        worktree: session.location.directory,
+        expanded: false,
+      }
       return { session, project, projectName: displayName(project) }
     })
 }

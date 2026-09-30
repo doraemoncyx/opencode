@@ -46,7 +46,6 @@ for (const interaction of ["hover", "focus"] as const) {
   test(`project Worktrees ${interaction} prefetches only its inventory and reuses the request`, async ({ page }) => {
     const inventory = Promise.withResolvers<void>()
     const calls: string[] = []
-    const refreshes: string[] = []
     const sessions: string[] = []
     await page.route(
       (url) => url.pathname === "/api/project",
@@ -55,14 +54,13 @@ for (const interaction of ["hover", "focus"] as const) {
     await page.route(
       (url) => url.pathname === "/api/worktree",
       async (route) => {
-        calls.push(new URL(route.request().url()).searchParams.get("projectID") ?? "")
+        calls.push(new URL(route.request().url()).searchParams.get("location[directory]") ?? "")
         await inventory.promise
         await route.fallback()
       },
     )
     page.on("request", (request) => {
       const url = new URL(request.url())
-      if (url.pathname === "/api/worktree/refresh") refreshes.push(request.postDataJSON().projectID)
       if (url.pathname === "/api/session" && url.searchParams.has("directory"))
         sessions.push(url.searchParams.get("directory")!)
     })
@@ -76,7 +74,7 @@ for (const interaction of ["hover", "focus"] as const) {
     await worktrees[interaction]()
     await requested
     await expect(worktrees).toHaveAttribute("aria-selected", "false")
-    await expect.poll(() => calls).toEqual([project.id])
+    await expect.poll(() => calls).toEqual([directory])
     expect(sessions).toEqual([])
 
     if (interaction === "hover") {
@@ -92,8 +90,7 @@ for (const interaction of ["hover", "focus"] as const) {
     inventory.resolve()
     await expect(settings.getByText("2 worktrees", { exact: true })).toBeVisible()
     await expect(settings.getByText("Cached worktree session", { exact: true })).toBeVisible()
-    expect(calls).toEqual([project.id])
-    expect(refreshes).toEqual([project.id])
+    expect(calls).toEqual([directory])
     await expect.poll(() => sessions.toSorted()).toEqual(sandboxes.toSorted())
   })
 }
@@ -116,11 +113,7 @@ for (const nested of [false, true]) {
       await page.reload()
       await page.getByTestId("settings-screen").getByRole("tab", { name: "Settings server", exact: true }).click()
     }
-    const calls = { projects: 0, worktrees: [] as string[], refreshes: [] as string[] }
-    page.on("request", (request) => {
-      if (new URL(request.url()).pathname === "/api/worktree/refresh")
-        calls.refreshes.push(request.postDataJSON().projectID)
-    })
+    const calls = { projects: 0, worktrees: [] as string[] }
     await page.route(
       (url) => url.pathname === "/api/project",
       async (route) => {
@@ -131,9 +124,9 @@ for (const nested of [false, true]) {
     await page.route(
       (url) => url.pathname === "/api/worktree",
       async (route) => {
-        const requested = new URL(route.request().url()).searchParams.get("projectID") ?? ""
+        const requested = new URL(route.request().url()).searchParams.get("location[directory]") ?? ""
         calls.worktrees.push(requested)
-        if (requested === other.id) return route.fulfill({ json: [{ directory: other.canonical }] })
+        if (requested === other.canonical) return route.fulfill({ json: [{ directory: other.canonical }] })
         await route.fallback()
       },
     )
@@ -148,13 +141,12 @@ for (const nested of [false, true]) {
     await fetched
     await worktrees.focus()
     await expect(worktrees).toHaveAttribute("aria-selected", "false")
-    expect(calls).toEqual({ projects: 1, worktrees: [], refreshes: [] })
+    expect(calls).toEqual({ projects: 1, worktrees: [] })
 
     await worktrees.click()
     await expect(settings.getByText("2 worktrees", { exact: true })).toBeVisible()
     expect(calls.projects).toBe(1)
-    expect(calls.worktrees.toSorted()).toEqual([project.id, other.id].toSorted())
-    expect(calls.refreshes).toEqual([])
+    expect(calls.worktrees.toSorted()).toEqual([directory, other.canonical].toSorted())
   })
 }
 

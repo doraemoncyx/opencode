@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
+import { Catalog } from "@opencode/core/catalog"
 import { Plugin } from "@opencode/core/plugin"
 import { PluginHost } from "@opencode/core/plugin/host"
 import { CerebrasPlugin } from "@opencode/core/plugin/provider/cerebras"
@@ -18,15 +19,15 @@ const addPlugin = Effect.fn(function* () {
 describe("CerebrasPlugin", () => {
   it.effect("applies the legacy integration header", () =>
     Effect.gen(function* () {
-      const catalog = yield* Provider.Service
+      const catalog = yield* Catalog.Service
       yield* catalog.transform((catalog) => {
-        catalog.update(Provider.ID.make("cerebras"), (item) => {
-          item.package = "@opencode/ai/providers/cerebras"
+        catalog.provider.update(Provider.ID.make("cerebras"), (item) => {
+          item.package = Provider.aisdk("@ai-sdk/cerebras")
           item.headers = { ...item.headers, Existing: "1" }
         })
       })
       yield* addPlugin()
-      expect((yield* catalog.get(Provider.ID.make("cerebras")))?.headers).toEqual({
+      expect((yield* catalog.provider.get(Provider.ID.make("cerebras")))?.headers).toEqual({
         Existing: "1",
         "X-Cerebras-3rd-Party-Integration": "opencode",
       })
@@ -35,25 +36,25 @@ describe("CerebrasPlugin", () => {
 
   it.effect("ignores non-Cerebras providers", () =>
     Effect.gen(function* () {
-      const catalog = yield* Provider.Service
-      yield* catalog.transform((catalog) => catalog.update(Provider.ID.make("groq"), () => {}))
+      const catalog = yield* Catalog.Service
+      yield* catalog.transform((catalog) => catalog.provider.update(Provider.ID.make("groq"), () => {}))
       yield* addPlugin()
-      expect((yield* catalog.get(Provider.ID.make("groq")))?.headers).toBeUndefined()
+      expect((yield* catalog.provider.get(Provider.ID.make("groq")))?.headers).toBeUndefined()
     }),
   )
 
   it.effect("applies the integration header to custom native Cerebras providers", () =>
     Effect.gen(function* () {
-      const catalog = yield* Provider.Service
+      const catalog = yield* Catalog.Service
       const providerID = Provider.ID.make("custom-cerebras")
       yield* catalog.transform((catalog) => {
-        catalog.update(providerID, (item) => {
+        catalog.provider.update(providerID, (item) => {
           item.package = "@opencode/ai/providers/cerebras"
           item.headers = { Existing: "1" }
         })
       })
       yield* addPlugin()
-      expect((yield* catalog.get(providerID))?.headers).toEqual({
+      expect((yield* catalog.provider.get(providerID))?.headers).toEqual({
         Existing: "1",
         "X-Cerebras-3rd-Party-Integration": "opencode",
       })

@@ -349,7 +349,7 @@ function SessionSurfaceHeader(props: {
           }}
         />
         <Button size="small" variant="neutral" onClick={props.onReset}>
-          {language.t("common.reset")}
+          Reset
         </Button>
       </div>
     </header>

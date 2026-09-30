@@ -23,7 +23,7 @@ import { createEffect, createMemo, createResource, lazy, Show, Suspense } from "
 import { createStore } from "solid-js/store"
 import type { ElectronAPI } from "./api-types"
 import { DesktopFirstLaunchOnboarding } from "./onboarding"
-import { createDesktopPlatform } from "./platform"
+import { createDesktopPlatform, type DesktopWindowState } from "./platform"
 import { bindDesktopMenu } from "./platform/menu"
 import { createSidecarResolver, initializationData, sidecarHttp } from "./startup/initialization"
 import { preloadStoredLocale } from "./startup/locale"
@@ -37,49 +37,53 @@ const MigrationStatus = lazy(() => import("./migration-status").then((module) =>
 
 export function DesktopApp(props: { api: ElectronAPI; updater: UpdaterPlatform; version: string }) {
   const windowState = { id: props.api.getWindowID(), version: props.version }
-  const initialUrl = getLastActiveUrl(windowState.id)
-  const url = new URL(initialUrl, "http://localhost")
+  const url = new URL(getLastActiveUrl(windowState.id), "http://localhost")
   const route = currentRoute(url.pathname, url.search)
-  const [startup, setStartup] = createStore({
+  const [startup, setStartup] = createStore<{ ready: boolean; visible: boolean; route: LayoutRoute }>({
     ready: false,
     visible: true,
-    themeReady: false,
-    onboardingReady: false,
-    drawingReady: false,
     route,
   })
-  // The window was created with the answers the shell gate needs; only a fresh install, which has no
-  // onboarding decision yet, asks over IPC and waits for the port.
-  const bootstrap = props.api.getWindowBootstrap()
-  const [firstLaunch] = createResource(() =>
-    bootstrap.firstLaunchPending !== undefined
-      ? Promise.resolve(bootstrap.firstLaunchPending)
-      : props.api.isFirstLaunchOnboardingPending().catch((error) => {
-          console.error("[desktop-onboarding] first launch check failed", error)
-          return false
-        }),
+  return (
+    <>
+      <DesktopWindow
+        api={props.api}
+        updater={props.updater}
+        windowState={windowState}
+        onReady={() => setStartup("ready", true)}
+        onRoute={(route) => setStartup("route", route)}
+      />
+      <Show when={startup.visible}>
+        <div
+          class="fixed inset-0 z-[100] transition-opacity duration-300 ease-out"
+          classList={{ "pointer-events-none opacity-0": startup.ready }}
+          onTransitionEnd={(event) => {
+            if (event.target !== event.currentTarget || !startup.ready) return
+            setStartup("visible", false)
+          }}
+        >
+          <LoadingSplash deep={startup.route.type === "draft"} />
+        </div>
+      </Show>
+    </>
   )
-  const platform = createDesktopPlatform(props.api, windowState, props.updater)
-  const [sidecar, { mutate: setSidecar }] = createResource(() => props.api.awaitInitialization())
-  const [defaultServer] = createResource(async () => {
-    if (bootstrap.defaultServerUrl === undefined) return platform.getDefaultServer?.()
-    return bootstrap.defaultServerUrl ? ServerConnection.Key.make(bootstrap.defaultServerUrl) : null
-  })
-  const [locale] = createResource(() => preloadStoredLocale(platform))
-  const [initialRoute] = createResource(
-    () => !firstLaunch.loading && (firstLaunch() && initialUrl === "/" ? "/new-session" : initialUrl),
-    preloadRoute,
-  )
-  const router = (routerProps: BaseRouterProps) => <DesktopMemoryRouter {...routerProps} windowID={windowState.id} />
-  const readyToReveal = () =>
-    startup.ready &&
-    (!import.meta.env.OPENCODE_TEST_ONBOARDING || !firstLaunch() || initialUrl !== "/" || startup.drawingReady)
+}
 
-  // Reveal only after the theme and the first-launch splash choice are both resolved.
-  createEffect(() => {
-    if (!startup.themeReady || firstLaunch.loading) return
-    void props.api.themeReady()
-  })
+function DesktopWindow(props: {
+  api: ElectronAPI
+  updater: UpdaterPlatform
+  windowState: DesktopWindowState
+  onReady: () => void
+  onRoute: (route: LayoutRoute) => void
+}) {
+  const platform = createDesktopPlatform(props.api, props.windowState, props.updater)
+  const [sidecar, { mutate: setSidecar }] = createResource(() => props.api.awaitInitialization())
+  const [defaultServer] = createResource(() => platform.getDefaultServer?.())
+  const [locale] = createResource(() => preloadStoredLocale(platform))
+  const [initialRoute] = createResource(() => preloadRoute(getLastActiveUrl(props.windowState.id)))
+  const router = (routerProps: BaseRouterProps) => (
+    <DesktopMemoryRouter {...routerProps} windowID={props.windowState.id} />
+  )
 
   function ReadyApp() {
     const wslServers = useWslServers()
@@ -87,13 +91,7 @@ export function DesktopApp(props: { api: ElectronAPI; updater: UpdaterPlatform; 
     const sshConnections = createSshConnections(props.api.sshServers)
     const language = useLanguage()
     const ready = createMemo(
-      () =>
-        !firstLaunch.loading &&
-        !defaultServer.loading &&
-        !sidecar.loading &&
-        !locale.loading &&
-        !wslServers.isLoading &&
-        !ssh.loading,
+      () => !defaultServer.loading && !sidecar.loading && !locale.loading && !wslServers.isLoading && !ssh.loading,
     )
     const servers = createMemo(() => {
       const data = initializationData(sidecar)
@@ -121,16 +119,14 @@ export function DesktopApp(props: { api: ElectronAPI; updater: UpdaterPlatform; 
           {(key) => (
             <AppInterface defaultServer={key} servers={servers()} router={router}>
               <DesktopStartupReady
-                routeReady={!initialRoute.loading && startup.onboardingReady}
-                onReady={() => setStartup("ready", true)}
-                onRoute={(route) => setStartup("route", route)}
+                routeReady={() => !initialRoute.loading}
+                onReady={props.onReady}
+                onRoute={props.onRoute}
               />
               <DesktopFirstLaunchOnboarding
                 api={props.api}
-                initialUrl={initialUrl}
+                initialUrl={getLastActiveUrl(props.windowState.id)}
                 serverKey={key}
-                pending={firstLaunch() ?? false}
-                onReady={() => setStartup("onboardingReady", true)}
               />
               <DesktopEffects api={props.api} />
               <Suspense fallback={null}>
@@ -152,36 +148,17 @@ export function DesktopApp(props: { api: ElectronAPI; updater: UpdaterPlatform; 
         onNativeTranslations={(bundle) => void props.api.setNativeTranslations(bundle).catch(() => undefined)}
         onThemeApplied={(mode, scheme) => {
           void props.api.setTitlebar({ mode, scheme })
-          setStartup("themeReady", true)
+          void props.api.themeReady()
         }}
       >
         <Show when={true}>{(_) => <ReadyApp />}</Show>
-        <Show when={!firstLaunch.loading && startup.visible}>
-          <div
-            data-component="startup-overlay"
-            class="fixed inset-0 z-[100] transition-opacity duration-300 ease-out"
-            classList={{ "pointer-events-none opacity-0": readyToReveal() }}
-            onTransitionEnd={(event) => {
-              if (event.target !== event.currentTarget || !readyToReveal()) return
-              setStartup("visible", false)
-            }}
-          >
-            <LoadingSplash
-              firstLaunch={!!firstLaunch() && initialUrl === "/"}
-              deep={startup.route.type === "draft"}
-              platform={platform}
-              preview={import.meta.env.OPENCODE_TEST_ONBOARDING}
-              onDrawEnd={() => setStartup("drawingReady", true)}
-            />
-          </div>
-        </Show>
       </AppBaseProviders>
     </PlatformProvider>
   )
 }
 
 function DesktopStartupReady(props: {
-  routeReady: boolean
+  routeReady: () => boolean
   onReady: () => void
   onRoute: (route: LayoutRoute) => void
 }) {
@@ -189,7 +166,7 @@ function DesktopStartupReady(props: {
   const route = useCurrentRoute()
   createEffect(() => props.onRoute(route()))
   createEffect(() => {
-    if (!props.routeReady || !tabs.ready() || !tabs.infoReady()) return
+    if (!props.routeReady() || !tabs.ready() || !tabs.infoReady()) return
     props.onReady()
   })
   return null

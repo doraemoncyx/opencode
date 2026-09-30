@@ -1,4 +1,4 @@
-import { batch, createEffect, createMemo, on } from "solid-js"
+import { batch, createEffect, createMemo, on, onCleanup } from "solid-js"
 import type { Browser } from "@opencode/plugin-browser/rpc"
 import { createStore } from "solid-js/store"
 import { useLanguage } from "@/runtime/i18n/language"
@@ -33,6 +33,13 @@ export function createSessionBrowser(session: SessionModel) {
       attachment()?.browser?.tabs.filter((tab) => session.layout.tabs().all().includes(sessionBrowserTab(tab.id))) ??
       [],
   )
+  const focus = (tabID: Browser.TabID) => {
+    session.layout.view().reviewPanel.open()
+    const tabs = session.layout.tabs()
+    const key = sessionBrowserTab(tabID)
+    if (!tabs.all().includes(key)) tabs.setAll([...tabs.all(), key])
+    tabs.setActive(key)
+  }
   const command = (command: BrowserPaneCommand) => {
     const sessionID = session.identity.sessionID()
     if (!sessionID) return
@@ -59,7 +66,8 @@ export function createSessionBrowser(session: SessionModel) {
   createEffect(() => {
     const sessionID = session.identity.sessionID()
     if (!sessionID) return
-    if (attachments.enabled()) attachments.attach(server, sessionID, session.layout.sessionKey())
+    if (attachments.enabled()) attachments.attach(server, sessionID)
+    onCleanup(attachments.onFocus(server, sessionID, focus))
   })
   createEffect(
     on(

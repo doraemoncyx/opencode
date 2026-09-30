@@ -6,6 +6,7 @@ import { ToolFailure } from "@opencode/ai"
 import { FileDiff } from "@opencode/schema/file-diff"
 import { Effect, Result, Schema } from "effect"
 import { Bom } from "@opencode/util/bom"
+import type { FileEncoding } from "@opencode/util/encoding"
 import { Environment } from "../../environment/index.js"
 import { Formatter } from "../../formatter.js"
 import { FileMutation } from "../../file-mutation.js"
@@ -44,10 +45,17 @@ export const toModelContent = (output: Output) =>
     ),
   ].join("\n")
 
+// 写出字节按目标文件编码编码；GBK 走 writeFileEncoded 以剥离 BOM 字符而非编码成 '?'
+function encodedContent(content: string, encoding: FileEncoding): Uint8Array {
+  const value = Bom.writeFileEncoded(content, encoding)
+  return typeof value === "string" ? new TextEncoder().encode(value) : value
+}
+
 type Prepared =
   | (Extract<Patch.Hunk, { readonly type: "add" }> & {
       readonly target: FileAccess.Target
       readonly content: string
+      readonly encoding: FileEncoding
       readonly before: string
       readonly after: string
     })
@@ -59,6 +67,7 @@ type Prepared =
   | (Extract<Patch.Hunk, { readonly type: "update" }> & {
       readonly target: FileAccess.Target
       readonly content: string
+      readonly encoding: FileEncoding
       readonly before: string
       readonly after: string
       readonly moveTarget?: FileAccess.Target
@@ -113,7 +122,7 @@ export const Plugin = {
                 return yield* new ToolFailure({ message: "patch rejected: empty patch" })
               }
               const prepared: Prepared[] = []
-              const updates = new Map<string, string>()
+              const updates = new Map<string, { content: string; encoding: FileEncoding }>()
               const resolveTarget = Effect.fnUntraced(function* (value: string) {
                 const target = yield* access.resolve({ path: value, kind: "file" })
                 if (!target.externalDirectory) return target
@@ -133,6 +142,7 @@ export const Plugin = {
                       ...hunk,
                       target,
                       content,
+                      encoding: "utf-8",
                       before: "",
                       after: Bom.split(content).text,
                     })
@@ -151,7 +161,7 @@ export const Plugin = {
                     return
                   }
                   const previous = updates.get(target.absolute)
-                  const original =
+                  const source =
                     previous ??
                     (yield* Effect.gen(function* () {
                       const content = yield* FileMutation.readText(environment.files, target.absolute).pipe(
@@ -162,8 +172,9 @@ export const Plugin = {
                             }),
                         ),
                       )
-                      return Bom.join(content.text, content.bom)
+                      return { content: Bom.join(content.text, content.bom), encoding: content.encoding }
                     }))
+                  const original = source.content
                   const before = Bom.split(original).text
                   const update = yield* Effect.try({
                     try: () => Patch.derive(hunk.path, hunk.chunks, original),
@@ -174,11 +185,16 @@ export const Plugin = {
                     ...hunk,
                     target,
                     content: Patch.joinBom(update.content, update.bom),
+                    encoding: source.encoding,
                     before,
                     after: update.content,
                     moveTarget,
                   })
-                  if (!moveTarget) updates.set(target.absolute, Patch.joinBom(update.content, update.bom))
+                  if (!moveTarget)
+                    updates.set(target.absolute, {
+                      content: Patch.joinBom(update.content, update.bom),
+                      encoding: source.encoding,
+                    })
                 }).pipe(
                   Effect.mapError((error) =>
                     error instanceof ToolFailure
@@ -225,7 +241,7 @@ export const Plugin = {
                     if (change.type === "update" && change.moveTarget) {
                       const moveTarget = change.moveTarget
                       yield* environment.files
-                        .write(moveTarget.absolute, new TextEncoder().encode(change.content))
+                        .write(moveTarget.absolute, encodedContent(change.content, change.encoding))
                         .pipe(Effect.mapError((error) => fail(`Failed to write ${moveTarget.resource}`, error)))
                       yield* environment.files
                         .remove(change.target.absolute)
@@ -242,7 +258,7 @@ export const Plugin = {
                       return
                     }
                     yield* environment.files
-                      .write(change.target.absolute, new TextEncoder().encode(change.content))
+                      .write(change.target.absolute, encodedContent(change.content, change.encoding))
                       .pipe(Effect.mapError((error) => fail(`Failed to write ${change.target.resource}`, error)))
                     applied.push({
                       type: change.type,
@@ -262,11 +278,12 @@ export const Plugin = {
                     )
                     formatted.set(
                       target,
-                      (yield* formatter.file(target))
-                        ? yield* FileMutation.syncTextBom(environment.files, target, current.bom).pipe(
+                      // GBK files never reach the formatter: it reads as UTF-8 and would corrupt the encoding.
+                      current.encoding === "gbk" || !(yield* formatter.file(target))
+                        ? current.text
+                        : yield* FileMutation.syncTextBom(environment.files, target, current.bom).pipe(
                             Effect.mapError((error) => fail(`Failed to sync ${target}`, error)),
-                          )
-                        : current.text,
+                          ),
                     )
                   }),
                 { discard: true },

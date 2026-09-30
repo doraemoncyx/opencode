@@ -6,14 +6,20 @@ import { SessionRestart } from "@opencode/core/session/execution/restart"
 import { InstallationEvent } from "@opencode/schema/installation-event"
 import { hasPtyConnectTicketURL } from "@opencode/protocol/groups/pty"
 import { hasPersistentPtyConnectTicketURL } from "@opencode/protocol/groups/persistent-pty"
-import { isPairingConnectURL } from "@opencode/protocol/groups/server"
-import { Global } from "@opencode/util/global"
 import { Cause, Context, Effect, Exit, Latch, Layer, Option, Ref, Scope } from "effect"
-import { HttpMiddleware, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import {
+  HttpMiddleware,
+  HttpPlatform,
+  HttpRouter,
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http"
 import { createServer } from "node:http"
+import type { Duplex } from "node:stream"
 import { ServerAuth } from "./auth"
 import { isAllowedCorsOrigin } from "./cors"
-import { authorizedRequest, unauthorizedResponse } from "./middleware/authorization"
+import { authorizedRequest, localRequest } from "./middleware/authorization"
 import { withoutParentSpan } from "./request-tracing"
 import { createRoutes } from "./routes"
 import { ServerInfo } from "./server-info"
@@ -49,7 +55,6 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   transform?: Transform,
 ) {
   const password = options.password
-  if (!password) return yield* Effect.fail(new Error("Missing server password"))
   const hostname = options.hostname ?? "127.0.0.1"
   const port = Option.fromNullishOr(options.port)
   const shutdown = yield* Latch.make()
@@ -62,17 +67,15 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
     return ServerInfo.connectionURLs(`http://${host}:${address.port}`, hostname)
   }
   const application = yield* Ref.make(Option.none<App>())
-  const app = dispatch(password, status, application, options.app?.version ?? "unknown", urls, Global.Path.tmp)
   // Request fibers may continue inbound trace context, but must not inherit the server startup parent.
   yield* bound.http
     .serve(
-      (transform ? transform(app) : app).pipe(
-        HttpMiddleware.compression(),
+      dispatch(password, options.localAuth === true, status, application, options.app?.version ?? "unknown", urls).pipe(
         HttpMiddleware.cors({ allowedOrigins: (origin) => isAllowedCorsOrigin(origin, options), maxAge: 86_400 }),
       ),
       errorResponseLogger,
     )
-    .pipe(Effect.provide(NodeHttpServer.layerHttpServices), withoutParentSpan)
+    .pipe(withoutParentSpan)
   if (lifecycle)
     yield* lifecycle.onListen(bound.http.address, shutdown.open.pipe(Effect.asVoid)).pipe(
       Effect.flatMap((cleanup) =>
@@ -86,7 +89,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   yield* Effect.addFinalizer(() =>
     status.beginStopping.pipe(
       Effect.andThen(Ref.set(application, Option.none())),
-      Effect.andThen(Effect.sync(() => bound.server.closeAllConnections())),
+      Effect.andThen(Effect.sync(() => bound.destroyAllConnections())),
     ),
   )
 
@@ -106,7 +109,13 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
         Effect.provideService(Scope.Scope, applicationScope),
       )
     }
-    yield* Ref.set(application, Option.some(Context.get(context, HttpRouter.HttpRouter).asHttpEffect()))
+    const app = Context.get(context, HttpRouter.HttpRouter)
+      .asHttpEffect()
+      .pipe(
+        HttpMiddleware.compression(),
+        Effect.provideService(HttpPlatform.HttpPlatform, Context.get(context, HttpPlatform.HttpPlatform)),
+      )
+    yield* Ref.set(application, Option.some(transform ? transform(app) : app))
     yield* status.ready
     const bus = Context.get(context, Bus.Service)
     return {
@@ -150,10 +159,35 @@ function bind(hostname: string, port: number) {
     const parentScope = yield* Scope.Scope
     const serverScope = yield* Scope.fork(parentScope)
     const server = createServer()
+    // Drop idle keep-alive connections so a silently-disconnected client (for
+    // example a killed browser tab) cannot leave a lingering CLOSE_WAIT socket
+    // behind. SSE responses write continuously, so these idle timeouts never
+    // interrupt active streams.
+    server.keepAliveTimeout = 5_000
+    server.headersTimeout = 10_000
+    // server.closeAllConnections() does not close upgraded (WebSocket) sockets
+    // because they never enter the http ConnectionList. Track them so forced
+    // shutdown can destroy them directly; otherwise a restart can strand
+    // CLOSE_WAIT sockets and collide with the listener port (EADDRINUSE).
+    const upgraded = new Set<Duplex>()
+    server.on("upgrade", (_request, socket) => {
+      upgraded.add(socket)
+      socket.on("close", () => upgraded.delete(socket))
+    })
+    const destroyAllConnections = () => {
+      try {
+        if (typeof server.closeAllConnections === "function") server.closeAllConnections()
+      } catch {
+        // Best effort: upstream shutdown handlers already ignore errors, but a
+        // thrown close here would otherwise skip destroying upgraded sockets.
+      }
+      for (const socket of upgraded) socket.destroy()
+      upgraded.clear()
+    }
     return yield* Effect.gen(function* () {
       const http = yield* NodeHttpServer.make(() => server, { port, host: hostname })
-      yield* Effect.addFinalizer(() => Effect.sync(() => server.closeAllConnections()))
-      return { http, server, scope: serverScope }
+      yield* Effect.addFinalizer(() => Effect.sync(() => destroyAllConnections()))
+      return { http, server, scope: serverScope, destroyAllConnections }
     }).pipe(
       Effect.provideService(Scope.Scope, serverScope),
       Effect.onError((cause) => Scope.close(serverScope, Exit.failCause(cause))),
@@ -168,44 +202,51 @@ function addressInUse(error: unknown) {
 }
 
 function dispatch(
-  password: string,
+  password: string | undefined,
+  localAuth: boolean,
   status: Status.Interface,
   application: Ref.Ref<Option.Option<App>>,
   version: string,
   urls: () => ReadonlyArray<string>,
-  tmp: string,
 ): App {
-  const auth = ServerAuth.Config.of({ password: Option.some(password), username: "opencode" })
+  const auth = ServerAuth.Config.of({ password: Option.fromNullishOr(password), username: "opencode" })
   return Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest
     const url = new URL(request.url, "http://localhost")
+    // Without a configured password authentication is disabled, matching the route layer.
+    const authorized =
+      !ServerAuth.required(auth) ||
+      (localAuth && localRequest(request)) ||
+      (yield* authorizedRequest(request, auth))
+    if (request.method === "GET" && url.pathname === "/api/status") {
+      if (!authorized) return unauthorized()
+      return yield* statusResponse(status, version, urls)
+    }
     const state = yield* status.current
     const app = yield* Ref.get(application)
     const ready = state.type === "ready" && Option.isSome(app)
-    if (request.method === "GET" && url.pathname === "/api/info" && !ready) {
-      if (!(yield* authorizedRequest(request, auth))) return unauthorizedResponse(request)
-      return yield* infoResponse(status, version, urls, tmp)
-    }
-    if (
-      !isPairingConnectURL(url) &&
-      (!ready || (!hasPtyConnectTicketURL(url) && !hasPersistentPtyConnectTicketURL(url))) &&
-      !(yield* authorizedRequest(request, auth))
-    )
-      return unauthorizedResponse(request)
+    if ((!ready || (!hasPtyConnectTicketURL(url) && !hasPersistentPtyConnectTicketURL(url))) && !authorized)
+      return unauthorized()
     if (ready) return yield* app.value
     return unavailable(state)
   })
 }
 
-const infoResponse = Effect.fnUntraced(function* (
+function unauthorized() {
+  return HttpServerResponse.empty({
+    status: 401,
+    headers: { "www-authenticate": 'Basic realm="Secure Area"' },
+  })
+}
+
+const statusResponse = Effect.fnUntraced(function* (
   status: Status.Interface,
   version: string,
   urls: () => ReadonlyArray<string>,
-  tmp: string,
 ) {
   const state = yield* status.current
   return HttpServerResponse.jsonUnsafe(
-    { version, pid: process.pid, urls: urls(), paths: { tmp } },
+    { version, pid: process.pid, urls: urls() },
     {
       status: state.type === "ready" ? 200 : state.type === "failed" ? 500 : 503,
       headers: state.type === "starting" || state.type === "stopping" ? { "retry-after": "1" } : undefined,

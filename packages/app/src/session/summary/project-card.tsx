@@ -1,14 +1,16 @@
 import { Icon } from "@opencode/ui/icon"
-import { createUniqueId, Show, type ParentProps } from "solid-js"
+import { ProjectAvatar } from "@opencode/ui/project-avatar"
+import { createUniqueId, Show, type ParentProps, type JSX } from "solid-js"
 import type { Project } from "@/runtime/server/types"
 import { useSettings } from "@/settings/model"
-import { displayName } from "@/shell/layout/helpers"
-import { ProjectIcon } from "@/shell/layout/project-icon"
+import { displayName, getProjectAvatarSource } from "@/shell/layout/helpers"
+import { getProjectAvatarVariant } from "@/shell/state/layout"
 import "./summary.css"
 
 export function ProjectSummaryCard(
   props: ParentProps<{
     project: Pick<Project, "name" | "worktree" | "icon"> & { id?: string }
+    avatar?: JSX.Element
   }>,
 ) {
   const settings = useSettings()
@@ -24,7 +26,13 @@ export function ProjectSummaryCard(
         aria-controls={contentID}
         onClick={() => settings.sessionSummary.setProjectExpanded(!expanded())}
       >
-        <ProjectIcon project={props.project} />
+        {props.avatar ?? (
+          <ProjectAvatar
+            fallback={displayName(props.project)}
+            src={getProjectAvatarSource(props.project.id, props.project.icon)}
+            variant={getProjectAvatarVariant(props.project.icon?.color)}
+          />
+        )}
         <span dir="auto" class="session-summary-label">
           {displayName(props.project)}
         </span>

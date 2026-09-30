@@ -485,7 +485,6 @@ export function stepStarted(message: SessionMessageAssistant) {
     assistantMessageID: message.id,
     agent: message.agent,
     model: message.model,
-    started: message.time.created,
   })
 }
 

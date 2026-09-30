@@ -21,6 +21,16 @@ Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
 
 The page will reload if you make edits.<br>
 
+### `python script/startdev.py`
+
+Runs the same dev server, but lets you pick the opencode backend it targets and prints the URL. Useful when the app must talk to a `bun dev serve --port 4098` instance instead of the default `:4096`:
+
+```bash
+python script/startdev.py --server-port 4098
+```
+
+Run `python script/startdev.py --help` for all options (frontend/backend ports, host, channel, `--dry-run`).
+
 ### `npm run build`
 
 Builds the app for production to the `dist` folder.<br>
@@ -94,20 +104,19 @@ In Vite development mode, `origin` uses `VITE_OPENCODE_SERVER_HOST` / `VITE_OPEN
 (default: `http://localhost:4096`) instead of the frontend origin. Both modes restore user-added servers
 from storage. Desktop provides the local server it discovers or starts through native initialization.
 
-With no configured servers, or when the only server rejects the saved credentials, the app shows a full-screen
-connection form. Enter a server address and password, paste a link from `opencode pair`, or choose
-**Scan QR code** to read its QR code. Pairing links are single-use; the app exchanges them for a session token
-and immediately attempts to connect. Failed connections leave the details available
+With no configured servers, the app shows a full-screen connection form. Enter a server address and password,
+or choose **Scan QR code** to open the camera and read the JSON pairing code from `opencode pair`.
+Scanning fills the form and immediately attempts to connect. Failed connections leave the details available
 to edit and retry with **Connect**. Credentials are checked before saving the server. Camera access requires
 HTTPS (or localhost) and browser permission. Saved offline servers continue to use the normal app UI.
 
 When the service is exposed through an HTTPS reverse proxy, advertise its external address at runtime:
 
 ```bash
-opencode pair --url https://opencode.example.com
+opencode pair --url https://your-machine.your-tailnet.ts.net
 ```
 
-This replaces the addresses in the printed links and QR code.
+This replaces the addresses printed and encoded in the QR code while retaining the local service password.
 The proxy URL must reach the OpenCode API, not just the frontend. For separate frontend and API processes,
 route `/api` to the service while preserving the `/api` prefix. No machine-specific app or CLI build is required.
 

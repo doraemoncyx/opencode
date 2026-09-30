@@ -53,11 +53,7 @@ describe("ConfigCompactionPlugin.Plugin", () => {
   it.live("merges settings and reloads changed config", () =>
     Effect.gen(function* () {
       const compaction = yield* SessionCompaction.Service
-      // An automatic compaction that is not due is skipped.
-      const due = (input: typeof nearInput) =>
-        compaction
-          .compact({ reason: "auto", context: input.context })
-          .pipe(Effect.map((outcome) => outcome.status !== "skipped"))
+      const modelRequests = yield* SessionModelRequest.Service
       const config = yield* Config.Test
       const bus = yield* Bus.Service
       yield* config.setEntries([
@@ -77,9 +73,9 @@ describe("ConfigCompactionPlugin.Plugin", () => {
       ])
       yield* ConfigCompactionPlugin.Plugin.effect(host({ event: { subscribe: () => bus.subscribe(Event.Updated) } }))
 
-      expect(yield* due(nearInput)).toBe(false)
-      const ended = yield* bus
-        .subscribe(SessionEvent.Compaction.Ended)
+      expect(compaction.required(nearInput)).toBe(false)
+      const started = yield* bus
+        .subscribe(SessionEvent.Compaction.Started)
         .pipe(Stream.runHead, Effect.forkScoped({ startImmediately: true }))
       const messages = [
         SessionMessage.User.make({
@@ -96,13 +92,15 @@ describe("ConfigCompactionPlugin.Plugin", () => {
         }),
       ]
       expect(
-        yield* compaction.compact({
-          reason: "manual",
-          context: { ...nearInput.context, messages },
+        yield* compaction.compactManual({
+          session,
+          resolveContext: () => Effect.succeed({ ...nearInput.context, messages, instructionUpdate: "" }),
+          prepare: modelRequests.compaction,
+          messages,
           inputID: SessionMessage.ID.make("msg_compaction_manual"),
         }),
       ).toEqual({ status: "completed" })
-      expect(Option.getOrThrow(yield* Fiber.join(ended)).data.recent).toContain("Recent context")
+      expect(Option.getOrThrow(yield* Fiber.join(started)).data.recent).toContain("Recent context")
 
       yield* config.setEntries([
         new Document({
@@ -117,12 +115,12 @@ describe("ConfigCompactionPlugin.Plugin", () => {
       yield* bus.publish(Event.Updated, {})
       yield* Effect.gen(function* () {
         for (let attempt = 0; attempt < 200; attempt++) {
-          if (yield* due(nearInput)) return
+          if (compaction.required(nearInput)) return
           yield* Effect.sleep("10 millis")
         }
         yield* Effect.die(new Error("Timed out waiting for compaction config reload"))
       })
-      expect(yield* due(bufferedInput)).toBe(false)
+      expect(compaction.required(bufferedInput)).toBe(false)
 
       yield* config.setEntries([
         new Document({
@@ -132,7 +130,7 @@ describe("ConfigCompactionPlugin.Plugin", () => {
       ])
       yield* bus.publish(Event.Updated, {})
       for (let attempt = 0; attempt < 200; attempt++) {
-        if (yield* due(bufferedInput)) return
+        if (compaction.required(bufferedInput)) return
         yield* Effect.sleep("10 millis")
       }
       yield* Effect.die(new Error("Timed out waiting for compaction config reload"))

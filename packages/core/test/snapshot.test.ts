@@ -3,6 +3,7 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { Deferred, Effect, Fiber, Layer } from "effect"
+import { TestConsole } from "effect/testing"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { Git } from "@opencode/core/git"
 import { Global } from "@opencode/util/global"
@@ -127,6 +128,36 @@ describe("Snapshot", () => {
     ),
   )
 
+  testEffect(Layer.empty).live("treats fatal ignore checks as unavailable captures", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          const project = path.join(tmp.path, "project")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(project)
+            await Bun.write(path.join(project, "tracked.txt"), "one\n")
+            await initGit(project)
+          })
+          yield* Effect.gen(function* () {
+            const snapshot = yield* Snapshot.Service
+            expect(yield* snapshot.capture()).toBeDefined()
+            yield* Effect.promise(async () => {
+              await Bun.write(path.join(project, "tracked.txt"), "two\n")
+              await Bun.write(path.join(project, ".git", "config"), "[broken\n")
+            })
+            expect(yield* snapshot.capture()).toBeUndefined()
+            expect(
+              (yield* TestConsole.logLines).filter((line) =>
+                String(line).includes("failed to capture snapshot"),
+              ),
+            ).toHaveLength(1)
+          }).pipe(Effect.provide(snapshotLayer(tmp.path, project)))
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
   testEffect(Layer.empty).live("applies availability transforms", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -166,6 +197,58 @@ describe("Snapshot", () => {
         }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
+  )
+
+  testEffect(Layer.empty).live(
+    "skips a locked snapshot index and rate-limits its warning",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) =>
+          Effect.gen(function* () {
+            const project = path.join(tmp.path, "project")
+            yield* Effect.promise(async () => {
+              await fs.mkdir(project)
+              await fs.writeFile(path.join(project, "tracked.txt"), "one\n")
+              await initGit(project)
+            })
+
+            yield* Effect.gen(function* () {
+              const snapshot = yield* Snapshot.Service
+              expect(yield* snapshot.capture()).toBeDefined()
+
+              const projectID = yield* Effect.gen(function* () {
+                return (yield* Location.Service).project.id
+              }).pipe(
+                Effect.provide(
+                  AppNodeBuilder.build(
+                    Location.boundNode(Location.Ref.make({ directory: AbsolutePath.make(project) })),
+                  ),
+                ),
+              )
+              const lock = path.join(tmp.path, "snapshot", projectID, Hash.fast(project), "index.lock")
+              yield* Effect.promise(async () => {
+                await fs.writeFile(path.join(project, "tracked.txt"), "two\n")
+                await fs.writeFile(lock, "")
+              })
+
+              const lockedWarnings = () =>
+                Effect.gen(function* () {
+                  return (yield* TestConsole.logLines).filter((line) =>
+                    String(line).includes("snapshot skipped because Git index is locked"),
+                  )
+                })
+
+              expect(yield* snapshot.capture()).toBeUndefined()
+              expect(yield* lockedWarnings()).toHaveLength(1)
+
+              expect(yield* snapshot.capture()).toBeUndefined()
+              expect(yield* lockedWarnings()).toHaveLength(1)
+            }).pipe(Effect.provide(snapshotLayer(tmp.path, project)))
+          }),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      ),
+    { timeout: 20_000 },
   )
 
   testEffect(Layer.empty).live(

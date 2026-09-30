@@ -11,10 +11,6 @@ import { UpdatePreflight } from "../../services/update-preflight"
 import { Npm } from "@opencode/util/npm"
 import { OPENCODE_ARTIFACT, OPENCODE_CHANNEL, OPENCODE_VERSION } from "../../version"
 import { Env } from "../../env"
-import { Service } from "@opencode/client/effect/service"
-import { OpenCode } from "@opencode/client/promise"
-import { findSession } from "../../session-target"
-import { errorMessage } from "../../util/error"
 
 export default Runtime.handler(Commands, (input) =>
   Effect.gen(function* () {
@@ -50,24 +46,8 @@ export default Runtime.handler(Commands, (input) =>
         Effect.promise(() => preflight.fail("OpenCode update could not start the new background service")),
       ),
     )
-    const session = Option.getOrUndefined(input.session)
-    // A missing --session ID becomes the ID of the session the first prompt creates.
-    const sessionExists =
-      session !== undefined &&
-      (yield* Effect.tryPromise({
-        try: () =>
-          findSession(OpenCode.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }), session),
-        catch: (cause) => new Error(errorMessage(cause)),
-      })) !== undefined
     const updater = yield* Updater.Service
-    let installing: string | undefined
-    const updateListeners = new Set<(version: string) => void>()
-    const update = yield* updater
-      .run((version) => {
-        installing = version
-        updateListeners.forEach((notify) => notify(version))
-      })
-      .pipe(Effect.ensuring(Effect.sync(() => (installing = undefined))), Effect.forkScoped)
+    const update = yield* updater.run().pipe(Effect.forkScoped)
     preflight.loading()
     const config = yield* Config.Service
     const npm = yield* Npm.Service
@@ -94,8 +74,7 @@ export default Runtime.handler(Commands, (input) =>
       },
       args: {
         continue: input.continue,
-        sessionID: sessionExists ? session : undefined,
-        newSessionID: sessionExists ? undefined : session,
+        sessionID: Option.getOrUndefined(input.session),
         prompt: Option.getOrUndefined(input.prompt),
         auto: input.auto || input.yolo || input.dangerouslySkipPermissions,
       },
@@ -113,13 +92,7 @@ export default Runtime.handler(Commands, (input) =>
             ),
             { signal },
           ),
-        check: (signal, notify) => {
-          if (installing) notify(installing)
-          updateListeners.add(notify)
-          return runPromise(Fiber.join(update).pipe(Effect.flatMap(() => updater.check())), { signal }).finally(() =>
-            updateListeners.delete(notify),
-          )
-        },
+        check: (signal) => runPromise(Fiber.join(update).pipe(Effect.flatMap(() => updater.check())), { signal }),
         apply: (version) => runPromise(updater.apply(version)),
       },
       packages: {

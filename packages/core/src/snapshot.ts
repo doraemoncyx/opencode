@@ -3,7 +3,7 @@ export * as Snapshot from "./snapshot.js"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import path from "path"
 import { Context, Effect, Fiber, Layer, Schema, Scope } from "effect"
-import { FileDiff } from "@opencode/schema/file-diff"
+import { File } from "./file.js"
 import { FSUtil } from "@opencode/util/fs-util"
 import { Git } from "./git.js"
 import { Global } from "@opencode/util/global"
@@ -58,7 +58,7 @@ export interface Interface extends State.Transformable<Editor> {
    * Generate structured per-file diffs between two captured trees. `context`
    * controls unchanged lines around each unified diff hunk.
    */
-  readonly diff: (input: DiffInput) => Effect.Effect<readonly FileDiff.Info[], Error>
+  readonly diff: (input: DiffInput) => Effect.Effect<readonly File.Diff[], Error>
 
   /**
    * Restore selected project-relative paths from their associated trees. A path
@@ -114,6 +114,8 @@ const layer = Layer.effect(
 
     const enabled = () => location.vcs?.type === "git" && state.get().enabled
 
+    const lockWarnings = new Map<string, number>()
+
     const capture = Effect.fn("Snapshot.capture")(function* () {
       if (!enabled()) return undefined
       return yield* Effect.gen(function* () {
@@ -127,7 +129,19 @@ const layer = Layer.effect(
           }),
         )
       }).pipe(
-        Effect.catch((cause) => Effect.logWarning("failed to capture snapshot", { cause }).pipe(Effect.as(undefined))),
+        Effect.catch((cause) => {
+          const message = cause instanceof globalThis.Error ? cause.message : String(cause)
+          if (!message.includes("index.lock"))
+            return Effect.logWarning("failed to capture snapshot", { cause }).pipe(Effect.as(undefined))
+          const directory = String(location.directory)
+          const now = Date.now()
+          const last = lockWarnings.get(directory) ?? 0
+          if (now - last < 30_000) return Effect.succeed(undefined)
+          lockWarnings.set(directory, now)
+          return Effect.logWarning("snapshot skipped because Git index is locked", { cause }).pipe(
+            Effect.as(undefined),
+          )
+        }),
       )
     })
 

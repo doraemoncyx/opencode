@@ -63,7 +63,6 @@ function stepStarted(): V2Event {
     type: "session.step.started",
     durable: { aggregateID: "ses_1", seq: 1, version: 1 },
     data: {
-      started: 1,
       sessionID: "ses_1",
       assistantMessageID: "msg_assistant",
       agent: "build",
@@ -241,17 +240,17 @@ async function run(input: {
   })()
   spyOn(sdk.event, "subscribe").mockImplementation(() => stream)
   spyOn(sdk.permission, "list").mockImplementation(() => ok([]) as never)
-  spyOn(sdk.session.form, "list").mockImplementation(
+  spyOn(sdk.form, "list").mockImplementation(
     (request) => ok(input.pendingForms?.filter((item) => item.sessionID === request.sessionID) ?? []) as never,
   )
-  spyOn(sdk.form, "list").mockImplementation(
+  spyOn(sdk.form.request, "list").mockImplementation(
     () =>
       ok({
         location: { ...location, project: { id: "proj_1", directory: location.directory } },
         data: input.pendingForms?.filter((item) => item.sessionID === "global") ?? [],
       }) as never,
   )
-  spyOn(sdk.session.form, "cancel").mockImplementation((request) => (input.cancel?.(request) ?? ok(undefined)) as never)
+  spyOn(sdk.form, "cancel").mockImplementation((request) => (input.cancel?.(request) ?? ok(undefined)) as never)
   let promptID = "msg_prompt"
   spyOn(sdk.session, "wait").mockImplementation(() => input.wait?.() ?? wait.promise)
   spyOn(sdk.message, "list").mockImplementation(() =>
@@ -266,7 +265,7 @@ async function run(input: {
     values.push(...input.turn(messageID))
     wake?.()
     wake = undefined
-    return ok({ id: messageID, sessionID: "ses_1", time: { created: 1 } }) as never
+    return ok({ id: messageID, sessionID: "ses_1", timeCreated: 1 }) as never
   })
   await runNonInteractivePrompt({
     client: sdk,
@@ -309,7 +308,6 @@ async function capture(input: Parameters<typeof run>[0]) {
 
 afterEach(() => {
   mock.restore()
-  process.exitCode = 0
 })
 
 describe("runNonInteractivePrompt", () => {
@@ -428,13 +426,12 @@ describe("runNonInteractivePrompt", () => {
         "x-opencode-directory": "%2Fwork%20tree",
       },
     }
-    expect(sdk.session.form.cancel).toHaveBeenCalledWith({ sessionID: "global", formID: "frm_live" }, globalOptions)
-    expect(sdk.session.form.cancel).toHaveBeenCalledWith({ sessionID: "ses_1", formID: "frm_pending" })
-    expect(sdk.session.form.cancel).toHaveBeenCalledWith({ sessionID: "global", formID: "frm_pending_global" }, globalOptions)
-    expect(sdk.form.list).toHaveBeenCalledWith({
+    expect(sdk.form.cancel).toHaveBeenCalledWith({ sessionID: "global", formID: "frm_live" }, globalOptions)
+    expect(sdk.form.cancel).toHaveBeenCalledWith({ sessionID: "ses_1", formID: "frm_pending" })
+    expect(sdk.form.cancel).toHaveBeenCalledWith({ sessionID: "global", formID: "frm_pending_global" }, globalOptions)
+    expect(sdk.form.request.list).toHaveBeenCalledWith({
       location: { directory: "/work tree" },
     })
-    expect(process.exitCode).toBe(1)
   })
 
   test("attach mode cancels only session-owned forms", async () => {
@@ -443,14 +440,13 @@ describe("runNonInteractivePrompt", () => {
       pendingForms: [form("frm_pending", "ses_1"), form("frm_pending_global", "global")],
       turn: (messageID) => [formCreated(form("frm_live", "global")), prompted(messageID), settled()],
     })
-    expect(sdk.session.form.cancel).toHaveBeenCalledWith({ sessionID: "ses_1", formID: "frm_pending" })
-    expect(sdk.form.list).not.toHaveBeenCalled()
-    expect(sdk.session.form.cancel).not.toHaveBeenCalledWith({ sessionID: "global", formID: "frm_live" }, expect.anything())
-    expect(sdk.session.form.cancel).not.toHaveBeenCalledWith(
+    expect(sdk.form.cancel).toHaveBeenCalledWith({ sessionID: "ses_1", formID: "frm_pending" })
+    expect(sdk.form.request.list).not.toHaveBeenCalled()
+    expect(sdk.form.cancel).not.toHaveBeenCalledWith({ sessionID: "global", formID: "frm_live" }, expect.anything())
+    expect(sdk.form.cancel).not.toHaveBeenCalledWith(
       { sessionID: "global", formID: "frm_pending_global" },
       expect.anything(),
     )
-    expect(process.exitCode).toBe(1)
   })
 
   test("V1 JSON output flushes step_start before an unrelated step failure", async () => {

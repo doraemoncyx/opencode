@@ -16,13 +16,8 @@ test("server dialog keeps focus above fullscreen settings", async ({ page }) => 
         body: 'data: {"id":"evt_connected","type":"server.connected","data":{}}\n\n',
       })
     }
-    if (url.pathname === "/api/info") {
-      return json(route, {
-        version: "2.0.0",
-        pid: 1,
-        urls: [url.origin],
-        paths: { tmp: "/tmp/opencode" },
-      })
+    if (url.pathname === "/api/status") {
+      return json(route, { version: "2.0.0", pid: 1, urls: [url.origin] })
     }
     return json(route, {})
   })

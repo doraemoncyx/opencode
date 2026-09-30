@@ -20,7 +20,6 @@ type Input = {
   readonly model: Model.Ref
   readonly providerMetadataKey: string
   readonly snapshot?: Snapshot.ID
-  readonly started: number
   readonly assistantMessageID: SessionMessage.ID
 }
 
@@ -105,7 +104,6 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       model: input.model,
       assistantMessageID,
       snapshot: input.snapshot,
-      started: input.started,
     })
     return assistantMessageID
   })
@@ -193,14 +191,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     const flush = Effect.fnUntraced(function* () {
       for (const id of Array.from(chunks.keys())) yield* end(id)
     })
-    /** Publish batched deltas now, keeping every fragment open. */
-    const publishPending = Effect.fnUntraced(function* () {
-      for (const [id, current] of Array.from(chunks)) {
-        if (current.timer) yield* Fiber.interrupt(current.timer)
-        yield* publishDelta(id)
-      }
-    })
-    return { start, append, end, flush, publishPending, has: (id: string) => chunks.has(id) }
+    return { start, append, end, flush, has: (id: string) => chunks.has(id) }
   }
 
   const text = fragments(
@@ -262,13 +253,6 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     }),
   )
 
-  // Deltas are batched, but block starts are not. Publishing held deltas first keeps each
-  // block's content ahead of the next block, so the published order matches the model's.
-  const publishPendingDeltas = Effect.fnUntraced(function* () {
-    yield* text.publishPending()
-    yield* reasoning.publishPending()
-  })
-
   const flushFragments = Effect.fnUntraced(function* () {
     yield* text.flush()
     yield* reasoning.flush()
@@ -290,7 +274,6 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     }
     tools.set(event.id, tool)
     yield* toolInput.start(event.id)
-    yield* publishPendingDeltas()
     yield* bus.publish(SessionEvent.Tool.Input.Started, {
       sessionID: input.sessionID,
       assistantMessageID,
@@ -405,7 +388,6 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       case "text-start":
         outputStarted = true
         const startedTextOrdinal = yield* text.start(event.id, providerState(event.providerMetadata))
-        yield* publishPendingDeltas()
         yield* bus.publish(SessionEvent.Text.Started, {
           sessionID: input.sessionID,
           assistantMessageID: yield* startAssistant(),
@@ -421,7 +403,6 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       case "reasoning-start":
         outputStarted = true
         const startedReasoningOrdinal = yield* reasoning.start(event.id, providerState(event.providerMetadata))
-        yield* publishPendingDeltas()
         yield* bus.publish(SessionEvent.Reasoning.Started, {
           sessionID: input.sessionID,
           assistantMessageID: yield* startAssistant(),

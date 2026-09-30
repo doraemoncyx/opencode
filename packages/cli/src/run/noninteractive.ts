@@ -67,9 +67,6 @@ type FormRequest = Extract<V2Event, { type: "form.created" }>["data"]["form"]
 // attached client must not cancel input that may belong to another session.
 const GLOBAL_FORM_SESSION_ID = "global"
 
-const PERMISSION_REJECTED_FEEDBACK =
-  "This non-interactive run cannot ask the user for permission, so the request was rejected. Continue without this action."
-
 export async function runNonInteractivePrompt(input: Input) {
   const controller = new AbortController()
   const stream = input.client.event.subscribe({ signal: controller.signal })[Symbol.asyncIterator]()
@@ -135,34 +132,9 @@ export async function runNonInteractivePrompt(input: Input) {
     }
   }
 
-  // Subagents run in child sessions; their asks and questions belong to this run too. Other
-  // sessions on a shared server (e.g. the TUI's) must be left alone.
-  const owned = new Map<string, Promise<boolean>>([[input.sessionID, Promise.resolve(true)]])
-  const ownsSession = (sessionID: string): Promise<boolean> => {
-    const known = owned.get(sessionID)
-    if (known) return known
-    const result =
-      sessionID === GLOBAL_FORM_SESSION_ID
-        ? Promise.resolve(false)
-        : input.client.session
-            .get({ sessionID })
-            .then((session) => (session.parentID ? ownsSession(session.parentID) : false))
-            .catch(() => false)
-    owned.set(sessionID, result)
-    return result
-  }
-
-  const replyPermission = async (request: {
-    id: string
-    sessionID: string
-    action: string
-    resources: ReadonlyArray<string>
-  }) => {
-    // Nobody can approve here. Outside V1 compatibility, reject with feedback so the tool fails
-    // as ordinary model-visible output and the model continues without the action.
-    const continuing = !input.auto && input.compatibility !== "v1"
+  const replyPermission = async (request: { id: string; action: string; resources: ReadonlyArray<string> }) => {
     if (!input.auto) {
-      if (!continuing) permissionRejected = true
+      permissionRejected = true
       UI.println(
         UI.Style.TEXT_WARNING_BOLD + "!",
         UI.Style.TEXT_NORMAL +
@@ -171,20 +143,19 @@ export async function runNonInteractivePrompt(input: Input) {
     }
     await input.client.permission
       .reply({
-        sessionID: request.sessionID,
+        sessionID: input.sessionID,
         requestID: request.id,
-        decision: input.auto ? "once" : "reject",
-        ...(continuing ? { message: PERMISSION_REJECTED_FEEDBACK } : {}),
+        reply: input.auto ? "once" : "reject",
       })
       .catch(() => {})
-    if (!input.auto && !continuing) {
+    if (!input.auto) {
       await input.client.session.interrupt({ sessionID: input.sessionID }).catch(() => {})
     }
   }
 
   const cancelForm = async (request: Pick<FormRequest, "id" | "sessionID">) => {
     try {
-      await input.client.session.form.cancel(
+      await input.client.form.cancel(
         { sessionID: request.sessionID, formID: request.id },
         ...formRequestOptions(request.sessionID === GLOBAL_FORM_SESSION_ID ? input.location : undefined),
       )
@@ -192,7 +163,6 @@ export async function runNonInteractivePrompt(input: Input) {
       if (!formAlreadySettled(error)) throw error
     }
     formCancelled = true
-    if (input.compatibility !== "v1") process.exitCode = 1
   }
 
   const consume = async () => {
@@ -207,14 +177,14 @@ export async function runNonInteractivePrompt(input: Input) {
       }
       const event = next.value
 
-      if (event.type === "permission.asked" && submitted && (await ownsSession(event.data.sessionID))) {
+      if (event.type === "permission.asked" && submitted && event.data.sessionID === input.sessionID) {
         await replyPermission(event.data)
         continue
       }
       if (
         event.type === "form.created" &&
         submitted &&
-        ((await ownsSession(event.data.form.sessionID)) ||
+        (event.data.form.sessionID === input.sessionID ||
           (!input.attached &&
             event.data.form.sessionID === GLOBAL_FORM_SESSION_ID &&
             sameLocation(event.location, input.location)))
@@ -523,8 +493,7 @@ export async function runNonInteractivePrompt(input: Input) {
       if (event.type === "session.execution.interrupted") {
         if (input.compatibility === "v1" && (permissionRejected || formCancelled)) return
         if (event.data.reason === "user" && interrupted) process.exitCode = 130
-        // A declined tool call ends the step with an interruption; it was already reported above.
-        if (event.data.reason !== "user" && !emittedError && !permissionRejected && !formCancelled) {
+        if (event.data.reason !== "user" && !emittedError) {
           emittedError = true
           process.exitCode = 1
           const error = { type: "aborted" as const, message: `Session interrupted: ${event.data.reason}` }
@@ -651,9 +620,7 @@ export async function runNonInteractivePrompt(input: Input) {
         UI.error(item.state.error.message)
       }
 
-      // A declined tool call ends its step with an interrupted-step error that is
-      // only a consequence of our own rejection; it was already reported above.
-      if (message.error && !emittedError && !permissionRejected && !formCancelled) {
+      if (message.error && !emittedError) {
         emittedError = true
         process.exitCode = 1
         if (!emit("error", timestamp, { error: message.error })) UI.error(message.error.message)
@@ -728,10 +695,10 @@ export async function runNonInteractivePrompt(input: Input) {
 
     const [permissions, forms, globals] = await Promise.all([
       input.client.permission.list({ sessionID: input.sessionID }).catch(() => undefined),
-      input.client.session.form.list({ sessionID: input.sessionID }).catch(() => undefined),
+      input.client.form.list({ sessionID: input.sessionID }).catch(() => undefined),
       input.attached
         ? Promise.resolve(undefined)
-        : input.client.form
+        : input.client.form.request
             .list({
               location: { directory: input.location.directory },
             })

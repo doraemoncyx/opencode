@@ -20,7 +20,8 @@ import { toggleMcp } from "./global-sync/mcp"
 import { createConnectionSync, reconnectOrder } from "./server-sync/connection"
 import { usePlatform } from "@/runtime/platform/platform"
 import type { Data } from "@opencode/client/solid"
-import { createWorktreeInventory, withWorktreeInventory, worktreeInventoryViewKey } from "@/workspaces/inventory"
+import { createWorktreeInventory, withWorktreeInventory } from "@/workspaces/inventory"
+import { sameDirectory } from "@/workspaces/paths"
 
 type GlobalStore = {
   path: Path
@@ -84,19 +85,12 @@ export function createServerSyncContextInner(serverSDK: ServerSDK, data: Data) {
     scope: serverSDK.scope,
     queryClient,
     api: () => serverSDK.api.worktree,
-    updated: (projectID, items) => {
+    updated: (directory, items) =>
       setGlobalStore("project", (projects) =>
-        projects.map((project) => (project.id === projectID ? withWorktreeInventory(project, items) : project)),
-      )
-      for (const key of [
-        worktreeInventoryViewKey(serverSDK.scope, projectID),
-        worktreeInventoryViewKey(serverSDK.scope),
-      ]) {
-        queryClient.setQueryData<Project[]>(key, (projects) =>
-          projects?.map((project) => (project.id === projectID ? withWorktreeInventory(project, items) : project)),
-        )
-      }
-    },
+        projects.map((project) =>
+          sameDirectory(project.worktree, directory) ? withWorktreeInventory(project, items) : project,
+        ),
+      ),
   })
   const bootstrap = useQuery(() => ({
     queryKey: [serverSDK.scope, "bootstrap"],
@@ -170,8 +164,8 @@ export function createServerSyncContextInner(serverSDK: ServerSDK, data: Data) {
       if (bootstrap.data !== undefined && !bootstrap.isFetching) void bootstrap.refetch()
       // The refresh queue re-syncs two directories at a time, held ones first. Syncing every active
       // directory here as well sent the whole catalog fan-out for all of them at once.
-      reconnectOrder(Object.keys(children.children).filter(children.active), children.pinned).forEach((directory) =>
-        queue.push(directory),
+      reconnectOrder(Object.keys(children.children).filter(children.active), children.pinned).forEach(
+        (directory) => queue.push(directory),
       )
     },
   })
@@ -218,7 +212,7 @@ export function createServerSyncContextInner(serverSDK: ServerSDK, data: Data) {
       projects.map((project) =>
         project.id === update.id
           ? // The wire payload carries no worktrees; keep the inventory this project already loaded.
-            withWorktreeInventory(updateProjectInfo(project, update), worktrees.cached(update.id))
+            withWorktreeInventory(updateProjectInfo(project, update), worktrees.cached(update.canonical))
           : project,
       ),
     )
@@ -228,7 +222,8 @@ export function createServerSyncContextInner(serverSDK: ServerSDK, data: Data) {
     connection.handleEvent({ type: event.type })
     if (event.type === "project.updated") applyProjectUpdate(event.data)
     if (event.type === "worktree.updated") {
-      void worktrees.list(event.data.projectID)
+      const root = globalStore.project.find((project) => project.id === event.data.projectID)?.worktree
+      if (root) void worktrees.refresh(root)
       void bootstrap.refetch()
       return
     }
@@ -262,6 +257,12 @@ export function createServerSyncContextInner(serverSDK: ServerSDK, data: Data) {
     },
     icon(directory: string, value: string | undefined) {
       children.projectIcon(directory, value)
+    },
+    // A directory can resolve to a project the global list has not loaded yet, such as one
+    // the user just added. Reload the list so the entry carries the project's id and
+    // metadata instead of only the folder name.
+    refresh() {
+      void bootstrap.refetch()
     },
   }
 

@@ -20,6 +20,8 @@ import workspaceMigration from "@opencode/core/database/migration/20260808023530
 import executionClaimsMigration from "@opencode/core/database/migration/20260811161259_execution_claim_attempts"
 import sessionInboxMigration from "@opencode/core/database/migration/20260812181746_session_inbox"
 import sessionViewedStateMigration from "@opencode/core/database/migration/20260819222447_session_viewed_state"
+import identityMigration from "@opencode/core/database/migration/20260915120000_project_directory_identity"
+import { Hash } from "@opencode/util/hash"
 import { Global } from "@opencode/util/global"
 
 const run = <A, E>(
@@ -528,6 +530,52 @@ describe("DatabaseMigration", () => {
         expect(yield* db.all(sql`SELECT id FROM credential`)).toEqual([])
       }),
       Global.make({ data: tmp.path }),
+    )
+  })
+
+  test("merges markerless projects whose directories differ only in case", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(
+          sql`CREATE TABLE project (id text PRIMARY KEY, worktree text NOT NULL, vcs text, name text, icon_url text, icon_url_override text, icon_color text, commands text, sandboxes text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL)`,
+        )
+        yield* db.run(sql`CREATE TABLE session_v2 (id text PRIMARY KEY, project_id text NOT NULL)`)
+        yield* db.run(
+          sql`CREATE TABLE project_directory (project_id text NOT NULL, directory text NOT NULL, PRIMARY KEY (project_id, directory))`,
+        )
+        // The row `Project.resolve` produces for this directory carries the normalized
+        // identity; the other two spellings are the duplicates it used to create.
+        const canonical = Hash.fast("directory:f:/workgame/mhimage")
+        yield* db.run(sql`
+          INSERT INTO project (id, worktree, vcs, name, icon_url, icon_url_override, icon_color, commands, sandboxes, time_created, time_updated) VALUES
+            (${canonical}, 'f:/workgame/mhimage', NULL, NULL, NULL, NULL, NULL, NULL, '[]', 1, 1),
+            ('upper', 'F:/workgame/mhimage', NULL, 'Trunk', NULL, NULL, 'orange', ${JSON.stringify({ start: "bun install" })}, '[]', 1, 2),
+            ('nested', 'F:/workgame/mhimage/sub', NULL, NULL, NULL, NULL, NULL, NULL, '[]', 1, 1)
+        `)
+        yield* db.run(sql`INSERT INTO session_v2 (id, project_id) VALUES ('ses_1', 'upper')`)
+        yield* db.run(sql`INSERT INTO project_directory (project_id, directory) VALUES ('upper', '/workgame/mhimage')`)
+
+        yield* DatabaseMigration.applyOnly(db, [identityMigration])
+
+        expect(
+          yield* db.all(sql`SELECT id, worktree, name, icon_color, commands, time_updated FROM project ORDER BY id`),
+        ).toEqual([
+          {
+            id: canonical,
+            worktree: "f:/workgame/mhimage",
+            name: "Trunk",
+            icon_color: "orange",
+            commands: JSON.stringify({ start: "bun install" }),
+            time_updated: 2,
+          },
+          { id: "nested", worktree: "F:/workgame/mhimage/sub", name: null, icon_color: null, commands: null, time_updated: 1 },
+        ])
+        expect(yield* db.all(sql`SELECT id, project_id FROM session_v2`)).toEqual([{ id: "ses_1", project_id: canonical }])
+        expect(yield* db.all(sql`SELECT project_id, directory FROM project_directory`)).toEqual([
+          { project_id: canonical, directory: "/workgame/mhimage" },
+        ])
+      }),
     )
   })
 

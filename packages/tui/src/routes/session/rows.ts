@@ -9,39 +9,15 @@ import {
   completePrevious,
   groupRefs,
   hasPart,
-  messagePath,
   partitionPending,
-  partPath,
   projectEntries,
   type AppendPart,
   type CacheUsage,
   type PartRef,
   type ProjectionEntry,
   type SessionRow,
-  type Verbosity,
-  defaultVerbosity,
 } from "./grouping/session"
 export type { CacheUsage, PartRef, SessionRow } from "./grouping/session"
-
-/**
- * A page boundary can cut a group in half, which would show a partial summary and
- * give the group a provisional ID (derived from its first part). While the oldest
- * row is a group, keep loading older pages until something precedes it.
- */
-export async function completeGroupBoundary(input: {
-  rows: readonly SessionRow[]
-  messages: () => number
-  more: () => boolean
-  loadMore: () => Promise<void>
-  active: () => boolean
-}) {
-  while (input.active() && input.rows[0]?.type === "group" && input.more()) {
-    const before = input.messages()
-    await input.loadMore()
-    // A page that adds nothing would otherwise loop forever.
-    if (input.messages() === before) return
-  }
-}
 
 export function createSessionRows(sessionID: Accessor<string>, onSynced?: (sessionID: string) => void) {
   const data = useData()
@@ -50,7 +26,6 @@ export function createSessionRows(sessionID: Accessor<string>, onSynced?: (sessi
   const [rows, setRows] = createStore<SessionRow[]>([])
   const revertBoundary = () => data.session.get(sessionID())?.revert?.messageID
   const turnTokens = () => Boolean(config.data.debug?.turn_tokens)
-  const verbosity = () => config.data.session?.verbosity ?? defaultVerbosity
 
   function reduce() {
     const messages = data.session.message.list(sessionID())
@@ -65,7 +40,6 @@ export function createSessionRows(sessionID: Accessor<string>, onSynced?: (sessi
       boundary ? visible.filter((message) => message.id < boundary) : visible,
       inputs,
       turnTokens(),
-      verbosity(),
     )
     partitionPending(rows, pendingPermissions())
     const position = rows.findIndex((row) => row.type === "message" && inputs.has(row.messageID))
@@ -101,22 +75,14 @@ export function createSessionRows(sessionID: Accessor<string>, onSynced?: (sessi
       if (status !== "connected") return
       setRows(reconcile(reduce()))
       void data.session.pending.sync(id).catch(() => undefined)
-      void data.session.message
-        .sync(id)
-        .then(async () => {
+      void data.session.message.sync(id).then(
+        () => {
           if (sessionID() !== id) return
           setRows(reconcile(reduce()))
-          // Restoration waits for complete boundary groups so saved group IDs resolve.
-          await completeGroupBoundary({
-            rows,
-            messages: () => data.session.message.list(id).length,
-            more: () => data.session.message.more(id),
-            loadMore: () => data.session.message.loadMore(id),
-            active: () => sessionID() === id,
-          }).catch(() => undefined)
-          if (sessionID() === id) onSynced?.(id)
-        })
-        .catch(() => undefined)
+          onSynced?.(id)
+        },
+        () => undefined,
+      )
     }),
   )
 
@@ -157,7 +123,7 @@ export function createSessionRows(sessionID: Accessor<string>, onSynced?: (sessi
                   input: data.session.input.has(sessionID(), message.id),
                 },
               ]
-            : message.type === "compaction" || message.type === "idle"
+            : message.type === "compaction"
               ? [
                   {
                     id: message.id,
@@ -171,7 +137,7 @@ export function createSessionRows(sessionID: Accessor<string>, onSynced?: (sessi
     ),
   )
 
-  createEffect(on([turnTokens, verbosity], () => setRows(reconcile(reduce())), { defer: true }))
+  createEffect(on(turnTokens, () => setRows(reconcile(reduce())), { defer: true }))
 
   const appendMessage = (messageID: string) =>
     setRows(
@@ -190,7 +156,7 @@ export function createSessionRows(sessionID: Accessor<string>, onSynced?: (sessi
     setRows(
       produce((draft) => {
         if (!hasPart(draft, ref)) {
-          append(draft, ref, part, queuedStart(draft), verbosity())
+          append(draft, ref, part, queuedStart(draft))
           return
         }
         if (part.type !== "reasoning" || part.time?.completed === undefined) return
@@ -310,53 +276,23 @@ export function createSessionRows(sessionID: Accessor<string>, onSynced?: (sessi
   return rows
 }
 
-export function reduceSessionRows(
-  messages: SessionMessageInfo[],
-  inputs = new Set<string>(),
-  turnTokens = false,
-  verbosity: Verbosity = defaultVerbosity,
-) {
+export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new Set<string>(), turnTokens = false) {
   const isInput = (message: SessionMessageInfo) => inputs.has(message.id)
   const pendingCompactions = messages.filter((message) => message.type === "compaction" && message.status === "running")
   const pending = new Set([...pendingCompactions.map((message) => message.id), ...inputs])
   const usage = turnTokens
     ? { steps: [] as SessionMessageAssistant[], previousTurnCache: undefined as CacheUsage | undefined }
     : undefined
-  // Without any idle marker, history predates markers and a turn ends with its terminal step.
-  // With markers, steers keep the turn open, so usage accumulates until the marker closes it.
-  const legacy = !messages.some((message) => message.type === "idle")
-  const flushTurn = (rows: ProjectionEntry[]) => {
-    if (!usage) return
-    const steps = usage.steps.filter(hasTokenUsage)
-    const last = steps.at(-1)
-    usage.steps.length = 0
-    if (!last) return
-    rows.push({
-      entry: {
-        type: "turn-usage",
-        messageIDs: steps.map((step) => step.id),
-        ...(usage.previousTurnCache === undefined ? {} : { previousCache: usage.previousTurnCache }),
-      },
-    })
-    usage.previousTurnCache = { read: last.tokens.cache.read, model: last.model }
-  }
   const entries = [
     ...messages.filter((message) => !pending.has(message.id)),
     ...pendingCompactions,
     ...messages.filter(isInput),
   ].reduce<ProjectionEntry[]>((rows, message) => {
     if (message.type !== "assistant") {
-      if (message.type === "idle") {
-        flushTurn(rows)
-        return rows
-      }
+      if (message.type === "idle") return rows
       if (message.type === "synthetic" && !message.description?.trim()) return rows
       if (message.type === "compaction" && message.status === "completed" && usage) usage.previousTurnCache = undefined
-      rows.push({
-        entry: { type: "message", messageID: message.id },
-        path: messagePath(message, verbosity),
-        closesPrevious: !pending.has(message.id),
-      })
+      rows.push({ entry: { type: "message", messageID: message.id }, closesPrevious: !pending.has(message.id) })
       return rows
     }
     usage?.steps.push(message)
@@ -364,17 +300,27 @@ export function reduceSessionRows(
     message.content.forEach((part) => {
       const partID = part.type === "tool" ? part.id : `${part.type}:${ordinals[part.type]++}`
       if ((part.type === "text" || part.type === "reasoning") && !part.text.trim()) return
-      rows.push({
-        entry: { type: "part", ref: { messageID: message.id, partID } },
-        part,
-        path: partPath(part, verbosity),
-      })
+      rows.push({ entry: { type: "part", ref: { messageID: message.id, partID } }, part })
     })
     const terminal = (message.finish && !["tool-calls", "unknown"].includes(message.finish)) || message.error
     if (terminal || message.retry) {
       rows.push({ entry: { type: "assistant-footer", messageID: message.id } })
     }
-    if (terminal && legacy) flushTurn(rows)
+    if (terminal && usage) {
+      const stepsWithUsage = usage.steps.filter(hasTokenUsage)
+      const last = stepsWithUsage.at(-1)
+      if (last) {
+        rows.push({
+          entry: {
+            type: "turn-usage",
+            messageIDs: stepsWithUsage.map((step) => step.id),
+            ...(usage.previousTurnCache === undefined ? {} : { previousCache: usage.previousTurnCache }),
+          },
+        })
+        usage.previousTurnCache = { read: last.tokens.cache.read, model: last.model }
+      }
+      usage.steps.length = 0
+    }
     return rows
   }, [])
   return projectEntries(entries)
@@ -394,18 +340,10 @@ export function cacheReuseDrop(previous: CacheUsage | undefined, current: CacheU
   return drop > 0 ? drop : undefined
 }
 
-// `legacy` marks a session without idle markers, where a turn ends at the next prompt. Reactive
-// callers should pass it from a shared memo: the default scans every message, which subscribes
-// the footer to the whole history.
-export function turnDuration(
-  message: SessionMessageAssistant,
-  messages: SessionMessageInfo[],
-  position?: number,
-  legacy = legacyTurns(messages),
-) {
+export function turnDuration(message: SessionMessageAssistant, messages: SessionMessageInfo[], position?: number) {
   if (message.time.completed === undefined) return 0
   const index = position ?? messages.findIndex((item) => item.id === message.id)
-  const input = messages[inputIndex(messages, index === -1 ? messages.length : index, legacy)]
+  const input = messages[inputIndex(messages, index === -1 ? messages.length : index)]
   return Math.max(0, message.time.completed - (input?.time.created ?? message.time.created))
 }
 
@@ -413,11 +351,10 @@ export function turnTokensPerSecond(
   message: SessionMessageAssistant,
   messages: SessionMessageInfo[],
   position?: number,
-  legacy = legacyTurns(messages),
 ) {
   const index = position ?? messages.findIndex((item) => item.id === message.id)
   const end = index === -1 ? messages.length : index + 1
-  const start = inputIndex(messages, end, legacy)
+  const start = inputIndex(messages, end)
   const steps = messages
     .slice(start + 1, end)
     .filter((item): item is SessionMessageAssistant => item.type === "assistant")
@@ -425,30 +362,19 @@ export function turnTokensPerSecond(
     step.time.streamed === undefined ? [] : [Math.max(0, step.time.streamed - step.time.created)],
   )
   if (steps.length === 0 || durations.length !== steps.length) return
-  const output = steps.reduce((total, step) => total + (step.tokens?.output ?? 0) + (step.tokens?.reasoning ?? 0), 0)
+  const output = steps.reduce((total, step) => total + (step.tokens?.output ?? 0), 0)
   const duration = durations.reduce((total, value) => total + value, 0)
   if (output <= 0 || duration <= 0) return
-  // Aggregate before dividing so each step is weighted by its provider-active duration.
   return output / (duration / 1_000)
 }
 
-export function legacyTurns(messages: SessionMessageInfo[]) {
-  return !messages.some((message) => message.type === "idle")
-}
-
-function inputIndex(messages: SessionMessageInfo[], end: number, legacy: boolean) {
-  // Reading a sliced prefix subscribes every footer to unrelated historical messages, so walk
-  // back only as far as the turn boundary: the nearest input in legacy sessions, otherwise the
-  // first input after the previous idle marker.
-  let input = -1
+function inputIndex(messages: SessionMessageInfo[], end: number) {
+  // Reading a sliced prefix subscribes every footer to unrelated historical messages.
   for (let index = end - 1; index >= 0; index--) {
     const message = messages[index]
-    if (message.type === "idle") return input
-    if (message.type !== "user" && message.type !== "synthetic") continue
-    if (legacy) return index
-    input = index
+    if (message.type === "user" || message.type === "synthetic") return index
   }
-  return input
+  return -1
 }
 
 function hasTokenUsage(

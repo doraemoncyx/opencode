@@ -50,20 +50,13 @@ function normalizeKey(key: string) {
   return key.toLowerCase()
 }
 
-export function keyFromKeyboardEvent(event: KeyboardEvent) {
-  const key = normalizeKey(event.key)
-  if (!event.altKey || /^[a-z0-9]$/.test(key)) return key
-  if (!event.code.startsWith("Key") || event.code.length !== 4) return key
-  return event.code.slice(3).toLowerCase()
-}
-
 function signature(key: string, ctrl: boolean, meta: boolean, shift: boolean, alt: boolean) {
   const mask = (ctrl ? 1 : 0) | (meta ? 2 : 0) | (shift ? 4 : 0) | (alt ? 8 : 0)
   return `${key}:${mask}`
 }
 
 function signatureFromEvent(event: KeyboardEvent) {
-  return signature(keyFromKeyboardEvent(event), event.ctrlKey, event.metaKey, event.shiftKey, event.altKey)
+  return signature(normalizeKey(event.key), event.ctrlKey, event.metaKey, event.shiftKey, event.altKey)
 }
 
 function isAllowedEditableKeybind(id: string | undefined) {
@@ -88,12 +81,11 @@ export interface CommandOption {
   category?: string
   keybind?: KeybindConfig
   slash?: string
-  slashArguments?: boolean
   suggested?: boolean
   disabled?: boolean
   hidden?: boolean
   when?: (event: KeyboardEvent) => boolean
-  onSelect?: (source?: "palette" | "keybind" | "slash", input?: string) => void | Promise<void>
+  onSelect?: (source?: "palette" | "keybind" | "slash") => void
   onHighlight?: () => (() => void) | void
 }
 
@@ -187,7 +179,7 @@ export function parseKeybind(config: string): Keybind[] {
 }
 
 export function matchKeybind(keybinds: Keybind[], event: KeyboardEvent): boolean {
-  const eventKey = keyFromKeyboardEvent(event)
+  const eventKey = normalizeKey(event.key)
 
   for (const kb of keybinds) {
     const keyMatch = kb.key === eventKey
@@ -390,9 +382,9 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
       return map
     })
 
-    const run = (id: string, source?: CommandSource, input?: string) => {
+    const run = (id: string, source?: CommandSource) => {
       const option = optionMap().get(id)
-      return option?.onSelect?.(source, input)
+      option?.onSelect?.(source)
     }
 
     const showPalette = () => {
@@ -421,7 +413,7 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
       if (!option) return
       event.preventDefault()
       event.stopPropagation()
-      void option.onSelect?.("keybind")
+      option.onSelect?.("keybind")
     }
 
     onMount(() => {
@@ -455,8 +447,8 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
 
     return {
       register,
-      trigger(id: string, source?: CommandSource, input?: string) {
-        return run(id, source, input)
+      trigger(id: string, source?: CommandSource) {
+        run(id, source)
       },
       keybind(id: string) {
         const config = keybindConfig(id)

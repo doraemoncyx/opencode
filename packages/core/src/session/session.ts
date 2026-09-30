@@ -73,19 +73,12 @@ export const make = Effect.fn("Session.make")(function* () {
     yield* get(sessionID)
     yield* bus.publish(SessionEvent.Renamed, { sessionID, title: input.title })
   })
-  const setMetadata = Effect.fn("Session.setMetadata")(function* (
-    sessionID: SessionSchema.ID,
-    input: { metadata: SessionSchema.Metadata },
-  ) {
-    yield* get(sessionID)
-    yield* bus.publish(SessionEvent.MetadataUpdated, { sessionID, metadata: input.metadata })
-  })
   const setPermissions = Effect.fn("Session.setPermissions")(function* (
     sessionID: SessionSchema.ID,
     input: { permissions: Permission.Ruleset },
   ) {
     yield* get(sessionID)
-    yield* bus.publish(SessionEvent.Permissions, { sessionID, permissions: input.permissions })
+    yield* bus.publish(SessionEvent.PermissionsUpdated, { sessionID, permissions: input.permissions })
   })
   const switchAgent = Effect.fn("Session.switchAgent")(function* (
     sessionID: SessionSchema.ID,
@@ -179,7 +172,7 @@ export const make = Effect.fn("Session.make")(function* () {
   )
   const shell = Effect.fn("Session.shell")(function* (
     sessionID: SessionSchema.ID,
-    input: { id?: SessionMessage.ID; command: string },
+    input: { id?: Event.ID; command: string },
   ) {
     const session = yield* get(sessionID)
     // The server owns completion recording even if the submitting client disconnects.
@@ -202,7 +195,7 @@ export const make = Effect.fn("Session.make")(function* () {
           sessionID,
           shell: started.info,
         },
-        { id: input.id ? Event.ID.make(input.id.replace(/^msg_/, "evt_")) : undefined },
+        { id: input.id },
       )
       const terminal = yield* started.result
       const preview = yield* started.output
@@ -223,7 +216,7 @@ export const make = Effect.fn("Session.make")(function* () {
   })
   const skill = Effect.fn("Session.skill")(function* (
     sessionID: SessionSchema.ID,
-    input: { messageID?: SessionMessage.ID; skill: Skill.ID; resume?: boolean },
+    input: { id?: SessionMessage.ID; skill: Skill.ID; resume?: boolean },
   ) {
     const session = yield* get(sessionID)
     const skill = yield* SessionSkill.get({ session, skill: input.skill }).pipe(
@@ -237,7 +230,7 @@ export const make = Effect.fn("Session.make")(function* () {
         name: skill.name,
         text: skill.content,
       },
-      { id: input.messageID ? Event.ID.make(input.messageID.replace(/^msg_/, "evt_")) : undefined },
+      { id: input.id ? Event.ID.make(input.id.replace(/^msg_/, "evt_")) : undefined },
     )
     if (input.resume !== false)
       yield* execution
@@ -314,7 +307,7 @@ export const make = Effect.fn("Session.make")(function* () {
       ),
   )
   const interrupt = Effect.fn("Session.interrupt")(
-    (sessionID: SessionSchema.ID, options?: { readonly resume?: boolean }) =>
+    (sessionID: SessionSchema.ID, options?: { readonly continue?: boolean }) =>
       Effect.uninterruptible(execution.interrupt(sessionID, options)),
   )
   const stage = Effect.fn("Session.revert.stage")(function* (
@@ -349,7 +342,6 @@ export const make = Effect.fn("Session.make")(function* () {
     message,
     view,
     rename,
-    setMetadata,
     setPermissions,
     switchAgent,
     switchModel,
@@ -373,7 +365,6 @@ export const make = Effect.fn("Session.make")(function* () {
     const message = operations.message.bind(undefined, sessionID)
     const view = operations.view.bind(undefined, sessionID)
     const rename = operations.rename.bind(undefined, sessionID)
-    const setMetadata = operations.setMetadata.bind(undefined, sessionID)
     const setPermissions = operations.setPermissions.bind(undefined, sessionID)
     const switchAgent = operations.switchAgent.bind(undefined, sessionID)
     const switchModel = operations.switchModel.bind(undefined, sessionID)
@@ -400,7 +391,6 @@ export const make = Effect.fn("Session.make")(function* () {
       message,
       view,
       rename,
-      setMetadata,
       setPermissions,
       switchAgent,
       switchModel,

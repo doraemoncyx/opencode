@@ -11,6 +11,7 @@ import {
 } from "@opencode/ai"
 import { OpenAIChat } from "@opencode/ai/protocols"
 import { Agent } from "@opencode/core/agent"
+import { Catalog } from "@opencode/core/catalog"
 import { Database } from "@opencode/core/database/database"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { llmClient } from "@opencode/core/effect/app-node-platform"
@@ -100,8 +101,19 @@ const models = Layer.mock(SessionRunnerModel.Service)({
     )
   },
 })
-const smallModels = Layer.mock(Model.Service, {
-  small: () => Effect.succeed(selectedSmall),
+const catalog = Layer.mock(Catalog.Service, {
+  provider: {
+    get: () => Effect.die("unused"),
+    all: () => Effect.die("unused"),
+    available: () => Effect.die("unused"),
+  },
+  model: {
+    get: () => Effect.die("unused"),
+    all: () => Effect.die("unused"),
+    available: () => Effect.die("unused"),
+    default: () => Effect.die("unused"),
+    small: () => Effect.succeed(selectedSmall),
+  },
 })
 const it = testEffect(
   AppNodeBuilder.build(
@@ -116,7 +128,7 @@ const it = testEffect(
     ]),
     [
       llmClient.replace(client),
-      Model.node.replace(smallModels),
+      Catalog.node.replace(catalog),
       SessionRunnerModel.node.replace(models),
       Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
       PluginSupervisor.node.replace(Layer.empty),
@@ -441,7 +453,6 @@ it.effect("regenerates an existing title using the title agent", () =>
       assistantMessageID,
       agent: Agent.ID.make("build"),
       model: Model.Ref.make({ id: Model.ID.make("title-model"), providerID: Provider.ID.make("test") }),
-      started: 0,
     })
     yield* events.publish(SessionEvent.Reasoning.Started, { sessionID, assistantMessageID, ordinal: 0 })
     yield* events.publish(SessionEvent.Reasoning.Ended, {

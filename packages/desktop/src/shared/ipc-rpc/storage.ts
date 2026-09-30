@@ -1,6 +1,5 @@
 import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
-import { Transferable } from "effect/unstable/workers"
 
 export const StorageItems = Rpc.make("StorageItems", {
   payload: { name: Schema.String },
@@ -25,12 +24,12 @@ export const DraftsSet = Rpc.make("DraftsSet", {
 })
 export const DraftsDelete = Rpc.make("DraftsDelete", { payload: { key: Schema.String } })
 export const DraftsPutBlob = Rpc.make("DraftsPutBlob", {
-  payload: { data: Transferable.Uint8Array },
+  payload: { data: Schema.Uint8Array },
   success: Schema.String,
 })
 export const DraftsGetBlob = Rpc.make("DraftsGetBlob", {
   payload: { id: Schema.String },
-  success: Schema.NullOr(Transferable.Uint8Array),
+  success: Schema.NullOr(Schema.Uint8Array),
 })
 
 export const StorageRpcs = RpcGroup.make(

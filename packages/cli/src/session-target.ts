@@ -1,6 +1,5 @@
 import type { LocationGetOutput, ModelRef, OpenCodeClient, SessionInfo } from "@opencode/client/promise"
 import { Model } from "@opencode/schema/model"
-import { errorMessage } from "./util/error"
 
 const SESSION_PAGE_LIMIT = 50
 
@@ -25,7 +24,7 @@ export class SessionTargetMutationError extends Error {
   override readonly name = "SessionTargetMutationError"
 
   constructor(cause: unknown) {
-    super(errorMessage(cause), { cause })
+    super(cause instanceof Error ? cause.message : "Session target mutation failed", { cause })
   }
 }
 
@@ -63,7 +62,6 @@ export async function resolveSessionTarget(input: {
     (await input.client.session
       .create(
         {
-          id: input.session,
           agent: prepared.agent,
           model: prepared.model,
           location: { directory: location.directory },
@@ -102,16 +100,19 @@ async function selectSession(input: {
   fork?: boolean
   signal?: AbortSignal
 }) {
-  const explicit = input.session ? await findSession(input.client, input.session, input.signal) : undefined
-  if (input.session && !explicit) {
-    if (input.fork) throw new Error("Session not found")
-    return { session: undefined }
-  }
+  const explicit = input.session
+    ? await input.client.session.get({ sessionID: input.session }, ...requestOptions(input.signal)).catch((error) => {
+        if (error && typeof error === "object" && "_tag" in error && error._tag === "SessionNotFoundError")
+          return undefined
+        throw error
+      })
+    : undefined
+  if (input.session && !explicit) throw new Error("Session not found")
   if (explicit)
     return {
       session: input.fork
         ? await input.client.session
-            .fork({ sessionID: explicit.id }, ...requestOptions(input.signal))
+            .fork({ sessionID: explicit.id, boundary: { type: "through" } }, ...requestOptions(input.signal))
             .catch((error) => {
               throw new SessionTargetMutationError(error)
             })
@@ -124,18 +125,13 @@ async function selectSession(input: {
   if (!selected) return { session: undefined, location }
   return {
     session: input.fork
-      ? await input.client.session.fork({ sessionID: selected.id }, ...requestOptions(input.signal)).catch((error) => {
-          throw new SessionTargetMutationError(error)
-        })
+      ? await input.client.session
+          .fork({ sessionID: selected.id, boundary: { type: "through" } }, ...requestOptions(input.signal))
+          .catch((error) => {
+            throw new SessionTargetMutationError(error)
+          })
       : selected,
   }
-}
-
-export function findSession(client: OpenCodeClient, sessionID: string, signal?: AbortSignal) {
-  return client.session.get({ sessionID }, ...requestOptions(signal)).catch((error) => {
-    if (error && typeof error === "object" && "_tag" in error && error._tag === "SessionNotFoundError") return undefined
-    throw error
-  })
 }
 
 async function latestSession(
@@ -160,7 +156,11 @@ async function latestSession(
   return latestSession(client, location, page.cursor.next, signal)
 }
 
-function resolveLocation(client: OpenCodeClient, location?: { directory?: string }, signal?: AbortSignal) {
+function resolveLocation(
+  client: OpenCodeClient,
+  location?: { directory?: string },
+  signal?: AbortSignal,
+) {
   if (!location && !signal) return client.location.get()
   if (!location) return client.location.get(undefined, { signal })
   return client.location.get({ location }, ...requestOptions(signal))

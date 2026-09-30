@@ -50,8 +50,7 @@ const fromRequest = Effect.fn("XAIResponses.fromRequest")(function* (request: LL
       operation: "in-band-compaction",
       provider: request.model.provider,
       route: request.model.route.id,
-      message:
-        "xAI requires explicit compaction through LLMClient.compact; automatic context management is not supported",
+      message: "xAI requires explicit compaction through LLMClient.compact; automatic context management is not supported",
     })
   return yield* decodeBody(yield* OpenResponses.fromRequestWithAdapter(request, adapter))
 })
@@ -94,8 +93,6 @@ export const protocol = Protocol.make({
   },
 })
 
-export const compact = ResponsesCompaction.make(adapter, (request) =>
-  OpenResponses.lowerTools(ProviderShared.flattenTools(request.tools), adapter),
-)
+export const compact = ResponsesCompaction.make(adapter)
 
 export * as XAIResponses from "./xai-responses.js"

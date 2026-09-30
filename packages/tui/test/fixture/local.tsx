@@ -88,7 +88,7 @@ export async function renderLocal(
     ),
     { width: 100, height: 30, kittyKeyboard: true },
   )
-  await waitForModel(() => local !== undefined && local.model.ready)
+  await setup.waitFor(() => local !== undefined && local.model.ready)
   await data.location.sync()
   return {
     ...setup,
@@ -103,14 +103,6 @@ export async function renderLocal(
       setup.renderer.destroy()
       await temporary[Symbol.asyncDispose]()
     },
-  }
-}
-
-async function waitForModel(ready: () => boolean) {
-  const started = Date.now()
-  while (!ready()) {
-    if (Date.now() - started > 2_000) throw new Error("Timed out waiting for local model data")
-    await Bun.sleep(10)
   }
 }
 

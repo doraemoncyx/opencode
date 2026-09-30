@@ -79,7 +79,6 @@ export interface ListInput {
 }
 
 export interface Interface {
-  readonly close: Effect.Effect<void>
   readonly create: (input: CreateInput) => Effect.Effect<Info, AlreadyExistsError | InvalidFormError>
   readonly ask: (input: CreateInput) => Effect.Effect<TerminalState, AlreadyExistsError | InvalidFormError>
   readonly get: (id: ID) => Effect.Effect<Info, NotFoundError>
@@ -101,7 +100,6 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service
-    let closed = false
     const forms = yield* Cache.makeWith<ID, Entry>(
       () => Effect.die(new Error("Form cache must be used via set/getSuccess, never get")),
       {
@@ -139,7 +137,6 @@ export const layer = Layer.effect(
           }
           yield* Cache.set(forms, id, entry)
           yield* bus.publish(Form.Event.Created, { form }).pipe(Effect.onError(() => Cache.invalidate(forms, id)))
-          if (closed) yield* cancel(id).pipe(Effect.orDie)
           return form
         }),
       ),
@@ -205,21 +202,19 @@ export const layer = Layer.effect(
       ),
     )
 
-    const close = Effect.sync(() => {
-      closed = true
-    }).pipe(
-      Effect.andThen(Cache.values(forms)),
-      Effect.flatMap((entries) =>
-        Effect.forEach(
-          Array.from(entries).filter((entry) => entry.state.status === "pending"),
-          (entry) => cancel(entry.form.id).pipe(Effect.ignore),
-          { discard: true },
+    yield* Effect.addFinalizer(() =>
+      Cache.values(forms).pipe(
+        Effect.flatMap((entries) =>
+          Effect.forEach(
+            Array.from(entries).filter((entry) => entry.state.status === "pending"),
+            (entry) => cancel(entry.form.id).pipe(Effect.ignore),
+            { discard: true },
+          ),
         ),
       ),
     )
-    yield* Effect.addFinalizer(() => close)
 
-    return Service.of({ create, ask, get, list, state, reply, cancel, close })
+    return Service.of({ create, ask, get, list, state, reply, cancel })
   }),
 )
 

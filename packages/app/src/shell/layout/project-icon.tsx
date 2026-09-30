@@ -4,7 +4,7 @@ import { displayName, getProjectAvatarSource } from "@/shell/layout/helpers"
 import { getProjectAvatarVariant, type LocalProject } from "@/shell/state/layout"
 
 type ProjectIconProps = Omit<ProjectAvatarProps, "fallback" | "src" | "variant"> & {
-  project: Pick<LocalProject, "id" | "name" | "worktree" | "icon">
+  project: LocalProject
   fallback?: string
   icon?: LocalProject["icon"]
 }

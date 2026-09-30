@@ -4,7 +4,7 @@ import { createServer } from "node:http"
 import path from "node:path"
 import { Agent } from "@opencode/schema/agent"
 import { Integration } from "@opencode/schema/integration"
-import { ServerInfo } from "@opencode/protocol/groups/server"
+import { ServerStatus } from "@opencode/protocol/groups/server"
 import { Effect, Schedule, Schema } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
@@ -94,20 +94,19 @@ it.live("serves the HttpApi and enforces Basic auth like the Node server", () =>
   Effect.gen(function* () {
     const handler = yield* ServerFetch.make({ ...options, password: "secret" })
 
-    const denied = yield* Effect.promise(() => handler(new Request("http://opencode.local/api/info")))
+    const denied = yield* Effect.promise(() => handler(new Request("http://opencode.local/api/status")))
     expect(denied.status).toBe(401)
 
     const response = yield* Effect.promise(() =>
       handler(
-        new Request("http://opencode.local/api/info", {
+        new Request("http://opencode.local/api/status", {
           headers: { authorization: `Basic ${btoa("opencode:secret")}` },
         }),
       ),
     )
     expect(response.status).toBe(200)
-    const body = yield* Effect.promise(() => response.json()).pipe(Effect.flatMap(Schema.decodeUnknownEffect(ServerInfo)))
+    const body = yield* Effect.promise(() => response.json()).pipe(Effect.flatMap(Schema.decodeUnknownEffect(ServerStatus)))
     expect(body.version).toBe("test-version")
-    expect(body.paths.tmp).toEndWith("opencode")
   }),
 )
 
@@ -125,12 +124,12 @@ it.live("serves unauthenticated and answers CORS preflight when no password is c
   Effect.gen(function* () {
     const handler = yield* ServerFetch.make(options)
 
-    const response = yield* Effect.promise(() => handler(new Request("http://opencode.local/api/info")))
+    const response = yield* Effect.promise(() => handler(new Request("http://opencode.local/api/status")))
     expect(response.status).toBe(200)
 
     const preflight = yield* Effect.promise(() =>
       handler(
-        new Request("http://opencode.local/api/info", {
+        new Request("http://opencode.local/api/status", {
           method: "OPTIONS",
           headers: {
             origin: "http://localhost:3000",
@@ -157,7 +156,7 @@ it.live("applies custom CORS origins to HTTP responses and PTY ticket checks", (
           const allowed = origin !== "https://untrusted.example.com"
           const preflight = yield* Effect.promise(() =>
             handler(
-              new Request("http://opencode.local/api/info", {
+              new Request("http://opencode.local/api/status", {
                 method: "OPTIONS",
                 headers: {
                   origin,
@@ -173,7 +172,7 @@ it.live("applies custom CORS origins to HTTP responses and PTY ticket checks", (
 
           const response = yield* Effect.promise(() =>
             handler(
-              new Request("http://opencode.local/api/info", {
+              new Request("http://opencode.local/api/status", {
                 headers: { origin, authorization: `Basic ${btoa("opencode:secret")}` },
               }),
             ),
@@ -466,7 +465,7 @@ it.live("stays serviceable when the first request aborts", () =>
 
     const aborted = yield* Effect.promise(() => {
       const controller = new AbortController()
-      const first = handler(new Request("http://opencode.local/api/info", { signal: controller.signal }))
+      const first = handler(new Request("http://opencode.local/api/status", { signal: controller.signal }))
       controller.abort()
       return first.then(
         () => "resolved" as const,
@@ -475,7 +474,7 @@ it.live("stays serviceable when the first request aborts", () =>
     })
     expect(["resolved", "rejected"]).toContain(aborted)
 
-    const second = yield* Effect.promise(() => handler(new Request("http://opencode.local/api/info")))
+    const second = yield* Effect.promise(() => handler(new Request("http://opencode.local/api/status")))
     expect(second.status).toBe(200)
   }),
 )

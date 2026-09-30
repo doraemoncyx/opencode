@@ -76,7 +76,6 @@ describe("Session.revert files", () => {
             agent: Agent.defaultID,
             model: { id: Model.ID.make("test-model"), providerID: Provider.ID.make("test-provider") },
             snapshot: before,
-            started: 0,
           })
           yield* Effect.promise(() => fs.rename(original, renamed))
           const after = yield* snapshot.capture()

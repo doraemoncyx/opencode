@@ -1,6 +1,7 @@
 import { AISDK } from "@opencode/core/aisdk"
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
+import { Catalog } from "@opencode/core/catalog"
 import { Model } from "@opencode/core/model"
 import { Plugin } from "@opencode/core/plugin"
 import { PluginHost } from "@opencode/core/plugin/host"
@@ -20,15 +21,15 @@ const addPlugin = Effect.fn(function* () {
 describe("VercelPlugin", () => {
   it.effect("applies legacy lower-case referer headers", () =>
     Effect.gen(function* () {
-      const catalog = yield* Provider.Service
+      const catalog = yield* Catalog.Service
       yield* catalog.transform((catalog) => {
-        catalog.update(Provider.ID.make("vercel"), (provider) => {
+        catalog.provider.update(Provider.ID.make("vercel"), (provider) => {
           provider.package = Provider.aisdk("@ai-sdk/vercel")
           provider.headers = { ...provider.headers, Existing: "1" }
         })
       })
       yield* addPlugin()
-      expect((yield* catalog.get(Provider.ID.make("vercel")))?.headers).toEqual({
+      expect((yield* catalog.provider.get(Provider.ID.make("vercel")))?.headers).toEqual({
         Existing: "1",
         "http-referer": "https://opencode.ai/",
         "x-title": "opencode",
@@ -38,15 +39,15 @@ describe("VercelPlugin", () => {
 
   it.effect("does not add legacy upper-case referer headers", () =>
     Effect.gen(function* () {
-      const catalog = yield* Provider.Service
+      const catalog = yield* Catalog.Service
       yield* catalog.transform((catalog) =>
-        catalog.update(Provider.ID.make("vercel"), (provider) => {
+        catalog.provider.update(Provider.ID.make("vercel"), (provider) => {
           provider.package = Provider.aisdk("@ai-sdk/vercel")
         }),
       )
       yield* addPlugin()
-      expect((yield* catalog.get(Provider.ID.make("vercel")))?.headers).not.toHaveProperty("HTTP-Referer")
-      expect((yield* catalog.get(Provider.ID.make("vercel")))?.headers).not.toHaveProperty("X-Title")
+      expect((yield* catalog.provider.get(Provider.ID.make("vercel")))?.headers).not.toHaveProperty("HTTP-Referer")
+      expect((yield* catalog.provider.get(Provider.ID.make("vercel")))?.headers).not.toHaveProperty("X-Title")
     }),
   )
 
@@ -70,10 +71,10 @@ describe("VercelPlugin", () => {
 
   it.effect("ignores non-Vercel providers", () =>
     Effect.gen(function* () {
-      const catalog = yield* Provider.Service
-      yield* catalog.transform((catalog) => catalog.update(Provider.ID.make("gateway"), () => {}))
+      const catalog = yield* Catalog.Service
+      yield* catalog.transform((catalog) => catalog.provider.update(Provider.ID.make("gateway"), () => {}))
       yield* addPlugin()
-      expect((yield* catalog.get(Provider.ID.make("gateway")))?.headers).toBeUndefined()
+      expect((yield* catalog.provider.get(Provider.ID.make("gateway")))?.headers).toBeUndefined()
     }),
   )
 })

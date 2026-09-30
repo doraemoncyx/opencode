@@ -27,8 +27,6 @@ import {
 import { FOOTER_MENU_ROWS, RunFooterMenu } from "./footer.menu"
 import { RunFooterSubagentBody } from "./footer.subagent"
 import { RunPromptBody, createPromptState } from "./footer.prompt"
-import { promptAppend } from "./prompt.shared"
-import { promptOffsetWidth } from "../prompt/display"
 import { RunPermissionBody } from "./footer.permission"
 import { RunFormBody } from "./footer.form"
 import { createFormBodyState, type FormBodyState } from "./form.shared"
@@ -322,7 +320,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   }
 
   const runQueuedAction = createSingleFlight<string>()
-  const queuedPromptAction = async (action: QueuedPromptAction, inboxID: string, failureLabel?: string) => {
+  const queuedPromptAction = async (action: QueuedPromptAction, inboxID: string) => {
     const run = props.onQueuedPromptAction
     if (!run) return false
     const result = await runQueuedAction(inboxID, async () => {
@@ -331,9 +329,7 @@ export function RunFooterView(props: RunFooterViewProps) {
         (error) => error,
       )
       if (!error) return true
-      props.onStatus(
-        `failed to ${failureLabel ?? (action === "cancel" ? "delete" : action)} pending prompt: ${errorMessage(error)}`,
-      )
+      props.onStatus(`failed to ${action === "cancel" ? "delete" : action} pending prompt: ${errorMessage(error)}`)
       return false
     })
     return result ?? false
@@ -415,7 +411,6 @@ export function RunFooterView(props: RunFooterViewProps) {
     if (notice()) return notice()
     if (!footerDetails()) return shell() ? "Shell" : ""
     if (busy()) {
-      if (stateStatus() === "reconnecting") return "reconnecting"
       return interruptLabel() ? `${interruptLabel()} stop` : "Running"
     }
     return stateStatus() || (shell() ? "Shell" : "")
@@ -798,17 +793,6 @@ export function RunFooterView(props: RunFooterViewProps) {
                                 await queuedPromptAction(item.delivery === "queue" ? "steer" : "queue", item.messageID)
                               )
                                 closePanel()
-                            }}
-                            onUndo={async (item) => {
-                              const current = composer.current()
-                              if (current.mode === "shell" && current.text) {
-                                props.onStatus("leave shell mode before undoing a queued prompt")
-                                return
-                              }
-                              if (!(await queuedPromptAction("cancel", item.messageID, "undo"))) return
-                              closePanel()
-                              const next = promptAppend(composer.current(), item.prompt)
-                              composer.replacePrompt(next, promptOffsetWidth(next.text))
                             }}
                             onDelete={(item) => {
                               void queuedPromptAction("cancel", item.messageID)

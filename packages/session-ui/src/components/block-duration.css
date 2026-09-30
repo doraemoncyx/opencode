@@ -1,0 +1,11 @@
+[data-slot="block-duration"] {
+  user-select: none;
+  white-space: nowrap;
+  font-family: var(--font-family-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-compact);
+  letter-spacing: var(--letter-spacing-normal);
+  color: var(--v2-text-text-faint);
+}

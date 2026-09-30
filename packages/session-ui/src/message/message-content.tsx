@@ -1,4 +1,14 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, type ComponentProps, type JSX } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  Index,
+  onCleanup,
+  Show,
+  type ComponentProps,
+  type JSX,
+} from "solid-js"
 import { createStore } from "solid-js/store"
 import { useData } from "../context"
 import { useDialog } from "@opencode/ui/context/dialog"
@@ -16,7 +26,8 @@ import { Button } from "@opencode/ui/button"
 import { TextReveal } from "@opencode/ui/text-reveal"
 import { TextShimmer } from "@opencode/ui/text-shimmer"
 import { BasicTool } from "../components/basic-tool"
-import { reasoningHeading } from "../timeline/projection"
+import { BlockDuration, formatElapsed } from "../components/block-duration"
+import { reasoningLabel, reasoningSnippet } from "../timeline/projection"
 import { Card } from "@opencode/ui/card"
 import type {
   PromptAgentAttachment,
@@ -26,8 +37,10 @@ import type {
   SessionMessageCompaction,
   SessionMessageUser,
 } from "@opencode/client/promise"
-import type { SessionUserActions, SessionUserAttachmentReference, SessionUserComment } from "../actions"
-import { attached, typeLabel } from "../components/message-file"
+import type { SessionUserActions, SessionUserComment } from "../actions"
+import { typeLabel } from "../components/message-file"
+import { computeTokenStats } from "./token-stats"
+import { textBlockTime } from "./block-time"
 
 export async function writeClipboard(text: string): Promise<boolean> {
   const body = typeof document === "undefined" ? undefined : document.body
@@ -208,14 +221,12 @@ export function CurrentUserMessageDisplay(props: {
   model: SessionMessageAssistant["model"]
   actions?: SessionUserActions
   comments?: SessionUserComment[]
-  references?: SessionUserAttachmentReference[]
 }) {
   const data = useData()
   const dialog = useDialog()
   const i18n = useI18n()
   const [state, setState] = createStore({ copied: false, reverting: false })
-  const attachments = createMemo(() => (props.message.files ?? []).filter(attached))
-  const references = createMemo(() => props.references ?? [])
+  const attachments = createMemo(() => (props.message.files ?? []).filter((file) => !file.mention))
   const inlineFiles = createMemo(() => (props.message.files ?? []).filter((file) => !!file.mention))
   const agents = createMemo(() => props.message.agents ?? [])
   const comments = createMemo(() => props.comments ?? [])
@@ -244,15 +255,8 @@ export function CurrentUserMessageDisplay(props: {
     }
   }
   const renderAttachments = () => (
-    <Show when={attachments().length > 0 || references().length > 0}>
+    <Show when={attachments().length > 0}>
       <div data-slot="user-message-attachments">
-        <For each={references()}>
-          {(file) => (
-            <AttachmentCard title={file.name} hover={file.path}>
-              {typeLabel(file.name, file.mime, i18n.t("ui.common.file"))}
-            </AttachmentCard>
-          )}
-        </For>
         <For each={attachments()}>
           {(file) => {
             const url = () => (file.source.type === "uri" ? file.source.uri : `data:${file.mime};base64,${file.data}`)
@@ -501,12 +505,27 @@ export function AssistantTextContent(props: {
             ? completed - props.message.time.created
             : -1
     if (!(ms >= 0)) return ""
-    const total = Math.round(ms / 1000)
-    if (total < 60) return i18n.t("ui.message.duration.seconds", { count: numfmt().format(total) })
-    return i18n.t("ui.message.duration.minutesSeconds", {
-      minutes: numfmt().format(Math.floor(total / 60)),
-      seconds: numfmt().format(total % 60),
-    })
+    return formatElapsed(ms, i18n)
+  })
+  const streaming = () => typeof props.message.time.completed !== "number"
+  const textIndex = () => Number(props.id.split(":").at(-1))
+  const isLastTextPart = createMemo(() => {
+    const ordinals = { text: 0 }
+    let last: string | undefined
+    for (const item of props.message.content) {
+      if (item.type !== "text") continue
+      last = `${props.message.id}:text:${ordinals.text++}`
+    }
+    return last === props.id
+  })
+  const tokenStats = createMemo(() => {
+    const stats = computeTokenStats(props.message, Date.now())
+    return [
+      stats.ttft ? i18n.t("ui.message.tokens.ttft", { value: numfmt().format(stats.ttft) }) : "",
+      stats.tps ? i18n.t("ui.message.tokens.tps", { value: stats.tps.toFixed(1) }) : "",
+    ]
+      .filter(Boolean)
+      .join(" \u00B7 ")
   })
   const meta = createMemo(() => {
     const agent = props.message.agent
@@ -514,6 +533,7 @@ export function AssistantTextContent(props: {
       agent ? agent[0]?.toUpperCase() + agent.slice(1) : "",
       model(),
       duration(),
+      tokenStats(),
       interrupted() ? i18n.t("ui.message.interrupted") : "",
     ]
       .filter(Boolean)
@@ -530,12 +550,16 @@ export function AssistantTextContent(props: {
     <Show when={props.text}>
       <div data-component="text-part" data-timeline-part-id={props.id}>
         <div data-slot="text-part-body">
-          <PacedMarkdown
-            text={props.text}
-            cacheKey={props.id}
-            streaming={typeof props.message.time.completed !== "number"}
-          />
+          <PacedMarkdown text={props.text} cacheKey={props.id} streaming={streaming()} />
         </div>
+        <div data-slot="text-part-duration">
+          <BlockDuration time={(now) => textBlockTime(props.message, textIndex(), now)} live={streaming()} />
+        </div>
+        <Show when={streaming() && isLastTextPart() && tokenStats()}>
+          <div data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
+            {tokenStats()}
+          </div>
+        </Show>
         <Show when={props.showCopy}>
           <div data-slot="text-part-copy-wrapper" data-interrupted={interrupted() ? "" : undefined}>
             <MessageActionButton
@@ -563,29 +587,27 @@ export function AssistantReasoningContent(props: {
   streaming: boolean
   defaultOpen?: boolean
   open?: boolean
+  /** Show the leading lines of a collapsed thought instead of only its label. */
+  preview?: boolean
   onOpenChange?: (open: boolean) => void
   onContentRendered?: () => void
 }) {
   const i18n = useI18n()
   const [state, setState] = createStore<{ open?: boolean }>({})
   const open = () => props.open ?? state.open ?? props.defaultOpen ?? false
-  const heading = createMemo(() => (props.streaming ? reasoningHeading(props.content.text) : ""))
-  const duration = createMemo(() => {
-    const time = props.content.time
-    if (time?.completed === undefined) return undefined
-    const total = Math.max(0, Math.round((time.completed - time.created) / 1000))
-    const numfmt = new Intl.NumberFormat(i18n.locale())
-    if (total < 60) return i18n.t("ui.message.duration.seconds", { count: numfmt.format(total) })
-    return i18n.t("ui.message.duration.minutesSeconds", {
-      minutes: numfmt.format(Math.floor(total / 60)),
-      seconds: numfmt.format(total % 60),
-    })
+  // A thought keeps its label when collapsed so the row still says what it was about.
+  const label = createMemo(() => reasoningLabel(props.content.text) ?? "")
+  const preview = createMemo(() => {
+    if (!props.preview || open()) return []
+    const current = label()
+    return reasoningSnippet(props.content.text).filter((line) => line !== current)
   })
   return (
     <div data-component="reasoning-part" data-timeline-part-id={props.id}>
       <BasicTool
         icon="mcp"
         status={props.streaming ? "running" : "completed"}
+        time={props.content.time && { start: props.content.time.created, end: props.content.time.completed }}
         compact
         hasContent
         allowOpenWhilePending
@@ -605,19 +627,20 @@ export function AssistantReasoningContent(props: {
                   active={props.streaming}
                 />
               </span>
-              <Show
-                when={props.streaming && !open()}
-                fallback={
-                  <Show when={!props.streaming && duration()}>
-                    {(value) => <span data-slot="basic-tool-tool-subtitle">{value()}</span>}
-                  </Show>
-                }
-              >
-                <span data-slot="basic-tool-tool-subtitle">
-                  <TextReveal text={heading()} />
-                </span>
+              <Show when={!open() && label()}>
+                {(value) => (
+                  <span data-slot="basic-tool-tool-subtitle">
+                    {props.streaming ? <TextReveal text={value()} /> : value()}
+                  </span>
+                )}
               </Show>
             </div>
+            <Show when={preview().length > 0}>
+              <div data-slot="reasoning-preview">
+                {/* Index keeps duplicate preview lines distinct; For keys primitives by value. */}
+                <Index each={preview()}>{(line) => <span data-slot="reasoning-preview-line">{line()}</span>}</Index>
+              </div>
+            </Show>
           </div>
         }
       >

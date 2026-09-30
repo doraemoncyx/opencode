@@ -1,10 +1,11 @@
 import { Effect, Semaphore, Stream } from "effect"
 import { define } from "@opencode/plugin/effect/plugin"
 import { Bus } from "../../bus.js"
-import { IntegrationConnection } from "../../integration/connection.js"
+import { Catalog } from "../../catalog.js"
 import { Credential } from "../../credential.js"
 import { Integration } from "../../integration.js"
 import { ModalModels } from "../../modal/models.js"
+import { Model } from "../../model.js"
 import { Provider } from "../../provider.js"
 import type { PluginInternal } from "../internal.js"
 
@@ -13,13 +14,12 @@ const providerID = Provider.ID.make("modal")
 export const ModalPlugin = define({
   id: "opencode.provider.modal",
   effect: Effect.fn(function* (ctx) {
-    const providers = yield* Provider.Service
+    const catalog = yield* Catalog.Service
     const bus = yield* Bus.Service
     const loading = Semaphore.makeUnsafe(1)
     const loaded: {
       baseURL?: string
-      models?: ModalModels.Snapshot
-      connection?: Effect.Success<ReturnType<typeof ctx.integration.connection.active>>
+      models?: Map<Model.ID, Model.Info>
     } = {}
 
     const load = Effect.fn("ModalPlugin.load")(function* () {
@@ -28,43 +28,35 @@ export const ModalPlugin = define({
         ? yield* ctx.integration.connection.resolve(connection).pipe(Effect.orElseSucceed(() => undefined))
         : undefined
       const apiKey = credential?.type === "key" ? credential.key : process.env.MODAL_PROXY_TOKEN
-      const provider = yield* providers.get(providerID)
+      const provider = yield* catalog.provider.get(providerID)
       const baseURL = typeof provider?.settings?.baseURL === "string" ? provider.settings.baseURL : undefined
       if (!apiKey || !baseURL) {
         loaded.baseURL = undefined
         loaded.models = undefined
-        loaded.connection = undefined
         return
       }
-      const remote = yield* Effect.tryPromise({
-        try: () => ModalModels.load(baseURL, apiKey),
+      loaded.baseURL = baseURL
+      const existing = (yield* catalog.model.all()).filter((model) => model.providerID === providerID)
+      loaded.models = yield* Effect.tryPromise({
+        try: () => ModalModels.get(baseURL, apiKey, existing),
         catch: (cause) => cause,
       }).pipe(
         Effect.catch((cause) => Effect.logWarning("failed to sync Modal models", { cause }).pipe(Effect.as(undefined))),
       )
-      if (
-        IntegrationConnection.key(connection) !==
-        IntegrationConnection.key(yield* ctx.integration.connection.active("modal"))
-      )
-        return
-      loaded.baseURL = baseURL
-      loaded.models = remote
-      loaded.connection = connection
     })
 
-    yield* ctx.provider.transform((evt) => {
-      const item = evt.get(providerID)
+    yield* ctx.catalog.transform((evt) => {
+      const item = evt.provider.get(providerID)
       if (!item) return
-      if (!loaded.models || !loaded.baseURL) return
-      evt.add({
-        info: item.provider,
-        models: Array.from(
-          ModalModels.derive(loaded.baseURL, loaded.models, Array.from(item.models.values())).values(),
-        ),
-        sourceConnection: loaded.connection,
-      })
+      if (!loaded.models) return
+      for (const id of item.models.keys()) {
+        if (!loaded.models.has(Model.ID.make(id))) evt.model.remove(item.provider.id, id)
+      }
+      for (const [id, model] of loaded.models) {
+        evt.model.update(item.provider.id, id, (draft) => Object.assign(draft, structuredClone(model)))
+      }
     })
-    const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.provider.reload())))
+    const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.catalog.reload())))
     yield* bus.subscribe(Credential.Event.Switched).pipe(
       Stream.filter((event) => event.data.integrationID === Integration.ID.make("modal")),
       Stream.runForEach(refresh),

@@ -91,7 +91,7 @@ function AgentReasoningStory(props: { mode: ReasoningMode; reasoning: string; to
         agent: "build",
         model: STORY_MODEL,
         content,
-        time: { created: STORY_TIME },
+        time: { created: STORY_TIME, ...(props.text ? { completed: STORY_TIME + 8000 } : {}) },
       },
     ],
     status: { type: "busy" },
@@ -455,7 +455,7 @@ const MovedLocation = {
   render: () => (
     <CurrentSessionTimelineStory
       title="Moved Session location"
-      description="A changed working directory renders as a timeline divider, truncates, and exposes its tooltip."
+      description="A changed working directory stays compact, truncates, and exposes its tooltip."
       document={{
         ...thinkingDocument,
         status: { type: "idle" },
@@ -593,7 +593,7 @@ export const Conversation = {
   argTypes: {
     scenario: { control: "select", options: Object.keys(conversationScenarios) },
     reasoning: { control: "select", options: ["none", "blank", "heading"] },
-    mode: { control: "select", options: ["hidden", "compact", "full"] },
+    mode: { control: "select", options: ["hidden", "compact", "snippet", "full"] },
   },
   render: (args: { scenario: string; mode: ReasoningMode; reasoning: string; tool: boolean; text: string }) => {
     if (args.scenario === "reasoning") return <AgentReasoningStory {...args} />

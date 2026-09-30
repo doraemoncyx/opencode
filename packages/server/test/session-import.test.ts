@@ -34,7 +34,7 @@ it.live("preserves imported parentID through HTTP import, read, and parent filte
     const parent = Schema.decodeUnknownSync(SessionResponse)(yield* request("/api/session", { title: "Parent" }))
     const id = Session.ID.create()
     const imported = Schema.decodeUnknownSync(SessionResponse)(
-      yield* request("/api/experimental/session/import", {
+      yield* request("/api/session/import", {
         info: { ...parent.data, id, parentID: parent.data.id, title: "Imported child" },
         messages: [],
       }),
@@ -58,7 +58,7 @@ it.live("preserves imported parentID through HTTP import, read, and parent filte
       const id = Session.ID.create()
       const parentID = parent === "self" ? id : Session.ID.create()
       const error = yield* request(
-        "/api/experimental/session/import",
+        "/api/session/import",
         { info: { ...template.data, id, parentID }, messages: [] },
         404,
       )

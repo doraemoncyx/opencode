@@ -1,7 +1,6 @@
 import { Browser } from "@opencode/plugin-browser/rpc"
 import { Schema } from "effect"
 import { Rpc } from "effect/unstable/rpc"
-import { Transferable } from "effect/unstable/workers"
 
 const text = (maximum: number) => Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximum))
 const bindingID = text(128)
@@ -35,7 +34,6 @@ export type BrowserPaneRequest = Schema.Schema.Type<typeof BrowserPaneRequestSch
 
 export const BrowserPaneEventSchema = Schema.Union([
   Schema.Struct({ type: Schema.Literal("focus"), tabID: Browser.TabID }),
-  Schema.Struct({ type: Schema.Literal("preview"), path: text(2_048) }),
   Schema.Struct({
     type: Schema.Literal("state"),
     state: Schema.NullOr(Browser.State),
@@ -43,7 +41,3 @@ export const BrowserPaneEventSchema = Schema.Union([
   }),
 ])
 export const BrowserPaneRpc = Rpc.make("BrowserPane", { payload: { request: BrowserPaneRequestSchema } })
-export const BrowserPaneCaptureRpc = Rpc.make("BrowserPaneCapture", {
-  payload: { bindingID, tabID: Browser.TabID },
-  success: Schema.NullOr(Transferable.Uint8Array),
-})

@@ -20,6 +20,7 @@ import { InlineInput } from "@opencode/ui/inline-input"
 import { Keybind } from "@opencode/ui/keybind"
 import { Menu } from "@opencode/ui/menu"
 import { TextShimmer } from "@opencode/ui/text-shimmer"
+import { ProjectAvatar } from "@opencode/ui/project-avatar"
 import { SummaryPopover } from "../summary/popover"
 import { SessionContextUsage } from "@/session/timeline/session-context-usage"
 import { useLanguage } from "@/runtime/i18n/language"
@@ -31,9 +32,12 @@ import { getReadyMarkdown, preloadMarkdown } from "@opencode/session-ui/markdown
 import { createTimelineController, type TimelineController, type TimelineSessionSource } from "./controller"
 import { createTimelineVirtualizer } from "./virtualizer"
 import { containsDirectory, isWorkspaceDirectory } from "@/workspaces/paths"
+import { getProjectAvatarVariant } from "@/shell/state/layout"
+import { displayName, getProjectAvatarSource, projectForSession } from "@/shell/layout/helpers"
 import { parseCommentNote, readPromptPresentation } from "@/composer/comment-note"
 import { useCommand } from "@/shell/commands/command"
-import { SessionAncestorTrail, SessionProjectMenu, SessionTitleHeader } from "../session-identity-header"
+import { useSettings } from "@/settings/model"
+import { SessionProjectMenu, SessionTitleHeader } from "../session-identity-header"
 import { SessionHeaderSpacer } from "@/session/header/session-header"
 import type { BackgroundTask } from "../summary/background"
 
@@ -129,6 +133,7 @@ function MessageTimelineView(
   const language = useLanguage()
   const server = useServer()
   const data = server.ctx.data
+  const settings = useSettings()
   const sdk = useWorkspaceLocation()
   const sessionID = props.data.sessionID
   const sessionStatus = props.data.status
@@ -142,15 +147,23 @@ function MessageTimelineView(
     const session = props.session.data.info()
     const projects = server.ctx.sync.data.project
     return session
-      ? server.ctx.projects.detailsForSession(session)
+      ? projectForSession(session, projects)
       : projects.find((item) => containsDirectory(item.worktree, sessionDirectory()))
   })
   const workspaceSession = createMemo(() => isWorkspaceDirectory(project(), sessionDirectory()))
-  const headerProject = createMemo(() => {
+  const showProjectIcon = () => import.meta.env.VITE_OPENCODE_CHANNEL !== "prod" && settings.general.showProjectIcon()
+  const avatarProject = createMemo(() => {
     const session = props.session.data.info()
     if (!session) return
-    return server.ctx.projects.forSession(session)
+    return projectForSession(session, server.ctx.projects.list()) ?? project()
   })
+  const projectAvatar = () => (
+    <ProjectAvatar
+      fallback={displayName(avatarProject() ?? { worktree: sessionDirectory() })}
+      src={getProjectAvatarSource(avatarProject()?.id, avatarProject()?.icon)}
+      variant={getProjectAvatarVariant(avatarProject()?.icon?.color)}
+    />
+  )
   createEffect(() => {
     const directory = project()?.worktree
     if (!directory) return
@@ -207,7 +220,6 @@ function MessageTimelineView(
         return (
           (presentation?.displayText ?? message.text).length <= 1024 &&
           !presentation?.comments?.length &&
-          !presentation?.attachments.length &&
           !parseCommentNote(message.text)
         )
       }
@@ -285,7 +297,6 @@ function MessageTimelineView(
       return {
         displayText: value?.displayText,
         comments: value?.comments ?? (parsed ? [parsed] : []),
-        references: value?.attachments,
       }
     },
     actions: props.actions,
@@ -407,19 +418,27 @@ function MessageTimelineView(
               <div class="flex items-center gap-1 min-w-0 flex-1">
                 <div class="flex items-center gap-0.5 min-w-0 flex-1 w-full">
                   <SessionProjectMenu
-                    project={headerProject()}
+                    project={avatarProject()}
                     directory={sessionDirectory()}
                     workspace={workspaceSession()}
+                    showProjectIcon={showProjectIcon()}
                   />
                   <Show when={parentID()}>
-                    {(id) => (
-                      <SessionAncestorTrail
-                        sessionID={sessionID() ?? ""}
-                        parentID={id()}
-                        parentTitle={parentTitle()}
-                        trailing={!!(childTitle() || title.editing)}
-                      />
-                    )}
+                    <button
+                      type="button"
+                      data-slot="session-title-parent"
+                      class="min-w-0 max-w-[40%] truncate pl-2 text-[13px] font-[530] leading-4 tracking-[-0.04px] text-v2-text-text-faint transition-colors hover:text-v2-text-text-muted"
+                      onClick={props.action.navigateParent}
+                    >
+                      {parentTitle()}
+                    </button>
+                    <span
+                      data-slot="session-title-separator"
+                      class="-translate-y-[0.5px] pl-2 pr-1 text-[11px] font-medium text-v2-text-text-faint"
+                      aria-hidden="true"
+                    >
+                      /
+                    </span>
                   </Show>
                   <Show when={childTitle() || title.editing}>
                     <Show
@@ -428,7 +447,6 @@ function MessageTimelineView(
                         <h1
                           data-slot="session-title-child"
                           class="truncate text-[13px] font-[530] leading-4 tracking-[-0.04px] text-v2-text-text-base w-fit rounded-[6px] px-1 py-1 hover:bg-v2-overlay-simple-overlay-hover"
-                          classList={{ "max-w-[45%] shrink-0": !!parentID() }}
                           onClick={openTitleEditor}
                         >
                           {childTitle()}
@@ -444,7 +462,6 @@ function MessageTimelineView(
                         value={title.draft}
                         disabled={props.pending.rename()}
                         class="block text-[13px] font-[530] leading-4 tracking-[-0.04px] text-v2-text-text-base field-sizing-content rounded-[6px] px-1 py-1"
-                        classList={{ "max-w-[45%] shrink-0": !!parentID() }}
                         style={{
                           "--inline-input-shadow": "none",
                           "text-align": "start",
@@ -534,6 +551,7 @@ function MessageTimelineView(
                             <SessionSummaryPanel
                               shown={summaryOpen()}
                               project={project()}
+                              avatar={showProjectIcon() ? projectAvatar() : undefined}
                               directory={sessionDirectory()}
                               local={!workspaceSession()}
                               branch={data.location.vcs.info({ directory: sdk().directory })?.branch.current}

@@ -85,15 +85,6 @@ const toPlatformError = (
   })
 }
 
-export class KilledBySignal extends Error {
-  readonly signal: NodeJS.Signals
-
-  constructor(signal: NodeJS.Signals) {
-    super(`Process interrupted due to receipt of signal: '${signal}'`)
-    this.signal = signal
-  }
-}
-
 type ExitSignal = Deferred.Deferred<readonly [code: number | null, signal: NodeJS.Signals | null]>
 type Spawned = readonly [process: NodeChildProcess.ChildProcess, closed: ExitSignal, exited: ExitSignal]
 
@@ -480,8 +471,13 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
             }),
             exitCode: Effect.flatMap(completion, ([code, signal]) => {
               if (Predicate.isNotNull(code)) return Effect.succeed(ExitCode(code))
-              // Node reports a signal whenever the exit code is null.
-              return Effect.fail(toPlatformError("exitCode", new KilledBySignal(signal!), command))
+              return Effect.fail(
+                toPlatformError(
+                  "exitCode",
+                  new Error(`Process interrupted due to receipt of signal: '${signal}'`),
+                  command,
+                ),
+              )
             }),
             kill: (opts?: ChildProcess.KillOptions) => stop(command, proc, closed, stopOutput, opts),
             unref: Effect.sync(() => {

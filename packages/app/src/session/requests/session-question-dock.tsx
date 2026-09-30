@@ -3,7 +3,6 @@ import { createStore } from "solid-js/store"
 import { useMutation } from "@tanstack/solid-query"
 import { Button } from "@opencode/ui/button"
 import { IconButton } from "@opencode/ui/icon-button"
-import { Tooltip } from "@opencode/ui/tooltip"
 import { DockPrompt } from "@opencode/session-ui/dock-prompt"
 import { Icon } from "@opencode/ui/icon"
 import { useSpring } from "@opencode/ui/motion-spring"
@@ -14,10 +13,8 @@ import { makeEventListener } from "@solid-primitives/event-listener"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { useServerSDK } from "@/runtime/server/client"
 import { ScopedKey } from "@/runtime/server/scope"
-import { useCommand } from "@/shell/commands/command"
 
 const cache = new Map<string, { tab: number; answers: string[][]; custom: string[]; customOn: boolean[] }>()
-const IS_MAC = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(navigator.platform)
 
 type QuestionField = FormStringField | FormMultiselectField
 
@@ -73,7 +70,6 @@ function Option(props: {
 export const SessionQuestionDock: Component<{ request: FormInfo; onSubmit: () => void }> = (props) => {
   const serverSDK = useServerSDK()
   const language = useLanguage()
-  const command = useCommand()
   const cacheKey = ScopedKey.from(serverSDK.scope, props.request.id)
 
   const questions = createMemo(() =>
@@ -241,7 +237,7 @@ export const SessionQuestionDock: Component<{ request: FormInfo; onSubmit: () =>
 
   const replyMutation = useMutation(() => ({
     mutationFn: (answer: FormAnswer) =>
-      serverSDK.api.session.form.reply({ sessionID: props.request.sessionID, formID: props.request.id, answer }),
+      serverSDK.api.form.reply({ sessionID: props.request.sessionID, formID: props.request.id, answer }),
     onMutate: () => {
       props.onSubmit()
     },
@@ -253,7 +249,7 @@ export const SessionQuestionDock: Component<{ request: FormInfo; onSubmit: () =>
   }))
 
   const rejectMutation = useMutation(() => ({
-    mutationFn: () => serverSDK.api.session.form.cancel({ sessionID: props.request.sessionID, formID: props.request.id }),
+    mutationFn: () => serverSDK.api.form.cancel({ sessionID: props.request.sessionID, formID: props.request.id }),
     onMutate: () => {
       props.onSubmit()
     },
@@ -265,8 +261,6 @@ export const SessionQuestionDock: Component<{ request: FormInfo; onSubmit: () =>
   }))
 
   const sending = createMemo(() => replyMutation.isPending || rejectMutation.isPending)
-  const submitShortcut = () => (IS_MAC ? "⌘⏎" : `${language.t("common.key.ctrl")}+⏎`)
-  const backShortcut = () => (IS_MAC ? "⌘[" : `${language.t("common.key.alt")}+←`)
 
   const reply = (answer: FormAnswer) => {
     if (sending()) return
@@ -354,16 +348,6 @@ export const SessionQuestionDock: Component<{ request: FormInfo; onSubmit: () =>
     if (event.key === "Escape") {
       event.preventDefault()
       reject()
-      return
-    }
-
-    const previous = IS_MAC
-      ? event.metaKey && !event.ctrlKey && !event.altKey && event.key === "["
-      : event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft"
-    if (previous) {
-      if (event.repeat) return
-      event.preventDefault()
-      back()
       return
     }
 
@@ -477,19 +461,6 @@ export const SessionQuestionDock: Component<{ request: FormInfo; onSubmit: () =>
     if (!store.minimized) focus(pickFocus(tab))
   }
 
-  command.register("session.question.back", () => [
-    {
-      id: "session.question.back",
-      title: language.t("ui.common.back"),
-      keybind: IS_MAC ? "mod+[" : "alt+arrowleft",
-      hidden: true,
-      // Stay registered while sending so the shortcut does not fall through to history navigation.
-      disabled: store.tab <= 0,
-      when: () => store.tab > 0,
-      onSelect: back,
-    },
-  ])
-
   const minimize = () => {
     if (sending()) return
     setStore("editing", false)
@@ -547,25 +518,9 @@ export const SessionQuestionDock: Component<{ request: FormInfo; onSubmit: () =>
             </Button>
             <div data-slot="question-footer-actions">
               <Show when={store.tab > 0}>
-                <Tooltip
-                  placement="top"
-                  value={
-                    <>
-                      {language.t("ui.common.back")}
-                      <span class="opacity-60">{backShortcut()}</span>
-                    </>
-                  }
-                >
-                  <Button
-                    variant="neutral"
-                    size="large"
-                    disabled={sending()}
-                    onClick={back}
-                    aria-keyshortcuts={IS_MAC ? "Meta+[" : "Alt+ArrowLeft"}
-                  >
-                    {language.t("ui.common.back")}
-                  </Button>
-                </Tooltip>
+                <Button variant="neutral" size="large" disabled={sending()} onClick={back}>
+                  {language.t("ui.common.back")}
+                </Button>
               </Show>
               <Button
                 variant={last() ? "submit" : "neutral"}
@@ -575,9 +530,6 @@ export const SessionQuestionDock: Component<{ request: FormInfo; onSubmit: () =>
                 aria-keyshortcuts="Meta+Enter Control+Enter"
               >
                 {last() ? language.t("ui.common.submit") : language.t("ui.common.next")}
-                <span data-slot="question-submit-shortcut" aria-hidden="true" class="text-11-medium opacity-60">
-                  {submitShortcut()}
-                </span>
               </Button>
             </div>
           </>

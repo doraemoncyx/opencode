@@ -56,6 +56,7 @@ for (const viewport of [
         "Models",
         "Extensions",
         "Server",
+        "Experimental",
         "About",
       ]) {
         if (viewport.width >= 816) await settings.getByRole("tab", { name, exact: true }).click()

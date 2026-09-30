@@ -1,8 +1,7 @@
 import { Worktree } from "@opencode/schema/worktree"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { Project } from "@opencode/schema/project"
-import { ProjectNotFoundError } from "../errors.js"
+import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
 const root = "/api/worktree"
 
@@ -20,58 +19,66 @@ export class WorktreeError extends Schema.Error<WorktreeError>("WorktreeError")(
 export const WorktreeGroup = HttpApiGroup.make("server.worktree")
   .add(
     HttpApiEndpoint.get("worktree.list", root, {
-      query: Schema.Struct({ projectID: Project.ID }),
+      query: LocationQuery,
       success: Worktree.List,
-      error: ProjectNotFoundError,
-    }).annotateMerge(
-      OpenApi.annotations({
-        identifier: "worktree.list",
-        summary: "List worktrees",
-        description:
-          "Return the project's saved worktree inventory without loading configuration or running discovery.",
-      }),
-    ),
+      error: WorktreeError,
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "worktree.list",
+          summary: "List worktrees",
+          description:
+            "Discover worktrees through the requested location's strategies and return its project's inventory.",
+        }),
+      ),
   )
   .add(
     HttpApiEndpoint.post("worktree.create", root, {
+      query: LocationQuery,
       payload: Worktree.CreateInput,
       success: Worktree.Info,
-      error: [WorktreeError, ProjectNotFoundError],
-    }).annotateMerge(
-      OpenApi.annotations({
-        identifier: "worktree.create",
-        summary: "Create worktree",
-        description:
-          "Load the project's canonical configuration, create a local worktree using its selected strategy, then run the project's setup script.",
-      }),
-    ),
+      error: WorktreeError,
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "worktree.create",
+          summary: "Create worktree",
+          description:
+            "Create a local worktree using the location's registered strategy and directory defaults, then run the project's setup script.",
+        }),
+      ),
   )
   .add(
     HttpApiEndpoint.delete("worktree.remove", root, {
+      query: LocationQuery,
       payload: Worktree.RemoveInput,
       success: HttpApiSchema.NoContent,
-      error: [WorktreeError, ProjectNotFoundError],
-    }).annotateMerge(
-      OpenApi.annotations({
-        identifier: "worktree.remove",
-        summary: "Remove worktree",
-        description:
-          "Load the project's canonical configuration and remove a saved worktree using its recorded strategy.",
-      }),
-    ),
+      error: WorktreeError,
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "worktree.remove",
+          summary: "Remove worktree",
+          description: "Remove a managed worktree from the requested location's project using its recorded strategy.",
+        }),
+      ),
   )
   .add(
     HttpApiEndpoint.post("worktree.refresh", `${root}/refresh`, {
-      payload: Schema.Struct({ projectID: Project.ID }),
+      query: LocationQuery,
       success: HttpApiSchema.NoContent,
-      error: [WorktreeError, ProjectNotFoundError],
-    }).annotateMerge(
-      OpenApi.annotations({
-        identifier: "worktree.refresh",
-        summary: "Refresh worktrees",
-        description:
-          "Load the project's canonical configuration, discover worktrees across known checkout roots using all available strategies, and reconcile saved state.",
-      }),
-    ),
+      error: WorktreeError,
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "worktree.refresh",
+          summary: "Refresh worktrees",
+          description: "Discover worktrees from the requested location and reconcile the shared project inventory.",
+        }),
+      ),
   )
-  .annotateMerge(OpenApi.annotations({ title: "worktree", description: "Project-based worktree management routes." }))
+  .annotateMerge(OpenApi.annotations({ title: "worktree", description: "Location-scoped worktree management routes." }))
