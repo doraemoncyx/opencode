@@ -216,7 +216,7 @@ function resourceServer(
 function resourceMcpLayer(
   server: string | typeof ConfigMCP.Server.Type,
   onFormCreated?: (form: Form.Info) => Effect.Effect<void>,
-  options?: Mcp.Options,
+  options?: Mcp.LayerOptions,
   overrides?: {
     entries?: Config.Interface["entries"]
     subscribe?: Bus.Interface["subscribe"]
@@ -645,6 +645,41 @@ test("spawns local MCP servers through the location environment", async () => {
   expect(command.options.cwd).toBe(cwd)
   expect(command.options.extendEnv).toBe(true)
   expect(command.options.env).toEqual({ MCP_LOCATION_TEST: "configured" })
+})
+
+test("releases an idle MCP server and reconnects lazily on the next live use", async () => {
+  const spawns: Array<ChildProcess.Command> = []
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* Mcp.Service
+        yield* service.tools()
+        expect(spawns).toHaveLength(1)
+
+        // No live interaction past the idle window: the process is released while the cached
+        // catalogue stays available to the tool registry and context assembly.
+        yield* Effect.sleep("3000 millis")
+        expect((yield* service.prompts()).map((prompt) => prompt.name)).toEqual(["first", "second"])
+
+        // The next live use reconnects on demand instead of waiting for a Location reboot.
+        const result = yield* service.prompt({ server: "resources", name: "first", args: { topic: "Effect" } })
+        expect(result?.messages).toEqual([{ role: "user", content: { type: "text", text: "Effect" } }])
+        expect(spawns).toHaveLength(2)
+      }),
+    ).pipe(
+      Effect.provide(
+        resourceMcpLayer(
+          new ConfigMCP.Local({
+            type: "local",
+            command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-prompts.ts")],
+          }),
+          undefined,
+          { idleTimeout: "1 second", idleSweepInterval: "200 millis" },
+          { environment: recordingEnvironmentLayer(spawns) },
+        ),
+      ),
+    ),
+  )
 })
 
 test("reports a local MCP server as failed when the location has no execution plane", async () => {

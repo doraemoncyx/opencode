@@ -6,7 +6,22 @@ import { ephemeral } from "@opencode/schema/event"
 import type { Session } from "@opencode/schema/session"
 import { createHash } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
-import { Cause, Context, Effect, Exit, FiberSet, Latch, Layer, Schema, Scope, Semaphore, Stream, Types } from "effect"
+import {
+  Cause,
+  Clock,
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  FiberSet,
+  Latch,
+  Layer,
+  Schema,
+  Scope,
+  Semaphore,
+  Stream,
+  Types,
+} from "effect"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { Credential } from "../credential.js"
 import { Bus } from "../bus.js"
@@ -118,6 +133,15 @@ type ServerEntry = {
   client?: McpClient.Connection
   tools?: ReadonlyArray<Tool>
   prompts?: ReadonlyArray<Prompt>
+  /** Cached initialize instructions; retained across an idle release so context assembly stays stable. */
+  instructions?: string
+  /**
+   * True after an idle release: the process is gone but the cached catalogue stays registered, so the
+   * next live use reconnects instead of the whole Location rebooting.
+   */
+  idle?: boolean
+  /** Wall-clock millis of the last live interaction, used by the idle reaper. */
+  lastUsed?: number
   // Set when a remote server is registered as an OAuth integration; the credential lives in the global store.
   integrationID?: Integration.ID
   registration?: State.Registration
@@ -182,7 +206,18 @@ export const Options = Schema.Struct({
 })
 export type Options = typeof Options.Type
 
-export const layer = (options?: Options) =>
+/**
+ * Layer options add runtime tuning deliberately kept out of the wire/config contract: it only shapes how
+ * long a connected server process is retained, never what the server exposes to the model.
+ */
+export interface LayerOptions extends Options {
+  /** Release a connected server's process after this long without a live interaction. Defaults to 5 minutes. */
+  readonly idleTimeout?: Duration.Input
+  /** How often the idle reaper checks for releasable servers. Defaults to 1 minute. */
+  readonly idleSweepInterval?: Duration.Input
+}
+
+export const layer = (options?: LayerOptions) =>
   Layer.effect(
     Service,
     Effect.gen(function* () {
@@ -192,8 +227,11 @@ export const layer = (options?: Options) =>
       const forms = yield* Form.Service
       const integration = yield* Integration.Service
       const credentials = yield* Credential.Service
+      const clock = yield* Clock.Clock
       const root = yield* Effect.scope
       const fork = yield* FiberSet.makeRuntime<never, void, never>()
+      const idleTimeout = Duration.toMillis(options?.idleTimeout ?? "5 minutes")
+      const idleSweepInterval = options?.idleSweepInterval ?? "1 minute"
 
       // Materialized definitions and live connections are kept separate so operational additions
       // survive unrelated definition reloads.
@@ -574,16 +612,24 @@ export const layer = (options?: Options) =>
             Effect.exit,
           )
           if (Exit.isSuccess(result)) {
+            const tools = result.value.tools.map((def) => toTool(name, entry, def))
+            // A lazy reconnect normally rediscovers the same catalogue; only announce a real change so
+            // reconnecting after idle does not churn the tool registry.
+            const toolsChanged = !entry.tools || !isDeepStrictEqual(entry.tools, tools)
             entry.client = result.value.connection
-            entry.tools = result.value.tools.map((def) => toTool(name, entry, def))
-            entry.prompts = []
+            entry.tools = tools
+            // Retain any cached prompt list across a reconnect; `refreshPrompts` replaces it once the
+            // server answers, so `prompts()` never flashes empty on the reconnect path.
+            entry.instructions = result.value.connection.instructions
+            entry.idle = false
+            entry.lastUsed = clock.currentTimeMillisUnsafe()
             entry.status = { status: "connected" }
             watch(name, entry, result.value.connection)
             yield* Effect.logInfo("mcp connected", { server: name, tools: entry.tools.length })
             // Announce the new tool set so the tool registry registers it. A server that finishes connecting
             // after the initial registration sweep and emits no list-changed notification would otherwise
             // stay invisible to the model.
-            yield* bus.publish(McpEvent.ToolsChanged, { server: name })
+            if (toolsChanged) yield* bus.publish(McpEvent.ToolsChanged, { server: name })
             yield* bus.publish(McpEvent.ResourcesChanged, { server: name })
             yield* bus.publish(McpEvent.StatusChanged, { server: name })
             whenLive(name, entry, result.value.connection)(refreshPrompts(name, entry, result.value.connection))
@@ -591,6 +637,7 @@ export const layer = (options?: Options) =>
           }
           yield* Scope.close(scope, Exit.void)
           entry.scope = undefined
+          entry.idle = false
           const error = Cause.squash(result.cause)
           entry.status =
             error instanceof McpClient.NeedsAuthError
@@ -605,15 +652,44 @@ export const layer = (options?: Options) =>
 
       const stopServer = Effect.fnUntraced(function* (name: ServerName, entry: ServerEntry) {
         const scope = entry.scope
-        if (!scope) return
         entry.scope = undefined
         entry.client = undefined
         entry.tools = undefined
         entry.prompts = undefined
-        yield* Scope.close(scope, Exit.void)
+        entry.instructions = undefined
+        entry.idle = false
+        if (scope) yield* Scope.close(scope, Exit.void)
         yield* bus.publish(McpEvent.ToolsChanged, { server: name })
         yield* bus.publish(McpEvent.ResourcesChanged, { server: name })
         yield* bus.publish(PromptsChanged, { server: name })
+      })
+
+      // Idle reclaim: drop the process but keep the cached catalogue, so the tool registry and context
+      // assembly stay stable. The next live use reconnects through `ensureClient`.
+      const releaseServer = Effect.fnUntraced(function* (name: ServerName, entry: ServerEntry) {
+        const scope = entry.scope
+        if (!scope) return
+        // Clear the live client before closing so a late onClose callback from the old connection no-ops.
+        entry.scope = undefined
+        entry.client = undefined
+        entry.idle = true
+        yield* Scope.close(scope, Exit.void)
+        yield* Effect.logInfo("mcp server released after idle", { server: name })
+      })
+
+      // Reconnect a released server on demand. Callers must hold the server lock: this starts a process.
+      const ensureClient = Effect.fnUntraced(function* (name: ServerName, entry: ServerEntry) {
+        if (entry.client) return entry.client
+        if (!entry.idle) return undefined
+        yield* startServer(name, entry)
+        return entry.client
+      })
+
+      // Ensure a live client for one server and record the interaction so the idle reaper leaves it alone.
+      const acquireClient = Effect.fnUntraced(function* (name: ServerName, entry: ServerEntry) {
+        const client = yield* ensureClient(name, entry).pipe(locks.withLock(name))
+        if (client) entry.lastUsed = clock.currentTimeMillisUnsafe()
+        return client
       })
 
       const disposeServer = Effect.fnUntraced(function* (name: ServerName, entry: ServerEntry) {
@@ -754,6 +830,24 @@ export const layer = (options?: Options) =>
           discard: true,
         }),
       )
+
+      // Reclaim processes for servers that have gone idle, independent of Location activity: a Location
+      // stays hot while a client keeps referencing it, so eviction cannot bound the process count.
+      yield* Effect.gen(function* () {
+        yield* Effect.sleep(idleSweepInterval)
+        for (const [name, entry] of entries) {
+          if (!entry.client) continue
+          const now = clock.currentTimeMillisUnsafe()
+          if (now - (entry.lastUsed ?? now) < idleTimeout) continue
+          yield* Effect.suspend(() => {
+            // Re-check under the lock: a live call may have reconnected or touched the server since the scan.
+            const current = clock.currentTimeMillisUnsafe()
+            if (!entry.client || current - (entry.lastUsed ?? current) < idleTimeout) return Effect.void
+            return releaseServer(name, entry)
+          }).pipe(locks.withLock(name))
+        }
+      }).pipe(Effect.forever, Effect.forkScoped)
+
       return Service.of({
         transform: state.transform,
         reload: state.reload,
@@ -799,13 +893,14 @@ export const layer = (options?: Options) =>
         callTool: Effect.fn("MCP.callTool")(function* (input) {
           const target = yield* requireServer(input.server)
           yield* target.entry.startup.await
-          if (!target.entry.client)
+          const client = yield* acquireClient(target.name, target.entry)
+          if (!client)
             return yield* new ToolCallError({
               server: target.name,
               tool: input.name,
               message: "MCP server is not connected",
             })
-          const result = yield* target.entry.client
+          const result = yield* client
             .callTool({ name: input.name, args: input.args, sessionID: input.sessionID })
             .pipe(
               Effect.mapError(
@@ -824,7 +919,7 @@ export const layer = (options?: Options) =>
           yield* whenAllReady
           return Array.from(entries)
             .flatMap(([server, entry]) => {
-              const instructions = entry.client?.instructions
+              const instructions = entry.instructions
               if (!instructions) return []
               return [new ServerInstructions({ server, instructions })]
             })
@@ -838,8 +933,9 @@ export const layer = (options?: Options) =>
         prompt: Effect.fn("MCP.prompt")(function* (input) {
           const target = yield* requireServer(input.server)
           yield* target.entry.startup.await
-          if (!target.entry.client) return undefined
-          const result = yield* target.entry.client
+          const client = yield* acquireClient(target.name, target.entry)
+          if (!client) return undefined
+          const result = yield* client
             .prompt({ name: input.name, args: input.args })
             .pipe(Effect.orElseSucceed(() => undefined))
           if (!result) return undefined
@@ -855,21 +951,23 @@ export const layer = (options?: Options) =>
           yield* whenAllReady
           const catalogs = yield* Effect.forEach(
             Array.from(entries),
-            ([name, entry]) => {
-              if (!entry.client) return Effect.succeed({ resources: [], templates: [] })
-              return Effect.all(
-                {
-                  resources: entry.client.resources().pipe(Effect.orElseSucceed(() => [])),
-                  templates: entry.client.resourceTemplates().pipe(Effect.orElseSucceed(() => [])),
-                },
-                { concurrency: "unbounded" },
-              ).pipe(
-                Effect.map((catalog) => ({
-                  resources: catalog.resources.map((def) => toResource(name, def)),
-                  templates: catalog.templates.map((def) => toResourceTemplate(name, def)),
-                })),
-              )
-            },
+            ([name, entry]) =>
+              Effect.gen(function* () {
+                const client = yield* acquireClient(name, entry)
+                if (!client) return { resources: [], templates: [] }
+                return yield* Effect.all(
+                  {
+                    resources: client.resources().pipe(Effect.orElseSucceed(() => [])),
+                    templates: client.resourceTemplates().pipe(Effect.orElseSucceed(() => [])),
+                  },
+                  { concurrency: "unbounded" },
+                ).pipe(
+                  Effect.map((catalog) => ({
+                    resources: catalog.resources.map((def) => toResource(name, def)),
+                    templates: catalog.templates.map((def) => toResourceTemplate(name, def)),
+                  })),
+                )
+              }),
             { concurrency: "unbounded" },
           )
           return ResourceCatalog.make({
@@ -892,10 +990,9 @@ export const layer = (options?: Options) =>
         readResource: Effect.fn("MCP.readResource")(function* (input) {
           const target = yield* requireServer(input.server)
           yield* target.entry.startup.await
-          if (!target.entry.client) return undefined
-          const result = yield* target.entry.client
-            .readResource({ uri: input.uri })
-            .pipe(Effect.orElseSucceed(() => undefined))
+          const client = yield* acquireClient(target.name, target.entry)
+          if (!client) return undefined
+          const result = yield* client.readResource({ uri: input.uri }).pipe(Effect.orElseSucceed(() => undefined))
           if (!result) return undefined
           return ResourceContent.make({
             server: target.name,
@@ -907,7 +1004,7 @@ export const layer = (options?: Options) =>
     }),
   )
 
-export function configured(options?: Options) {
+export function configured(options?: LayerOptions) {
   return makeLocationNode({
     service: Service,
     layer: layer(options),
