@@ -1,6 +1,5 @@
 import type { SessionMessageInfo, SessionMessageUser } from "@opencode/client/promise"
 import { projectedPromptInput } from "../prompt/codec"
-import { requestOptions } from "./catalog.shared"
 import { promptCopy, promptSame } from "./prompt.shared"
 import type { RunInput, RunPrompt } from "./types"
 
@@ -94,6 +93,10 @@ export async function resolveCurrentSession(
       variant: session.model.variant,
     }),
   }
+}
+
+function requestOptions(signal?: AbortSignal): [] | [{ signal: AbortSignal }] {
+  return signal ? [{ signal }] : []
 }
 
 export function sessionHistory(session: RunSession, limit = LIMIT): RunPrompt[] {

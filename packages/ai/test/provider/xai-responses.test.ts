@@ -56,9 +56,7 @@ describe("xAI Responses route", () => {
       expect(XAIResponses.protocol.body).not.toBe(OpenAIResponses.protocol.body)
 
       const prepared = yield* compileRequest(LLM.request({ model, prompt: "Hello" }))
-      expect(prepared.route).toBe("xai-responses")
       expect(prepared.protocol).toBe("xai-responses")
-      expect(prepared.model.route.providerMetadataKey).toBe("xai")
       expect(prepared.body.store).toBe(false)
       expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
     }),
@@ -195,7 +193,7 @@ describe("xAI Responses route", () => {
       expect(prepared.body.input).toEqual([
         items[0],
         items[1],
-        { type: "message", role: "user", content: [{ type: "input_text", text: JSON.stringify(items[2]) }] },
+        { role: "user", content: [{ type: "input_text", text: JSON.stringify(items[2]) }] },
       ])
     }),
   )
@@ -254,7 +252,7 @@ describe("xAI Responses route", () => {
         store: true,
         include: ["reasoning.encrypted_content"],
         previous_response_id: "resp_1",
-        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Second" }] }],
+        input: [{ role: "user", content: [{ type: "input_text", text: "Second" }] }],
       })
 
       // The connection cache only serves stored responses, so the default store: false never chains.
@@ -264,8 +262,8 @@ describe("xAI Responses route", () => {
         instructions: "You are terse.",
         store: false,
         input: [
-          { type: "message", role: "user", content: [{ type: "input_text", text: "First" }] },
-          { type: "message", role: "user", content: [{ type: "input_text", text: "Second" }] },
+          { role: "user", content: [{ type: "input_text", text: "First" }] },
+          { role: "user", content: [{ type: "input_text", text: "Second" }] },
         ],
       })
       expect(JSON.parse(unstored.message).previous_response_id).toBeUndefined()
@@ -300,14 +298,3 @@ describe("xAI Responses route", () => {
     }),
   )
 })
-
-it.effect("names the xAI Chat route separately from its OpenAI Chat protocol", () =>
-  Effect.gen(function* () {
-    const prepared = yield* compileRequest(
-      LLM.request({ model: XAI.configure({ apiKey: "test" }).chat("grok-4.6"), prompt: "Hello" }),
-    )
-    expect(prepared.route).toBe("xai-chat")
-    expect(prepared.protocol).toBe("openai-chat")
-    expect(prepared.model.route.providerMetadataKey).toBe("xai")
-  }),
-)

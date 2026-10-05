@@ -1,115 +1,94 @@
-import { createEffect, createMemo, type Accessor } from "solid-js"
+import { createEffect, createMemo } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { useLayout } from "@/shell/state/layout"
 import { useSettings } from "@/settings/model"
-import { createSizing } from "./helpers"
+import { createSizing, shouldShowFileTree } from "./helpers"
 import type { SessionModel } from "./model"
+import { sessionPanelLayout } from "./session-panel-layout"
 import { clampSessionPanelWidth, sessionPanelWidthMax } from "./session-panel-width"
 
-/** wide asks for the wider session minimum; sidebar is whether any extension fills the side panel sidebar. */
-export function createSessionScreenLayout(
-  session: SessionModel,
-  input: { wide: Accessor<boolean>; sidebar: Accessor<boolean> },
-) {
+export function createSessionScreenLayout(session: SessionModel) {
   const layout = useLayout()
   const settings = useSettings()
   const size = createSizing()
   const view = session.layout.view
-  const tabsOpen = createMemo(() => session.isDesktop() && view().side.opened() && !!session.identity.params.id)
-  const dockOpen = createMemo(() => view().dock.opened())
-  const dockSide = createMemo(() => session.isDesktop() && settings.general.terminalPlacement() === "side")
-  const dockBottom = createMemo(() => session.isDesktop() && settings.general.terminalPlacement() === "bottom")
-  const dockSideOpen = createMemo(() => dockOpen() && dockSide())
-
+  const reviewOpen = createMemo(() => session.isDesktop() && session.layout.view().reviewPanel.opened())
+  const reviewPanelOpen = createMemo(() => reviewOpen() && !!session.identity.params.id)
+  const terminalOpen = createMemo(() => session.layout.view().terminal.opened())
+  const sideTerminal = createMemo(() => session.isDesktop() && settings.general.terminalPlacement() === "side")
+  const bottomTerminal = createMemo(() => session.isDesktop() && settings.general.terminalPlacement() === "bottom")
+  const sideTerminalOpen = createMemo(() => terminalOpen() && sideTerminal())
   const fileTreeOpen = createMemo(
-    () => session.isDesktop() && input.sidebar() && settings.visibility.fileTree() && layout.fileTree.opened(),
+    () =>
+      session.isDesktop() &&
+      shouldShowFileTree({
+        visible: settings.visibility.fileTree(),
+        opened: layout.fileTree.opened(),
+      }),
   )
-
-  const resizable = createMemo(() => tabsOpen() || dockSideOpen())
-  const besideOpen = createMemo(() => resizable() || fileTreeOpen())
+  const resizable = createMemo(() => reviewPanelOpen() || sideTerminalOpen())
+  const sidePanelOpen = createMemo(() => resizable() || fileTreeOpen())
   const [rowSize, setRowSize] = createStore<{ width?: number; height?: number }>({})
   let row: HTMLDivElement | undefined
   createResizeObserver(
     () => row,
     ({ width, height }) => setRowSize({ width, height }),
   )
-
   const available = createMemo<number | undefined>(() => {
     const width = rowSize.width
-
     if (width === undefined) return undefined
-
     return width - 8
   })
-
-  const splitSide = createMemo(() => tabsOpen() && input.wide())
-
+  const splitReview = createMemo(() => reviewPanelOpen() && layout.review.diffStyle() === "split")
   const resizedWidth = createMemo(() =>
     clampSessionPanelWidth({
-      width: view().session.width(),
+      width: view().reviewPanel.width(),
       available: available(),
-      split: splitSide(),
+      split: splitReview(),
     }),
   )
-
   const panelWidth = createMemo(() => {
-    if (!besideOpen()) return "100%"
-
+    if (!sidePanelOpen()) return "100%"
     if (resizable()) return `${resizedWidth()}px`
-
     return `calc(100% - ${layout.fileTree.width()}px)`
   })
-
   const panelMax = createMemo(() => {
     const width = available()
-
     if (width === undefined) return 1000
-
-    return sessionPanelWidthMax({ available: width, split: splitSide() })
+    return sessionPanelWidthMax({ available: width, split: splitReview() })
   })
-
-  const panelLayout = createMemo(() => ({
-    visible: tabsOpen() || dockSideOpen() || fileTreeOpen(),
-    stacked: tabsOpen() && dockSideOpen(),
-  }))
-
+  const panelLayout = createMemo(() =>
+    sessionPanelLayout({
+      review: reviewPanelOpen(),
+      terminal: sideTerminalOpen(),
+      files: fileTreeOpen(),
+    }),
+  )
   const [motion, setMotion] = createStore({ gap: panelLayout().stacked, closing: false })
   createEffect((previous) => {
     const stacked = panelLayout().stacked
-
     if (previous !== stacked) setMotion({ gap: stacked, closing: !stacked })
-
     return stacked
   }, panelLayout().stacked)
-  const sideRegionOpen = createMemo(() => tabsOpen() || fileTreeOpen())
-
-  const dockRegion = createMemo(() =>
-    Math.min(view().dock.height(), typeof window === "undefined" ? 600 : window.innerHeight * 0.6),
+  const sideRegionOpen = createMemo(() => reviewPanelOpen() || fileTreeOpen())
+  const terminalPane = createMemo(() =>
+    Math.min(view().terminal.height(), typeof window === "undefined" ? 600 : window.innerHeight * 0.6),
   )
-
-  const dockRegionHeight = createMemo(() => `${dockRegion()}px`)
+  const terminalPaneHeight = createMemo(() => `${terminalPane()}px`)
   const sideHeight = createMemo(() => rowSize.height)
   const fullSideHeight = createMemo(() => (sideHeight() === undefined ? "100%" : `${sideHeight()}px`))
-
-  const stackedRegionHeight = createMemo(() => {
+  const stackedReviewHeight = createMemo(() => {
     const height = sideHeight()
-
-    if (height === undefined) return `calc(100% - ${dockRegionHeight()} - 8px)`
-
-    return `${Math.max(0, height - dockRegion() - 8)}px`
+    if (height === undefined) return `calc(100% - ${terminalPaneHeight()} - 8px)`
+    return `${Math.max(0, height - terminalPane() - 8)}px`
   })
-
   const sideContentWidth = createMemo<string>((previous) => {
     const width = available()
-
     if (resizable() && width !== undefined) return `${Math.max(0, width - resizedWidth())}px`
-
     if (fileTreeOpen()) return `${layout.fileTree.width()}px`
-
     return previous
   }, "100%")
-
   return {
     centered: createMemo(() => session.isDesktop()),
     files: { open: fileTreeOpen },
@@ -122,6 +101,10 @@ export function createSessionScreenLayout(
       resizedWidth,
       width: panelWidth,
     },
+    review: {
+      open: reviewOpen,
+      panelOpen: reviewPanelOpen,
+    },
     side: {
       contentWidth: sideContentWidth,
       gap: {
@@ -132,30 +115,25 @@ export function createSessionScreenLayout(
       region: {
         height: createMemo(() => {
           if (!sideRegionOpen()) return "0px"
-
-          if (dockSideOpen()) return stackedRegionHeight()
-
+          if (sideTerminalOpen()) return stackedReviewHeight()
           return fullSideHeight()
         }),
         open: sideRegionOpen,
       },
-      tabs: { open: tabsOpen },
-      dock: {
-        contentHeight: createMemo(() => (sideRegionOpen() ? dockRegionHeight() : fullSideHeight())),
+      terminal: {
+        contentHeight: createMemo(() => (sideRegionOpen() ? terminalPaneHeight() : fullSideHeight())),
         height: createMemo(() => {
-          if (!dockSideOpen()) return "0px"
-
-          if (sideRegionOpen()) return dockRegionHeight()
-
+          if (!sideTerminalOpen()) return "0px"
+          if (sideRegionOpen()) return terminalPaneHeight()
           return fullSideHeight()
         }),
       },
     },
     size,
-    dock: {
-      bottom: dockBottom,
-      open: dockOpen,
-      side: dockSide,
+    terminal: {
+      bottom: bottomTerminal,
+      open: terminalOpen,
+      side: sideTerminal,
     },
   }
 }

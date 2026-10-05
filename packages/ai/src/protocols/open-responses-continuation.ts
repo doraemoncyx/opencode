@@ -108,7 +108,7 @@ const incremental = (
   return input.slice(baseline.length)
 }
 
-const code = (event: OpenResponses.Event) => OpenResponses.errorDetail(event).code
+const code = (event: OpenResponses.Event) => event.code || event.error?.code || event.response?.error?.code || undefined
 
 const rejected = (
   observation: Extract<ChannelObservation, { readonly type: "provider-failure" }>,

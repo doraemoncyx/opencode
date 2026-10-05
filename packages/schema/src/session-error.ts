@@ -8,5 +8,6 @@ export const Error = Schema.Struct({
   type: Schema.String,
   message: Schema.String,
   status: Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 599 })).pipe(optional),
-  response: Schema.Struct({ body: Schema.String }).pipe(optional),
+  /** Bounded provider response or triggering stream frame, for diagnostics. */
+  body: Schema.String.pipe(optional),
 }).annotate({ identifier: "Session.StructuredError" })

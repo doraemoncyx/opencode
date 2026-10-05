@@ -12,7 +12,7 @@ export default OpenCodeDriver.use(
     keepArtifacts: true,
     tui: { recording: true, keypressOverlay: true, viewport: { cols: 90, rows: 30 } },
     config: { autoupdate: false, username: "Demo" },
-    tuiConfig: { theme: { name: "opencode", mode: "dark" }, animations: false, tabs: { mode: "off" } },
+    tuiConfig: { theme: { name: "opencode", mode: "dark" }, animations: false, tabs: { enabled: false } },
     project: {
       git: true,
       files: {

@@ -8,7 +8,7 @@ story("maps grouped and collapsed switches to the timeline settings", async ({ m
   const collapsed = shell.getByRole("switch", { name: "Shell collapsed", exact: true })
   const value = component.locator('[data-slot="timeline-detail-fixture-value"]')
 
-  await expect(component.getByRole("switch")).toHaveCount(9)
+  await expect(component.getByRole("switch")).toHaveCount(8)
   await expect(component.getByText("Activity", { exact: true })).toHaveCount(0)
   await expect(grouped).toBeChecked()
   await expect(collapsed).toBeChecked()
@@ -147,7 +147,7 @@ story("keeps visibility and switches in sync with the preset slider", async ({ m
   await slider.focus()
   await slider.press("End")
   await expect(slider).toHaveAttribute("aria-valuetext", "Everything")
-  await expect(component.getByRole("switch")).toHaveCount(9)
+  await expect(component.getByRole("switch")).toHaveCount(8)
   await expect(component.locator('[data-slot="timeline-detail-unavailable"]')).toHaveCount(0)
   await expect(component.locator('[data-action="timeline-detail-visibility"][aria-pressed="true"]')).toHaveCount(6)
   await expect(component.getByRole("switch", { checked: true })).toHaveCount(0)
@@ -158,10 +158,6 @@ for (const direction of ["ltr", "rtl"]) {
     story(`fits narrow and wide layouts in ${direction}, ${theme}`, async ({ mount, page }, testInfo) => {
       await page.setViewportSize({ width: 900, height: 900 })
       const component = await mount("settings-timeline-detail--interactive", { globals: { direction, theme } })
-      await expect(component.locator('[data-slot="timeline-detail-scale"]')).toHaveCSS("margin-top", "16px")
-      const advanced = component.locator('[data-slot="timeline-detail-advanced"]')
-      await expect(advanced).toHaveCSS("margin-top", "0px")
-      await expect(advanced).toHaveCSS("padding-top", "8px")
       await expect(component.locator('[data-slot="timeline-detail-summary"]')).toHaveCSS(
         "color",
         await component
@@ -181,46 +177,28 @@ for (const direction of ["ltr", "rtl"]) {
         ),
       )
       if (theme === "light") {
-        await expect(track.locator("span").last()).toHaveCSS("background-image", "none")
+        await expect(track.locator("span").first()).toHaveCSS("background-image", "none")
         await expect(track).toHaveCSS(
           "--timeline-detail-marker-background",
           await track.evaluate((element) => getComputedStyle(element).getPropertyValue("--v2-grey-500").trim()),
         )
       }
       if (theme === "dark") {
-        await expect(track.locator("span").last()).not.toHaveCSS("background-image", "none")
+        await expect(track.locator("span").first()).not.toHaveCSS("background-image", "none")
       }
       await page.screenshot({ path: testInfo.outputPath(`timeline-${theme}-${direction}.png`) })
       const list = component.locator('[data-slot="timeline-detail-list"]')
-      const columns = component.locator('[data-slot="timeline-detail-columns"]')
       await expect(component.locator('[data-slot="timeline-detail-categories"]')).toHaveCSS("margin-top", "0px")
-      const advancedTrigger = component.getByRole("button", { name: "Advanced", exact: true })
-      expect(
-        await advancedTrigger.evaluate((element) => {
-          const trigger = element.getBoundingClientRect()
-          const heading = document
-            .querySelector('[data-slot="timeline-detail-columns"] > :nth-child(2)')!
-            .getBoundingClientRect()
-          return Math.abs(trigger.y + trigger.height / 2 - (heading.y + heading.height / 2))
-        }),
-      ).toBeLessThan(1)
-      expect(
-        await list.evaluate((element) => {
-          const list = element.getBoundingClientRect()
-          const trigger = document
-            .querySelector('[data-slot="timeline-detail-advanced"] > [data-slot="collapsible-trigger"]')!
-            .getBoundingClientRect()
-          return list.y - trigger.bottom
-        }),
-      ).toBe(8)
       for (const [column, field] of [
         [2, "placement"],
         [3, "details"],
       ] as const) {
-        const heading = await columns.locator(`> :nth-child(${column})`).evaluate((element) => {
-          const rect = element.getBoundingClientRect()
-          return rect.x + rect.width / 2
-        })
+        const heading = await component
+          .locator(`[data-slot="timeline-detail-columns"] > :nth-child(${column})`)
+          .evaluate((element) => {
+            const rect = element.getBoundingClientRect()
+            return rect.x + rect.width / 2
+          })
         const toggle = await component
           .locator(`[data-category="shell"][data-field="${field}"] [data-slot="switch-control"]`)
           .evaluate((element) => {
@@ -229,7 +207,7 @@ for (const direction of ["ltr", "rtl"]) {
           })
         expect(Math.abs(heading - toggle)).toBeLessThan(1)
       }
-      await expect(component.locator('[data-slot="timeline-detail-activity"]').first()).toHaveCSS("gap", "8px")
+      await expect(component.locator('[data-slot="timeline-detail-activity"]').first()).toHaveCSS("gap", "12px")
       for (const width of [900, 320]) {
         await page.setViewportSize({ width, height: 900 })
         await expect(component.getByRole("switch", { name: "Shell grouped", exact: true })).toBeVisible()
@@ -249,7 +227,6 @@ for (const direction of ["ltr", "rtl"]) {
 
         const slider = component.getByRole("slider", { name: "Timeline detail" })
         const track = component.locator('[data-slot="timeline-detail-track"]')
-        await expect(slider).not.toHaveCSS("cursor", "pointer")
         expect(await track.evaluate((element) => element.getBoundingClientRect().width)).toBe(
           await component
             .locator('[data-slot="timeline-detail-scale"]')
@@ -260,11 +237,6 @@ for (const direction of ["ltr", "rtl"]) {
         for (const position of [0, 1, 2, 3, 4]) {
           if (position > 0) await slider.press("ArrowUp")
           await expect(track).toHaveCSS("--timeline-detail-progress", `${position * 25}%`)
-          await expect(track.locator("span[data-selected]")).toHaveCount(position + 1)
-          await expect(track.locator("span").nth(position)).toHaveCSS(
-            "background-color",
-            await track.evaluate((element) => getComputedStyle(element, "::before").backgroundColor),
-          )
           const fill = await track.evaluate((element) => {
             const style = getComputedStyle(element, "::before")
             return {

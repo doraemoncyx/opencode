@@ -17,7 +17,7 @@ import {
   userMessage,
   waitForVisualSettle,
   type TimelineMessage,
-} from "../../utils/timeline"
+} from "./fixture"
 
 test.describe("timeline adverse visual stability", () => {
   test("does not pull a scrolled-away user while an active shell grows", async ({ page }, testInfo) => {

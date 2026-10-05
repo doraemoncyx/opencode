@@ -1,5 +1,5 @@
 import { expect, type Page } from "@playwright/test"
-import { NO_PROVIDER, project, sessionHref } from "./app"
+import { base64Encode } from "@opencode/util/encode"
 import { mockOpenCodeServer } from "./mock-server"
 import { APP_READY_TIMEOUT } from "./waits"
 
@@ -11,7 +11,6 @@ export const paletteSession = {
   time: { created: 1700000000000, updated: 1700000000000 },
 }
 
-// Production builds strip DEV-only warnings (such as duplicate command IDs), so CI cannot observe them here.
 export function captureConsoleWarnings(page: Page) {
   const warnings: string[] = []
   page.on("console", (message) => {
@@ -24,15 +23,23 @@ export function captureConsoleWarnings(page: Page) {
 }
 
 export async function openCommandPalette(page: Page, home = false) {
-  const mock = await mockOpenCodeServer(page, {
+  await mockOpenCodeServer(page, {
     directory: paletteSession.directory,
-    project: project({ id: paletteSession.projectID, directory: paletteSession.directory, name: "command-palette" }),
-    provider: NO_PROVIDER,
+    project: {
+      id: paletteSession.projectID,
+      worktree: paletteSession.directory,
+      vcs: "git",
+      name: "command-palette",
+      time: paletteSession.time,
+      sandboxes: [],
+    },
+    provider: { all: [], connected: [], default: {} },
     sessions: [paletteSession],
     pageMessages: () => ({ items: [] }),
     findFiles: () => [],
   })
-  await page.goto(home ? "/" : sessionHref(paletteSession.id))
+  const server = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
+  await page.goto(home ? "/" : `/server/${base64Encode(server)}/session/${paletteSession.id}`)
   if (home) {
     await expect(
       page.getByRole("region", { name: "Recent sessions" }).getByRole("button", { name: /Palette fixture session/ }),
@@ -46,5 +53,5 @@ export async function openCommandPalette(page: Page, home = false) {
   const input = dialog.getByRole("textbox")
   await expect(input).toBeFocused()
   await expect(dialog.getByRole("option")).not.toHaveCount(0)
-  return { dialog, input, push: mock.push }
+  return { dialog, input }
 }

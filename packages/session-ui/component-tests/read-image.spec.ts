@@ -1,6 +1,7 @@
-import { expect, sourceURL, story } from "../../storybook/playwright/story"
+import { fileURLToPath } from "node:url"
+import { expect, story } from "../../storybook/playwright/story"
 
-const fixture = sourceURL(new URL("./read-image.fixture.tsx", import.meta.url))
+const fixture = `/@fs/${fileURLToPath(new URL("./read-image.fixture.tsx", import.meta.url)).replaceAll("\\", "/")}`
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4ioAAAAASUVORK5CYII=",
   "base64",
@@ -32,7 +33,7 @@ for (const grouped of [true, false]) {
       )
       const root = page.getByTestId("read-image-fixture")
       const trigger = root.getByRole("button", { name: "Read chart%20 one.PNG", exact: true })
-      const image = root.getByRole("button", { name: "chart%20 one.PNG", exact: true })
+      const image = root.getByRole("img", { name: "chart%20 one.PNG", exact: true })
       await expect(trigger).toHaveAttribute("aria-expanded", "false")
       await trigger.click()
       await expect(trigger).toHaveAttribute("aria-expanded", "false")
@@ -114,7 +115,7 @@ for (const width of [840, 390]) {
       )
       const root = page.getByTestId("read-image-fixture")
       await root.getByRole("button", { name: "Read chart.svg", exact: true }).click()
-      const image = root.getByRole("button", { name: "chart.svg", exact: true })
+      const image = root.getByRole("img", { name: "chart.svg", exact: true })
       await expect(image).toHaveJSProperty("naturalWidth", 1200)
       await expect(image).toHaveAttribute("src", /^data:image\/svg\+xml;/)
       expect(
@@ -139,7 +140,7 @@ story("keeps an unavailable image read collapsible", async ({ page }) => {
   const response = page.waitForResponse("**/api/fs/read/**")
   await trigger.click()
   expect((await response).status()).toBe(404)
-  await expect(root.getByRole("button", { name: "missing.png", exact: true })).not.toHaveAttribute("src")
+  await expect(root.getByRole("img", { name: "missing.png", exact: true })).not.toHaveAttribute("src")
   await trigger.click()
   await expect(trigger).toHaveAttribute("aria-expanded", "false")
 })

@@ -10,31 +10,27 @@ export const handler = Effect.fn("cli.web-ui.handler")(function* (options?: { re
     ? Effect.succeed(options.assets)
     : yield* Effect.cached(load().pipe(Effect.provideService(FileSystem.FileSystem, fileSystem)))
   return <E, R>(api: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
-    Effect.gen(function* () {
-      const request = yield* HttpServerRequest.HttpServerRequest
-      const url = new URL(request.url, "http://localhost")
-      // Serve the web shell before API authentication so a signed-out browser gets the app's sign-in screen.
-      if (
-        url.pathname === "/api" ||
-        url.pathname.startsWith("/api/") ||
-        url.pathname.startsWith("/auth/") ||
-        url.pathname === "/openapi.json"
-      )
-        return yield* api.pipe(
-          Effect.catchIf(isRouteNotFound, () => Effect.succeed(HttpServerResponse.empty({ status: 404 }))),
-        )
-      return yield* assets.pipe(Effect.flatMap((files) => serveUI(request, url, files)))
-    })
+    api.pipe(
+      Effect.catchIf(isRouteNotFound, () =>
+        HttpServerRequest.HttpServerRequest.pipe(
+          Effect.flatMap((request) => {
+            const url = new URL(request.url, "http://localhost")
+            if (url.pathname === "/api" || url.pathname.startsWith("/api/"))
+              return Effect.succeed(HttpServerResponse.empty({ status: 404 }))
+            return assets.pipe(Effect.flatMap((files) => serveUI(request, url, files)))
+          }),
+        ),
+      ),
+    )
 })
 
 function serveUI(request: HttpServerRequest.HttpServerRequest, url: URL, assets: AssetMap) {
   const key = url.pathname.replace(/^\//, "")
-  const requested = assets[key]
-  if ((key.startsWith("_assets/") || key.startsWith("icons/")) && requested === undefined)
+  if ((key.startsWith("_assets/") || key.startsWith("icons/")) && assets[key] === undefined)
     return Effect.succeed(HttpServerResponse.empty({ status: 404, headers: { "cache-control": "no-store" } }))
-  const name = requested !== undefined ? key : "index.html"
-  const file = requested ?? assets["index.html"]
-  if (file === undefined) return Effect.succeed(HttpServerResponse.empty({ status: 404 }))
+  const name = assets[key] !== undefined ? key : "index.html"
+  const file = assets[name]
+  if (!file) return Effect.succeed(HttpServerResponse.empty({ status: 404 }))
   if (request.method !== "GET" && request.method !== "HEAD")
     return Effect.succeed(HttpServerResponse.empty({ status: 405 }))
   const html = name === "index.html"
@@ -58,10 +54,8 @@ function isRouteNotFound(error: unknown) {
   return error instanceof HttpServerError.HttpServerError && error.reason._tag === "RouteNotFound"
 }
 
-// qr-scanner decodes in a worker it creates from a blob: URL whenever the browser has no BarcodeDetector (Safari, desktop
-// Chrome on Windows and Linux). Without worker-src that worker falls under script-src 'self' and never starts.
 function csp(hash = "") {
-  return `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:; worker-src 'self' blob:`
+  return `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:`
 }
 
 function cspForHtml(body: string) {

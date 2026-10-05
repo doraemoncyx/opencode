@@ -15,7 +15,7 @@ import {
   textPart,
   userMessage,
   waitForVisualSettle,
-} from "../../utils/timeline"
+} from "./fixture"
 
 // Fractional scaling exercises different browser rounding than the baseline.
 for (const deviceScaleFactor of [1, 1.25]) {

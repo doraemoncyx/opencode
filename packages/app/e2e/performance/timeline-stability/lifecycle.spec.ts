@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test"
 import {
   defineVisualRegions,
+  mapVisualRegions,
   reportVisualStability,
   startVisualProbe,
   stopVisualProbe,
@@ -20,7 +21,7 @@ import {
   textPart,
   userMessage,
   waitForVisualSettle,
-} from "../../utils/timeline"
+} from "./fixture"
 
 test.describe("timeline visual lifecycle stability", () => {
   test("streams empty, short, and long parallel shells to staggered completion", async ({ page }, testInfo) => {

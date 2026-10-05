@@ -4,7 +4,6 @@ import type { ServerSDK } from "@/runtime/server/client"
 import type { ServerConnection } from "@/runtime/server/registry"
 import { useServerCtx, type ServerCtx } from "@/runtime/server/runtime"
 import { normalizeProjectInfo } from "@/runtime/server/global-sync/utils"
-import { worktreeInventoryViewKey } from "@/workspaces/inventory"
 
 function workspaceProjectsQuery(sdk: ServerSDK) {
   return queryOptions({
@@ -14,24 +13,18 @@ function workspaceProjectsQuery(sdk: ServerSDK) {
   })
 }
 
-export function workspaceInventoryQuery(
-  context: ServerCtx,
-  client: QueryClient,
-  projectID?: string,
-  shouldRefresh = projectID !== undefined,
-) {
+export function workspaceInventoryQuery(context: ServerCtx, client: QueryClient, projectID?: string) {
   return queryOptions({
-    queryKey: worktreeInventoryViewKey(context.sdk.scope, projectID),
+    queryKey: [context.sdk.scope, "settings-workspace-inventory", projectID ?? null],
     queryFn: async () =>
       Promise.all(
         (await client.fetchQuery(workspaceProjectsQuery(context.sdk)))
           .filter((project) => projectID === undefined || project.id === projectID)
           .map(async (project) => {
-            const worktrees = (await context.sync.worktrees.list(project.id)) ?? [
+            const worktrees = (await context.sync.worktrees.load(project.canonical)) ?? [
               { directory: project.canonical },
               ...project.sandboxes.map((directory) => ({ directory })),
             ]
-            if (shouldRefresh) void context.sync.worktrees.refresh(project.id)
             return normalizeProjectInfo({ ...project, worktrees })
           }),
       ),
@@ -50,7 +43,7 @@ export function useWorkspacesPrefetch(
     if (!current || current.sdk.connection.status() !== "connected") return
     const project = projectID?.()
     if (project) {
-      void client.prefetchQuery(workspaceInventoryQuery(current, client, project, false))
+      void client.prefetchQuery(workspaceInventoryQuery(current, client, project))
       return
     }
     // Server-level hover warms metadata without booting every project's Location.

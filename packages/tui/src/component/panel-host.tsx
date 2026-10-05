@@ -2,7 +2,7 @@ import type { BoxRenderable } from "@opentui/core"
 import { onCleanup, onMount } from "solid-js"
 import { usePanel, type PanelTarget } from "../context/panel"
 import { InteractivityProvider } from "../context/interactivity"
-import { useTheme } from "../context/theme"
+import { ThemeContextProvider, useTheme } from "../context/theme"
 import { Slot } from "../plugin/render"
 
 export function PanelHost(props: {
@@ -19,9 +19,6 @@ export function PanelHost(props: {
 
   const Content = () => {
     const theme = useTheme()
-    // Side panels sit on a raised surface; fullscreen takes over the base background.
-    const background = () =>
-      panels.presentation() === "panel" ? theme.background.raised.base : theme.background.base
     return (
       <box
         id="session-panel"
@@ -30,7 +27,7 @@ export function PanelHost(props: {
         minWidth={0}
         minHeight={0}
         focusable
-        backgroundColor={background()}
+        backgroundColor={theme.background.default}
         onMouseDown={props.onFocus}
       >
         <Slot
@@ -58,7 +55,9 @@ export function PanelHost(props: {
 
   return (
     <InteractivityProvider enabled={props.focused}>
-      <Content />
+      <ThemeContextProvider context={panels.presentation() === "panel" ? "elevated" : undefined}>
+        <Content />
+      </ThemeContextProvider>
     </InteractivityProvider>
   )
 }

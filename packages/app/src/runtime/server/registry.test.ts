@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { canRemoveServer, createServerProjects, resolveServerList, ServerConnection } from "./registry"
 import { Schema } from "effect"
 import { serverState } from "./persistence"
@@ -16,35 +16,56 @@ function serverSchema() {
   })
 }
 
-test("startup auth_token credentials override a persisted same-url server; without one the persisted password stays", () => {
-  const url = "https://server.example.test"
-  const decode = Schema.decodeUnknownSync(serverSchema())
-  const override = resolveServerList({
-    stored: decode({ list: [{ url }] }).list,
-    props: [{ type: "http", authToken: true, http: { url, password: "secret" } }],
-  })
-  expect(override).toEqual([{ type: "http", authToken: true, http: { url, password: "secret" } }])
-  expect(String(ServerConnection.key(override[0]!))).toBe(url)
+describe("resolveServerList", () => {
+  test("lets startup auth_token credentials override a persisted same-url server", () => {
+    const list = resolveServerList({
+      stored: Schema.decodeUnknownSync(serverSchema())({ list: [{ url: "https://server.example.test" }] }).list,
+      props: [
+        {
+          type: "http",
+          authToken: true,
+          http: {
+            url: "https://server.example.test",
+            password: "secret",
+          },
+        },
+      ],
+    })
 
-  const kept = resolveServerList({
-    stored: decode({ list: [{ url, password: "saved" }] }).list,
-    props: [{ type: "http", http: { url } }],
+    expect(list).toHaveLength(1)
+    expect(list[0]?.type).toBe("http")
+    expect(list[0]?.http).toEqual({
+      url: "https://server.example.test",
+      password: "secret",
+    })
+    expect(list[0]?.type === "http" ? list[0].authToken : false).toBe(true)
+    expect(list[0] && String(ServerConnection.key(list[0]))).toBe("https://server.example.test")
   })
-  expect(kept).toHaveLength(1)
-  expect(kept[0]?.http).toEqual({ url, password: "saved" })
-  expect(kept[0]?.type === "http" ? kept[0].authToken : true).toBeUndefined()
+
+  test("keeps persisted credentials when startup has no auth_token", () => {
+    const list = resolveServerList({
+      stored: Schema.decodeUnknownSync(serverSchema())({
+        list: [{ url: "https://server.example.test", password: "saved" }],
+      }).list,
+      props: [{ type: "http", http: { url: "https://server.example.test" } }],
+    })
+
+    expect(list).toHaveLength(1)
+    expect(list[0]?.type).toBe("http")
+    expect(list[0]?.http).toEqual({
+      url: "https://server.example.test",
+      password: "saved",
+    })
+    expect(list[0]?.type === "http" ? list[0].authToken : true).toBeUndefined()
+  })
 })
 
 test("treats WSL sidecars as remote server connections", () => {
   expect(
     ServerConnection.local({
-      type: "extension",
-      key: "wsl:Debian",
-      extension: "wsl",
-      state: "ready",
-      connecting: false,
-      authenticationRequired: false,
-      managed: false,
+      type: "sidecar",
+      variant: "wsl",
+      distro: "Debian",
       http: { url: "http://127.0.0.1:4097" },
     }),
   ).toBe(false)

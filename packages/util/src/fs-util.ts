@@ -32,8 +32,6 @@ export namespace FSUtil {
     readonly start: string
     readonly stop?: string
     readonly mode?: "all" | "first"
-    /** Only match regular files or directories (following symlinks). By default any existing path matches. */
-    readonly type?: "file" | "directory"
   }
 
   export interface Interface extends FileSystem.FileSystem {
@@ -104,6 +102,10 @@ export namespace FSUtil {
       const resolve = Effect.fn("FileSystem.resolve")(function* (input: string) {
         const resolved = path.resolve(windowsPath(input))
         return yield* fs.realPath(resolved).pipe(
+          // `realPath` returns the case the caller typed, so one directory reaches
+          // callers as both `h:\a` and `H:\A`. `normalizePath` restores the
+          // filesystem's own case so equal paths compare equal.
+          Effect.map(normalizePath),
           Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(resolved)),
           Effect.orDie,
         )
@@ -167,13 +169,7 @@ export namespace FSUtil {
         while (true) {
           for (const target of options.targets) {
             const search = join(current, target)
-            const found =
-              options.type === "file"
-                ? yield* isFile(search)
-                : options.type === "directory"
-                  ? yield* isDir(search)
-                  : yield* fs.exists(search)
-            if (found) {
+            if (yield* fs.exists(search)) {
               result.push(search)
               if (options.mode === "first") return result
             }

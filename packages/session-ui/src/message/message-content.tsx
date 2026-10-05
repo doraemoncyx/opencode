@@ -1,4 +1,14 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, type ComponentProps, type JSX } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  Index,
+  onCleanup,
+  Show,
+  type ComponentProps,
+  type JSX,
+} from "solid-js"
 import { createStore } from "solid-js/store"
 import { useData } from "../context"
 import { useDialog } from "@opencode/ui/context/dialog"
@@ -16,7 +26,8 @@ import { Button } from "@opencode/ui/button"
 import { TextReveal } from "@opencode/ui/text-reveal"
 import { TextShimmer } from "@opencode/ui/text-shimmer"
 import { BasicTool } from "../components/basic-tool"
-import { reasoningHeading } from "../timeline/projection"
+import { BlockDuration, formatElapsed } from "../components/block-duration"
+import { reasoningLabel, reasoningSnippet } from "../timeline/projection"
 import { Card } from "@opencode/ui/card"
 import type {
   PromptAgentAttachment,
@@ -26,12 +37,13 @@ import type {
   SessionMessageCompaction,
   SessionMessageUser,
 } from "@opencode/client/promise"
-import type { SessionUserActions, SessionUserAttachmentReference, SessionUserComment } from "../actions"
-import { attached, typeLabel } from "../components/message-file"
+import type { SessionUserActions, SessionUserComment } from "../actions"
+import { typeLabel } from "../components/message-file"
+import { computeTokenStats } from "./token-stats"
+import { textBlockTime } from "./block-time"
 
 export async function writeClipboard(text: string): Promise<boolean> {
   const body = typeof document === "undefined" ? undefined : document.body
-
   if (body) {
     const textarea = document.createElement("textarea")
     textarea.value = text
@@ -43,43 +55,24 @@ export async function writeClipboard(text: string): Promise<boolean> {
     textarea.select()
     const copied = document.execCommand("copy")
     body.removeChild(textarea)
-
     if (copied) return true
   }
 
   const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard
-
   if (!clipboard?.writeText) return false
-
   return clipboard.writeText(text).then(
     () => true,
     () => false,
   )
 }
 
-function modelLabel(
-  data: ReturnType<typeof useData>,
-  i18n: ReturnType<typeof useI18n>,
-  model: SessionMessageAssistant["model"],
-) {
-  const name = data.store.provider?.all?.get(model.providerID)?.models?.[model.id]?.name ?? model.id
-
-  if (!model.variant || model.variant === "default") return name
-
-  return i18n.t("ui.message.modelVariant", {
-    model: name,
-    variant: model.variant[0]?.toUpperCase() + model.variant.slice(1),
-  })
-}
-
 function MessageActionButton(
   props: Pick<ComponentProps<"button">, "disabled" | "onMouseDown" | "onClick" | "aria-label"> & {
-    icon: "check" | "copy" | "reset" | "bullet-list" | "outline-trash"
+    icon: "check" | "copy" | "reset"
     label: JSX.Element
   },
 ) {
   const icon = () => (props.icon === "copy" ? "outline-copy" : props.icon)
-
   return (
     <Tooltip appearance="compact" value={props.label} placement="top" gutter={4}>
       <IconButton
@@ -96,29 +89,22 @@ function MessageActionButton(
 }
 
 const TEXT_RENDER_PACE_MS = 24
-
 const TEXT_RENDER_IMMEDIATE = 512
-
 const TEXT_RENDER_SNAP = /[\s.,!?;:)\]]/
 
 function step(size: number) {
   if (size <= 12) return 2
-
   if (size <= 48) return 4
-
   if (size <= 96) return 8
-
   return Math.min(256, Math.ceil(size / 4))
 }
 
 function next(text: string, start: number) {
   const end = Math.min(text.length, start + step(text.length - start))
   const max = Math.min(text.length, end + 8)
-
   for (let i = end; i < max; i++) {
     if (TEXT_RENDER_SNAP.test(text[i] ?? "")) return i + 1
   }
-
   return end
 }
 
@@ -141,55 +127,40 @@ function createPacedValue(getValue: () => string, live?: () => boolean) {
   const run = () => {
     timeout = undefined
     const text = getValue()
-
     if (!live?.()) {
       sync(text)
-
       return
     }
-
     if (!text.startsWith(shown) || text.length <= shown.length) {
       sync(text)
-
       return
     }
-
     if (text.length - shown.length <= TEXT_RENDER_IMMEDIATE) {
       sync(text)
-
       return
     }
-
     const end = next(text, shown.length)
     sync(text.slice(0, end))
-
     if (end < text.length) timeout = setTimeout(run, TEXT_RENDER_PACE_MS)
   }
 
   createEffect(() => {
     const text = getValue()
-
     if (!live?.()) {
       clear()
       sync(text)
-
       return
     }
-
     if (!text.startsWith(shown) || text.length < shown.length) {
       clear()
       sync(text)
-
       return
     }
-
     if (text.length - shown.length <= TEXT_RENDER_IMMEDIATE) {
       clear()
       sync(text)
-
       return
     }
-
     if (text.length === shown.length || timeout) return
     timeout = setTimeout(run, TEXT_RENDER_PACE_MS)
   })
@@ -225,11 +196,8 @@ function UserMessageComments(props: { comments: SessionUserComment[]; bounded: b
         {(comment) => (
           <CommentCard
             comment={comment.comment}
-            target={
-              comment.type === "note"
-                ? { type: "note", label: comment.label, icon: comment.icon }
-                : { type: "file", path: comment.path, selection: comment.selection }
-            }
+            path={comment.path}
+            selection={comment.selection}
             title={comment.comment}
             tooltip
             wide
@@ -253,71 +221,47 @@ export function CurrentUserMessageDisplay(props: {
   model: SessionMessageAssistant["model"]
   actions?: SessionUserActions
   comments?: SessionUserComment[]
-  references?: SessionUserAttachmentReference[]
 }) {
   const data = useData()
   const dialog = useDialog()
   const i18n = useI18n()
-  const [state, setState] = createStore({ copied: false, reverting: false, updating: false })
-  const pending = createMemo(() => !!props.actions?.pending?.steer(props.message.id))
-  const attachments = createMemo(() => (props.message.files ?? []).filter(attached))
-  const references = createMemo(() => props.references ?? [])
+  const [state, setState] = createStore({ copied: false, reverting: false })
+  const attachments = createMemo(() => (props.message.files ?? []).filter((file) => !file.mention))
   const inlineFiles = createMemo(() => (props.message.files ?? []).filter((file) => !!file.mention))
   const agents = createMemo(() => props.message.agents ?? [])
   const comments = createMemo(() => props.comments ?? [])
-  const model = createMemo(() => modelLabel(data, i18n, props.model))
+  const model = createMemo(() => {
+    const match = data.store.provider?.all?.get(props.model.providerID)
+    return match?.models?.[props.model.id]?.name ?? props.model.id
+  })
   const timefmt = createMemo(() => new Intl.DateTimeFormat(i18n.locale(), { timeStyle: "short" }))
-
   const metaHead = createMemo(() => {
     const agent = props.agent
-
     return [agent ? agent[0]?.toUpperCase() + agent.slice(1) : "", model()].filter(Boolean).join("\u00A0\u00B7\u00A0")
   })
-
   const stamp = createMemo(() => timefmt().format(props.message.time.created))
-
   const copy = async () => {
     if (!props.text || !(await writeClipboard(props.text))) return
     setState("copied", true)
     setTimeout(() => setState("copied", false), 2000)
   }
-
   const revert = async () => {
     if (!props.actions?.revert || state.reverting) return
     setState("reverting", true)
-
     try {
       await props.actions.revert({ sessionID: props.sessionID, messageID: props.message.id })
     } finally {
       setState("reverting", false)
     }
   }
-
-  const updatePending = async (action: "queue" | "remove") => {
-    const actions = props.actions?.pending
-
-    if (!actions || state.updating) return
-    setState("updating", true)
-    await actions[action]({ sessionID: props.sessionID, messageID: props.message.id })
-    setState("updating", false)
-  }
-
   const renderAttachments = () => (
-    <Show when={attachments().length > 0 || references().length > 0}>
+    <Show when={attachments().length > 0}>
       <div data-slot="user-message-attachments">
-        <For each={references()}>
-          {(file) => (
-            <AttachmentCard title={file.name} hover={file.path}>
-              {typeLabel(file.name, file.mime, i18n.t("ui.common.file"))}
-            </AttachmentCard>
-          )}
-        </For>
         <For each={attachments()}>
           {(file) => {
             const url = () => (file.source.type === "uri" ? file.source.uri : `data:${file.mime};base64,${file.data}`)
             const name = () => file.name ?? i18n.t("ui.message.attachment.alt")
             const image = () => file.mime.startsWith("image/")
-
             return (
               <Show
                 when={!image()}
@@ -368,8 +312,7 @@ export function CurrentUserMessageDisplay(props: {
         </div>
       </Show>
       {renderAttachments()}
-      {/* Like the TUI, a pending steer of only attachments still offers its actions. */}
-      <Show when={props.text || comments().length > 0 || pending()}>
+      <Show when={props.text || comments().length > 0}>
         <div data-slot="user-message-copy-wrapper">
           <span data-slot="user-message-meta-wrap">
             <Show when={metaHead()}>
@@ -386,31 +329,7 @@ export function CurrentUserMessageDisplay(props: {
               {stamp()}
             </span>
           </span>
-          <Show when={pending()}>
-            <MessageActionButton
-              icon="bullet-list"
-              label={i18n.t("ui.message.moveToQueue")}
-              disabled={state.updating}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={(event) => {
-                event.stopPropagation()
-                void updatePending("queue")
-              }}
-              aria-label={i18n.t("ui.message.moveToQueue")}
-            />
-            <MessageActionButton
-              icon="outline-trash"
-              label={i18n.t("ui.message.deletePending")}
-              disabled={state.updating}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={(event) => {
-                event.stopPropagation()
-                void updatePending("remove")
-              }}
-              aria-label={i18n.t("ui.message.deletePending")}
-            />
-          </Show>
-          <Show when={props.actions?.revert && !pending()}>
+          <Show when={props.actions?.revert}>
             <MessageActionButton
               icon="reset"
               label={i18n.t("ui.message.revertMessage")}
@@ -455,22 +374,17 @@ function CurrentHighlightedText(props: {
         agent.mention ? [{ start: agent.mention.start, end: agent.mention.end, type: "agent" as const }] : [],
       ),
     ].sort((a, b) => a.start - b.start)
-
     const result: HighlightSegment[] = []
     let last = 0
     references.forEach((reference) => {
       if (reference.start < last) return
-
       if (reference.start > last) result.push({ text: props.text.slice(last, reference.start) })
       result.push({ text: props.text.slice(reference.start, reference.end), type: reference.type })
       last = reference.end
     })
-
     if (last < props.text.length) result.push({ text: props.text.slice(last) })
-
     return result
   })
-
   return (
     <For each={segments()}>
       {(segment) => (
@@ -487,74 +401,45 @@ function CurrentHighlightedText(props: {
 
 type HighlightSegment = { text: string; type?: "file" | "agent" }
 
-/** A compaction the server admitted but has not started, drawn as the divider a started one opens with. */
-export function SessionCompactionQueued() {
-  const i18n = useI18n()
-
-  return (
-    <div data-component="session-compaction-message">
-      <CompactionDivider label={i18n.t("ui.messagePart.compaction.queued")} />
-    </div>
-  )
-}
-
-function CompactionDivider(props: { label: string }) {
-  return (
-    <div class="py-2">
-      <TimelineSeparator label={props.label} />
-    </div>
-  )
-}
-
 export function SessionCompactionMessage(props: { message: SessionMessageCompaction; error: string }) {
   const i18n = useI18n()
   const summary = () => (props.message.status === "failed" ? "" : props.message.summary)
-
   const error = () => {
     if (props.message.status !== "failed") return ""
-
     if (props.message.error.type === "aborted" || props.message.error.type === "compaction.interrupted") return ""
-
     return props.error
   }
-
   const compact = createMemo(
     () => new Intl.NumberFormat(i18n.locale(), { notation: "compact", maximumFractionDigits: 1 }),
   )
-
   // Usage of the compaction request itself; the resulting context size only shows on the next assistant step.
   const usage = () => {
     if (props.message.status === "running" || !props.message.tokens) return ""
     const tokens = props.message.tokens
     const input = tokens.input + tokens.cache.read + tokens.cache.write
     const output = tokens.output + tokens.reasoning
-
     if (input + output <= 0) return ""
-
     return i18n.t("ui.messagePart.compaction.usage", {
       input: compact().format(input),
       output: compact().format(output),
     })
   }
-
   const outcome = () => {
     if (props.message.status !== "failed")
       return props.message.status === "completed" && props.message.providerContext
         ? "ui.messagePart.providerCompaction"
         : "ui.messagePart.compaction"
-
     if (props.message.error.type === "aborted") return "ui.messagePart.compaction.cancelled"
-
     if (props.message.error.type === "compaction.interrupted") return "ui.messagePart.compaction.interrupted"
-
     return "ui.messagePart.compaction.failed"
   }
-
   const label = createMemo(() => [i18n.t(outcome()), usage()].filter(Boolean).join(" · "))
 
   return (
     <div data-component="session-compaction-message">
-      <CompactionDivider label={i18n.t("ui.messagePart.compaction.started")} />
+      <div class="py-2">
+        <TimelineSeparator label={i18n.t("ui.messagePart.compaction.started")} />
+      </div>
       <Show when={summary().trim()}>
         <div data-component="text-part" data-timeline-part-id={props.message.id}>
           <div data-slot="text-part-body">
@@ -601,53 +486,60 @@ export function AssistantTextContent(props: {
   const data = useData()
   const i18n = useI18n()
   const numfmt = createMemo(() => new Intl.NumberFormat(i18n.locale()))
-
   const interrupted = () => {
     const type = props.message.error?.type.toLowerCase()
-
     return !!type && (type.includes("abort") || type.includes("interrupt"))
   }
-
-  const model = createMemo(() => modelLabel(data, i18n, props.message.model))
-
+  const model = createMemo(() => {
+    const match = data.store.provider?.all?.get(props.message.model.providerID)
+    return match?.models?.[props.message.model.id]?.name ?? props.message.model.id
+  })
   const duration = createMemo(() => {
     const completed = props.message.time.completed
-
     const ms =
       props.turnDurationMs === null
         ? -1
-        : props.turnDurationMs !== undefined
+        : typeof props.turnDurationMs === "number"
           ? props.turnDurationMs
-          : completed !== undefined
+          : typeof completed === "number"
             ? completed - props.message.time.created
             : -1
-
     if (!(ms >= 0)) return ""
-    const total = Math.round(ms / 1000)
-
-    if (total < 60) return i18n.t("ui.message.duration.seconds", { count: numfmt().format(total) })
-
-    return i18n.t("ui.message.duration.minutesSeconds", {
-      minutes: numfmt().format(Math.floor(total / 60)),
-      seconds: numfmt().format(total % 60),
-    })
+    return formatElapsed(ms, i18n)
   })
-
+  const streaming = () => typeof props.message.time.completed !== "number"
+  const textIndex = () => Number(props.id.split(":").at(-1))
+  const isLastTextPart = createMemo(() => {
+    const ordinals = { text: 0 }
+    let last: string | undefined
+    for (const item of props.message.content) {
+      if (item.type !== "text") continue
+      last = `${props.message.id}:text:${ordinals.text++}`
+    }
+    return last === props.id
+  })
+  const tokenStats = createMemo(() => {
+    const stats = computeTokenStats(props.message, Date.now())
+    return [
+      stats.ttft ? i18n.t("ui.message.tokens.ttft", { value: numfmt().format(stats.ttft) }) : "",
+      stats.tps ? i18n.t("ui.message.tokens.tps", { value: stats.tps.toFixed(1) }) : "",
+    ]
+      .filter(Boolean)
+      .join(" \u00B7 ")
+  })
   const meta = createMemo(() => {
     const agent = props.message.agent
-
     return [
       agent ? agent[0]?.toUpperCase() + agent.slice(1) : "",
       model(),
       duration(),
+      tokenStats(),
       interrupted() ? i18n.t("ui.message.interrupted") : "",
     ]
       .filter(Boolean)
       .join(" \u00B7 ")
   })
-
   const [copied, setCopied] = createSignal(false)
-
   const copy = async () => {
     if (!(await writeClipboard(props.text))) return
     setCopied(true)
@@ -658,8 +550,16 @@ export function AssistantTextContent(props: {
     <Show when={props.text}>
       <div data-component="text-part" data-timeline-part-id={props.id}>
         <div data-slot="text-part-body">
-          <PacedMarkdown text={props.text} cacheKey={props.id} streaming={props.message.time.completed === undefined} />
+          <PacedMarkdown text={props.text} cacheKey={props.id} streaming={streaming()} />
         </div>
+        <div data-slot="text-part-duration">
+          <BlockDuration time={(now) => textBlockTime(props.message, textIndex(), now)} live={streaming()} />
+        </div>
+        <Show when={streaming() && isLastTextPart() && tokenStats()}>
+          <div data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
+            {tokenStats()}
+          </div>
+        </Show>
         <Show when={props.showCopy}>
           <div data-slot="text-part-copy-wrapper" data-interrupted={interrupted() ? "" : undefined}>
             <MessageActionButton
@@ -687,34 +587,27 @@ export function AssistantReasoningContent(props: {
   streaming: boolean
   defaultOpen?: boolean
   open?: boolean
+  /** Show the leading lines of a collapsed thought instead of only its label. */
+  preview?: boolean
   onOpenChange?: (open: boolean) => void
   onContentRendered?: () => void
 }) {
   const i18n = useI18n()
   const [state, setState] = createStore<{ open?: boolean }>({})
   const open = () => props.open ?? state.open ?? props.defaultOpen ?? false
-  const heading = createMemo(() => (props.streaming ? reasoningHeading(props.content.text) : ""))
-
-  const duration = createMemo(() => {
-    const time = props.content.time
-
-    if (time?.completed === undefined) return undefined
-    const total = Math.max(0, Math.round((time.completed - time.created) / 1000))
-    const numfmt = new Intl.NumberFormat(i18n.locale())
-
-    if (total < 60) return i18n.t("ui.message.duration.seconds", { count: numfmt.format(total) })
-
-    return i18n.t("ui.message.duration.minutesSeconds", {
-      minutes: numfmt.format(Math.floor(total / 60)),
-      seconds: numfmt.format(total % 60),
-    })
+  // A thought keeps its label when collapsed so the row still says what it was about.
+  const label = createMemo(() => reasoningLabel(props.content.text) ?? "")
+  const preview = createMemo(() => {
+    if (!props.preview || open()) return []
+    const current = label()
+    return reasoningSnippet(props.content.text).filter((line) => line !== current)
   })
-
   return (
     <div data-component="reasoning-part" data-timeline-part-id={props.id}>
       <BasicTool
         icon="mcp"
         status={props.streaming ? "running" : "completed"}
+        time={props.content.time && { start: props.content.time.created, end: props.content.time.completed }}
         compact
         hasContent
         allowOpenWhilePending
@@ -734,19 +627,20 @@ export function AssistantReasoningContent(props: {
                   active={props.streaming}
                 />
               </span>
-              <Show
-                when={props.streaming && !open()}
-                fallback={
-                  <Show when={!props.streaming && duration()}>
-                    {(value) => <span data-slot="basic-tool-tool-subtitle">{value()}</span>}
-                  </Show>
-                }
-              >
-                <span data-slot="basic-tool-tool-subtitle">
-                  <TextReveal text={heading()} />
-                </span>
+              <Show when={!open() && label()}>
+                {(value) => (
+                  <span data-slot="basic-tool-tool-subtitle">
+                    {props.streaming ? <TextReveal text={value()} /> : value()}
+                  </span>
+                )}
               </Show>
             </div>
+            <Show when={preview().length > 0}>
+              <div data-slot="reasoning-preview">
+                {/* Index keeps duplicate preview lines distinct; For keys primitives by value. */}
+                <Index each={preview()}>{(line) => <span data-slot="reasoning-preview-line">{line()}</span>}</Index>
+              </div>
+            </Show>
           </div>
         }
       >

@@ -1,6 +1,5 @@
 import { createSignal, Show } from "solid-js"
 import { render } from "solid-js/web"
-import { DialogProvider } from "@opencode/ui/context/dialog"
 import { Markdown } from "../src/components/markdown"
 import { preloadMarkdown } from "../src/components/markdown-cache"
 import { MarkdownProvider } from "../src/context/markdown"
@@ -36,7 +35,7 @@ export async function mountMarkdown(options: {
     const [streaming, setStreaming] = createSignal(options.streaming ?? false)
     const [visible, setVisible] = createSignal(true)
     return (
-      <DialogProvider>
+      <>
         <textarea aria-label="Markdown text" value={text()} onInput={(event) => setText(event.currentTarget.value)} />
         <input
           aria-label="Streaming"
@@ -59,7 +58,7 @@ export async function mountMarkdown(options: {
             />
           </Show>
         </MarkdownProvider>
-      </DialogProvider>
+      </>
     )
   }, host)
 }

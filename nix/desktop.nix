@@ -13,12 +13,7 @@
   opencode,
 }:
 let
-  electronPin =
-    (lib.pipe ../packages/desktop/package.json [
-      builtins.readFile
-      builtins.fromJSON
-    ]).devDependencies.electron;
-  electron = callPackage ./electron.nix { inherit electronPin; };
+  electron = callPackage ./electron.nix { };
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "opencode-desktop";
@@ -40,8 +35,6 @@ stdenv.mkDerivation (finalAttrs: {
     copyDesktopItems
   ]
   ++ lib.optionals stdenv.hostPlatform.isDarwin [
-    darwin.cctools
-    darwin.sigtool
     # Ad-hoc sign the .app: --config.mac.identity=null below skips signing.
     darwin.autoSignDarwinBinariesHook
   ];
@@ -73,7 +66,7 @@ stdenv.mkDerivation (finalAttrs: {
     ''
     # https://github.com/electron/electron/issues/31121
     # mac builds use a .app bundle which doesnt have this issue
-    + lib.optionalString stdenv.hostPlatform.isLinux ''
+    + lib.optionalString stdenv.isLinux ''
       substituteInPlace \
         packages/desktop/src/main/windows/appearance.ts \
         packages/desktop/src/main/service/desktop-cli.ts \
@@ -81,7 +74,6 @@ stdenv.mkDerivation (finalAttrs: {
     '';
 
   preBuild = ''
-    echo "electron ${electron.version} from nixpkgs ${lib.version}, package.json pins ${electronPin}"
     cp -r "${electron.dist}" $HOME/.electron-dist
     chmod -R u+w $HOME/.electron-dist
 
@@ -97,15 +89,8 @@ stdenv.mkDerivation (finalAttrs: {
 
     export OPENCODE_CLI_DIST="$TMPDIR/desktop-cli"
     cli_package=$(bun -e 'import { getCurrentCli } from "./scripts/utils.ts"; console.log(getCurrentCli().package.replace("@opencode/", ""))')
-    # copyBuiltCliToResources joins this dist with the npm package name getCurrentCli()
-    # reports, not the Nix build's name. It reads only .version from the manifest and
-    # writes it as opencode-cli.version beside the binary.
     mkdir -p "$OPENCODE_CLI_DIST/$cli_package/bin"
-    cp ${lib.getExe opencode} "$OPENCODE_CLI_DIST/$cli_package/bin/opencode"
-    # OPENCODE_VERSION is what the bundled CLI prints for --version, so the manifest
-    # and the executable cannot drift.
-    bun -e 'await Bun.write(process.argv[1], JSON.stringify({ version: process.env.OPENCODE_VERSION }) + "\n")' \
-      "$OPENCODE_CLI_DIST/$cli_package/package.json"
+    cp ${lib.getExe opencode} "$OPENCODE_CLI_DIST/$cli_package/bin/opencode2"
 
     bun run build
     npx electron-builder --dir \
@@ -152,13 +137,6 @@ stdenv.mkDerivation (finalAttrs: {
   autoPatchelfIgnoreMissingDeps = [
     "libc.musl-x86_64.so.1"
   ];
-
-  passthru = {
-    # electronVersion is what ships; electronPin is what packages/desktop/package.json
-    # asks for. They differ whenever nixpkgs carries no release of the pinned minor.
-    electronVersion = electron.version;
-    inherit electronPin;
-  };
 
   meta = {
     description = "OpenCode Desktop App";

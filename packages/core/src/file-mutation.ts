@@ -5,6 +5,7 @@ import { Context, Effect, Layer } from "effect"
 import { KeyedMutex } from "./effect/keyed-mutex.js"
 import { FSUtil } from "@opencode/util/fs-util"
 import { Bom } from "@opencode/util/bom"
+import { detectEncoding } from "@opencode/util/encoding"
 import { Environment } from "./environment/index.js"
 import type { Files } from "./environment/index.js"
 import type { FileAccess } from "./file-access.js"
@@ -34,7 +35,10 @@ export interface Interface {
     targets: ReadonlyArray<string>,
   ) => <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   readonly write: (input: WriteInput) => Effect.Effect<WriteResult, Environment.Failed>
-  /** Write text while retaining an existing UTF-8 BOM and emitting at most one BOM. */
+  /**
+   * Write text while retaining an existing UTF-8 BOM (at most one) and the
+   * existing file's encoding, emitting GBK bytes for a GBK file.
+   */
   readonly writeTextPreservingBom: (
     input: TextWriteInput,
   ) => Effect.Effect<WriteResult, Environment.WrongKind | Environment.Failed>
@@ -108,9 +112,24 @@ const layer = Layer.effect(
             Effect.map((result) => result.bytes),
             Effect.catchTag("Environment.NotFound", () => Effect.undefined),
           )
+          // A UTF-8 BOM is decidable from the first bytes; otherwise read the
+          // file to detect GBK before re-encoding the preserved-BOM text.
+          const encoding =
+            current && current.length > 0 && !Bom.has(current)
+              ? detectEncoding(
+                  yield* environment.files.read(input.target.absolute).pipe(
+                    Effect.map((result) => result.bytes),
+                    Effect.catchTag("Environment.NotFound", () => Effect.succeed(current)),
+                  ),
+                )
+              : "utf-8"
+          const content = Bom.writeFileEncoded(
+            Bom.join(next.text, Boolean(current && Bom.has(current)) || next.bom),
+            encoding,
+          )
           yield* environment.files.write(
             input.target.absolute,
-            new TextEncoder().encode(Bom.join(next.text, Boolean(current && Bom.has(current)) || next.bom)),
+            typeof content === "string" ? new TextEncoder().encode(content) : content,
           )
           return writeResult(input.target, current !== undefined)
         }),

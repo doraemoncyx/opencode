@@ -7,7 +7,6 @@ import { Spinner } from "../../component/spinner"
 import { usePlugin } from "../../plugin/context"
 import { DialogSelect, type DialogSelectOption } from "../../ui/dialog-select"
 import { useDialog } from "../../ui/dialog"
-import { errorMessage } from "../../util/error"
 
 const id = "opencode.plugins"
 
@@ -23,7 +22,11 @@ type Entry =
       readonly error?: string
     }
 
-export function PluginsDialog(props: { context: Plugin.Context; plugins: ReturnType<typeof usePlugin> }) {
+export function PluginsDialog(props: {
+  context: Plugin.Context
+  plugins: ReturnType<typeof usePlugin>
+  server?: () => readonly PluginInfo[]
+}) {
   const dialog = useDialog()
   const [locked, setLocked] = createSignal(false)
   const [checking, setChecking] = createSignal(false)
@@ -32,7 +35,7 @@ export function PluginsDialog(props: { context: Plugin.Context; plugins: ReturnT
   const [showInternal, setShowInternal] = createSignal(false)
   const [pending, setPending] = createSignal<readonly string[]>([])
   const [server, { refetch, mutate }] = createResource(
-    () => props.context.location ?? props.context.data.location.default(),
+    () => (props.server ? undefined : (props.context.location ?? props.context.data.location.default())),
     (location) => props.context.client.plugin.list({ location }).then((result) => result.data),
   )
   onMount(() => dialog.setSize("large"))
@@ -65,7 +68,7 @@ export function PluginsDialog(props: { context: Plugin.Context; plugins: ReturnT
         status: plugin.status,
         error: plugin.status === "failed" ? plugin.error : undefined,
       }))
-    const serverEntries: Entry[] = (server() ?? []).map((plugin) => ({
+    const serverEntries: Entry[] = (props.server?.() ?? server() ?? []).map((plugin) => ({
       key: `server:${plugin.id ?? source(plugin, props.context)}`,
       runtime: "server" as const,
       internal: plugin.source.type === "builtin",
@@ -95,14 +98,14 @@ export function PluginsDialog(props: { context: Plugin.Context; plugins: ReturnT
         footer: updating(entry) ? "updating" : footer(entry),
         footerColor:
           status(entry) === "failed"
-            ? props.context.theme.text.feedback.error.base
+            ? props.context.theme.text.feedback.error.default
             : outdated(entry)
-              ? props.context.theme.text.feedback.info.base
-              : props.context.theme.text.muted,
+              ? props.context.theme.text.feedback.info.default
+              : props.context.theme.text.subdued,
         gutter: updating(entry)
           ? (color) => <Spinner color={color} />
           : status(entry) === "failed"
-            ? () => <text fg={props.context.theme.text.feedback.error.base}>x</text>
+            ? () => <text fg={props.context.theme.text.feedback.error.default}>x</text>
             : undefined,
       }),
     ),
@@ -131,7 +134,7 @@ export function PluginsDialog(props: { context: Plugin.Context; plugins: ReturnT
       .catch((cause) => {
         props.context.ui.toast.show({
           variant: "error",
-          message: errorMessage(cause),
+          message: cause instanceof Error ? cause.message : String(cause),
         })
       })
       .finally(() => setLocked(false))
@@ -149,7 +152,7 @@ export function PluginsDialog(props: { context: Plugin.Context; plugins: ReturnT
       .catch((cause) => {
         props.context.ui.toast.show({
           variant: "error",
-          message: errorMessage(cause),
+          message: cause instanceof Error ? cause.message : String(cause),
         })
       })
       .finally(() => setPending((keys) => keys.filter((key) => key !== entry.key)))
@@ -170,7 +173,7 @@ export function PluginsDialog(props: { context: Plugin.Context; plugins: ReturnT
       .catch((cause) => {
         props.context.ui.toast.show({
           variant: "error",
-          message: errorMessage(cause),
+          message: cause instanceof Error ? cause.message : String(cause),
         })
       })
       .finally(() => setChecking(false))
@@ -246,10 +249,10 @@ export function PluginsDialog(props: { context: Plugin.Context; plugins: ReturnT
             footer={
               <Show when={pluginError(focusedEntry()) && !focusedTui()}>
                 <text>
-                  <span style={{ fg: props.context.theme.text.base }}>
+                  <span style={{ fg: props.context.theme.text.default }}>
                     <b>enter</b>
                   </span>
-                  <span style={{ fg: props.context.theme.text.muted }}> view error</span>
+                  <span style={{ fg: props.context.theme.text.subdued }}> view error</span>
                 </text>
               </Show>
             }

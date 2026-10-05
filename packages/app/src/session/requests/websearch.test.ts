@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { FormAnswer, FormCreated, SessionFormReplyInput, OpenCodeEvent } from "@opencode/client/promise"
+import type { FormAnswer, FormCreated, FormReplyInput, OpenCodeEvent } from "@opencode/client/promise"
 import { replyWebSearch } from "./websearch"
 
 const consent: FormCreated["data"]["form"] = {
@@ -28,7 +28,7 @@ const provider: FormCreated["data"]["form"] = {
 
 function fixture() {
   const listeners = new Set<(event: OpenCodeEvent) => void>()
-  const replies: SessionFormReplyInput[] = []
+  const replies: FormReplyInput[] = []
   const abort = new AbortController()
   const emit = (event: OpenCodeEvent) => listeners.forEach((listener) => listener(event))
   return {
@@ -45,7 +45,7 @@ function fixture() {
         }
       },
     },
-    reply: async (input: SessionFormReplyInput) => {
+    reply: async (input: FormReplyInput) => {
       replies.push(input)
     },
     create: (form = provider) => emit({ id: "evt_create", created: 0, type: "form.created", data: { form } }),
@@ -140,14 +140,28 @@ describe("web search desktop consent", () => {
     expect(input.listeners.size).toBe(0)
   })
 
-  test.each([consent.id, provider.id])("propagates a failed %s submission and cleans up", async (failing) => {
+  test("cleans up after a failed consent submission", async () => {
+    const input = fixture()
+    await expect(
+      replyWebSearch({
+        ...input,
+        selection: "exa",
+        reply: async () => {
+          throw new Error("offline")
+        },
+      }),
+    ).rejects.toThrow("offline")
+    expect(input.listeners.size).toBe(0)
+  })
+
+  test("propagates provider submission failures for retry", async () => {
     const input = fixture()
     await expect(
       replyWebSearch({
         ...input,
         selection: "exa",
         reply: async (answer) => {
-          if (answer.formID === failing) throw new Error("offline")
+          if (answer.formID === provider.id) throw new Error("offline")
           input.create()
         },
       }),

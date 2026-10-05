@@ -475,25 +475,20 @@ describe("first-class promise values", () => {
 })
 
 describe("promises at data boundaries", () => {
-  test("an un-awaited promise inside a result or tool argument is awaited", async () => {
-    expect(await value(`return { result: tools.host.echo({ id: 1 }) }`)).toEqual({ result: 1 })
-    expect(await value(`return Array.from([Promise.resolve(1)])`)).toEqual([1])
-    expect(await value(`return await tools.host.echo({ id: tools.host.echo({ id: 1 }) })`)).toBe(1)
+  test("returning an un-awaited promise inside data is a clear await-hinting diagnostic", async () => {
+    const diagnostic = await error(`return { result: tools.host.echo({ id: 1 }) }`)
+    expect(diagnostic.kind).toBe("InvalidDataValue")
+    expect(diagnostic.message).toContain("un-awaited Promise")
+    expect(diagnostic.message).toContain("await tools.ns.tool(...)")
   })
 
-  test("a rejected promise inside a result fails the program with its reason", async () => {
-    const diagnostic = await error(`return { result: tools.host.fail({}) }`)
-    expect(diagnostic.kind).toBe("ToolFailure")
-    expect(diagnostic.message).toContain("Lookup refused")
-  })
-
-  test("JSON.stringify of a promise is a diagnostic, not '{}'", async () => {
-    const diagnostic = await error(`return JSON.stringify(Promise.resolve(1))`)
+  test("collection helpers do not let un-awaited promises cross the result boundary", async () => {
+    const diagnostic = await error(`return Array.from([Promise.resolve(1)])`)
     expect(diagnostic.kind).toBe("InvalidDataValue")
     expect(diagnostic.message).toContain("un-awaited Promise")
   })
 
-  test("returning a never-settling promise inside data waits until the timeout", async () => {
+  test("invalid returned data cancels pending work", async () => {
     const trace = makeTrace()
     const result = await run(
       `
@@ -504,9 +499,21 @@ describe("promises at data boundaries", () => {
     )
     expect(result.ok).toBe(false)
     if (result.ok) return
-    expect(result.error.kind).toBe("TimeoutExceeded")
+    expect(result.error.kind).toBe("InvalidDataValue")
     expect(trace.completed).toBe(0)
     expect(trace.interrupted).toBe(1)
+  })
+
+  test("passing an un-awaited promise as a tool argument is a clear diagnostic", async () => {
+    const diagnostic = await error(`return await tools.host.echo({ id: tools.host.echo({ id: 1 }) })`)
+    expect(diagnostic.kind).toBe("InvalidDataValue")
+    expect(diagnostic.message).toContain("un-awaited Promise")
+  })
+
+  test("JSON.stringify of a promise is a diagnostic, not '{}'", async () => {
+    const diagnostic = await error(`return JSON.stringify(Promise.resolve(1))`)
+    expect(diagnostic.kind).toBe("InvalidDataValue")
+    expect(diagnostic.message).toContain("un-awaited Promise")
   })
 
   test("operators reject promise operands", async () => {
@@ -730,7 +737,7 @@ describe("Promise.all over arbitrary arrays", () => {
 
   test("a non-collection argument is a clear error", async () => {
     const diagnostic = await error(`return await Promise.all(42)`)
-    expect(diagnostic.message).toContain("Promise.all expects a synchronous iterable, received a number")
+    expect(diagnostic.message).toContain("Promise.all expects an array")
   })
 
   test("exceeding maxToolCalls inside Promise.all is a ToolCallLimitExceeded diagnostic", async () => {
@@ -746,13 +753,12 @@ describe("Promise.allSettled", () => {
   test("reports fulfilled and rejected outcomes with catch-normalized reasons", async () => {
     expect(
       await value(`
-      const settled = await Promise.allSettled([
+      return await Promise.allSettled([
         tools.host.echo({ id: 5 }),
         tools.host.fail({}),
         "plain",
         Promise.reject(new Error("boom")),
       ])
-      return settled
     `),
     ).toEqual([
       { status: "fulfilled", value: 5 },
@@ -1131,43 +1137,8 @@ describe("unsupported promise surface", () => {
   })
 
   test("unknown Promise statics are not functions", async () => {
-    const diagnostic = await error(`return await Promise.settle(() => 1)`)
-    expect(diagnostic.message).toContain("Promise.settle is not a function")
-  })
-})
-
-describe("Promise.try", () => {
-  test("runs the function now with its arguments; a throw rejects, a return fulfils, a promise or thenable is adopted", async () => {
-    expect(
-      await value(`
-        const log = []
-        const sum = Promise.try((a, b) => { log.push("ran"); return a + b }, 1, 2)
-        log.push("after")
-        let caught
-        try { await Promise.try(() => { throw new RangeError("boom") }) } catch (e) { caught = e.constructor.name }
-        return [log, sum instanceof Promise, await sum, caught, await Promise.try(async () => 5), await Promise.try(() => ({ then: (r) => r("thenable") }))]
-      `),
-    ).toEqual([["ran", "after"], true, 3, "RangeError", 5, "thenable"])
-    expect((await error(`return Promise.try(5)`)).message).toContain(
-      "Promise.try expects a function, received a number.",
-    )
-  })
-})
-
-describe("Promise.withResolvers", () => {
-  test("returns a pending promise with resolvers that settle it once and adopt thenables", async () => {
-    expect(
-      await value(`
-        const first = Promise.withResolvers()
-        first.resolve(Promise.resolve("adopted"))
-        first.resolve("ignored")
-        const second = Promise.withResolvers()
-        second.reject(new Error("no"))
-        let caught
-        try { await second.promise } catch (e) { caught = e.message }
-        return [Object.keys(first), first.promise instanceof Promise, await first.promise, caught]
-      `),
-    ).toEqual([["promise", "resolve", "reject"], true, "adopted", "no"])
+    const diagnostic = await error(`return await Promise.withResolvers()`)
+    expect(diagnostic.message).toContain("Promise.withResolvers is not a function")
   })
 })
 
@@ -1332,13 +1303,12 @@ describe("promise construction", () => {
     expect(result.warnings?.[0].message).toContain("dropped")
   })
 
-  test("resolver functions vanish at the data boundary like JSON.stringify", async () => {
-    expect(
-      await value(`
+  test("resolver functions cannot cross the data boundary", async () => {
+    const diagnostic = await error(`
       let escaped
       new Promise((resolve) => { escaped = resolve })
-      return { escaped, kind: typeof escaped }
-    `),
-    ).toEqual({ kind: "function" })
+      return { escaped }
+    `)
+    expect(diagnostic.kind).toBe("InvalidDataValue")
   })
 })

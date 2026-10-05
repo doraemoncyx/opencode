@@ -1,9 +1,10 @@
 export * as SessionContext from "./context.js"
 
-import { Model } from "../model.js"
+import { Model } from "@opencode/schema/model"
 import { Permission } from "../permission.js"
 import { Context, Effect, Layer } from "effect"
 import { Agent } from "../agent.js"
+import { Catalog } from "../catalog.js"
 import { CodeModeInstructions } from "../codemode/instructions.js"
 import { Database } from "../database/database.js"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
@@ -76,7 +77,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const agents = yield* Agent.Service
     const builtins = yield* InstructionBuiltIns.Service
-    const model = yield* Model.Service
+    const catalog = yield* Catalog.Service
     const db = (yield* Database.Service).db
     const discovery = yield* InstructionDiscovery.Service
     const entries = yield* InstructionEntry.Service
@@ -90,16 +91,16 @@ const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const registry = yield* Tool.Service
 
-    const resolveModel = (session: SessionSchema.Info) => models.resolve(session, model.available)
+    const resolveModel = (session: SessionSchema.Info) => models.resolve(session, catalog.model.available)
 
     const selectTitle = Effect.fn("SessionContext.selectTitle")(function* (session: SessionSchema.Info) {
       const agent = yield* agents.get(Agent.ID.make("title"))
       if (!agent) return
       const primary = yield* resolveModel(session).pipe(Effect.orElseSucceed(() => undefined))
       const info = yield* Effect.gen(function* () {
-        if (agent.model) return yield* model.get(agent.model.providerID, agent.model.id)
+        if (agent.model) return yield* catalog.model.get(agent.model.providerID, agent.model.id)
         if (!primary) return
-        return yield* model.small(primary.ref.providerID)
+        return yield* catalog.model.small(primary.ref.providerID)
       })
       const variant =
         agent.model?.variant ?? MINIMAL_REASONING_VARIANTS.find((id) => info?.variants.some((item) => item.id === id))
@@ -127,16 +128,14 @@ const layer = Layer.effect(
       yield* mcpTools.flush
       const agent = yield* agents.select(session.agent)
       if (!agent.info) return yield* new AgentNotFoundError({ sessionID: session.id, agent: session.agent ?? agent.id })
-      // Session permissions narrow discovery the same way they narrow the tool snapshot.
-      const permissions = Permission.merge(agent.info.permissions, session.permissions ?? [])
       const loaded = yield* Effect.all(
         {
-          tools: registry.snapshot(permissions),
-          builtins: builtins.load(),
+          tools: registry.snapshot(Permission.merge(agent.info.permissions, session.permissions ?? [])),
+          builtins: builtins.load(sessionID),
           discovery: discovery.load(),
-          skills: skillInstructions.load(permissions),
+          skills: skillInstructions.load(agent),
           references: referenceInstructions.load(),
-          mcp: mcpInstructions.load(permissions),
+          mcp: mcpInstructions.load(agent),
           entries: entries.load(sessionID),
         },
         { concurrency: "unbounded" },
@@ -144,16 +143,13 @@ const layer = Layer.effect(
       return {
         session,
         agent: { ...agent, info: agent.info },
-        // Ordered from most to least shared across sessions so the baseline stays a reusable
-        // prompt-cache prefix: user-level catalog and guidance, then project instructions, then
-        // the date and environment, which vary by day and directory.
         instructions: Instructions.combine([
-          CodeModeInstructions.make(loaded.tools.codeModeCatalog),
-          loaded.mcp,
-          loaded.references,
-          loaded.skills,
-          loaded.discovery,
           loaded.builtins,
+          CodeModeInstructions.make(loaded.tools.codeModeCatalog),
+          loaded.discovery,
+          loaded.skills,
+          loaded.references,
+          loaded.mcp,
           loaded.entries,
         ]),
         tools: loaded.tools,
@@ -190,7 +186,7 @@ export const node = makeLocationNode({
   layer,
   deps: [
     Agent.node,
-    Model.node,
+    Catalog.node,
     Database.node,
     InstructionBuiltIns.node,
     InstructionDiscovery.node,

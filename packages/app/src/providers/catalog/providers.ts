@@ -38,13 +38,11 @@ export function useProviders(directory: Accessor<string | undefined>) {
     return normalizeProviderList(provider, model)
   })
 
-  const ready = () => {
-    const ref = location()
-    return data.location.provider.list(ref) !== undefined && data.location.model.list(ref) !== undefined
-  }
-
   return {
-    ready,
+    ready: () => {
+      const ref = location()
+      return data.location.provider.list(ref) !== undefined && data.location.model.list(ref) !== undefined
+    },
     all: () => providers().all,
     default: () => providers().default,
     // V2 servers list only available providers, so the connectable catalog
@@ -70,15 +68,6 @@ export function useProviders(directory: Accessor<string | undefined>) {
         Iterable.map(([, p]) => p),
         Iterable.filter((p) => connected.has(p.id)),
         (v) => Array.from(v),
-      )
-    },
-    // Any stored or detected connection, or a provider with models beyond the keyless OpenCode catalog.
-    // Undefined until both catalogs load, so callers never mistake loading for a first run.
-    anyConnection: () => {
-      if (!integrations.ready() || !ready()) return undefined
-      if (integrations.list().some((integration) => integration.connections.length > 0)) return true
-      return providers().connected.some(
-        (id) => id !== "opencode" && Object.keys(providers().all.get(id)?.models ?? {}).length > 0,
       )
     },
     paid: () => {

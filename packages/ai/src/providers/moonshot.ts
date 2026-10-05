@@ -112,20 +112,19 @@ export const configure = (input: Config = {}) => {
         maxTokensField: "max_tokens",
         supportsStore: false,
         supportsStrictMode: false,
-        supportsPromptCacheKey: true,
-        sanitizer: "moonshot",
+        toolSchema: "moonshot",
         reasoningField: "reasoning_content",
       },
     })
   const messages = (modelID: string | ModelID) =>
     messagesRoute.with(defaults).model<MessagesOptionsInput>({
       id: modelID,
-      compatibility: { requireSignature: false, sanitizer: "moonshot" },
+      compatibility: { requireSignature: false, toolSchema: "moonshot" },
     })
   const responses = (modelID: string | ModelID) =>
     responsesRoute
       .with(defaults)
-      .model<ResponsesOptionsInput>({ id: modelID, compatibility: { sanitizer: "moonshot" } })
+      .model<ResponsesOptionsInput>({ id: modelID, compatibility: { toolSchema: "moonshot" } })
   return { id, model: chat, chat, messages, responses, configure }
 }
 

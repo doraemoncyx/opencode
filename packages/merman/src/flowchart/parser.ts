@@ -8,6 +8,7 @@ import type {
 } from "./types.js"
 import { MermaidSyntaxError } from "../diagnostics.js"
 import {
+  decodeMermaidText,
   firstMeaningfulMermaidLine,
   meaningfulNumberedMermaidLines,
   stripMermaidQuotes as stripQuotes,

@@ -11,26 +11,18 @@ import {
   mergeJsonRecords,
 } from "../../schema/index.js"
 import type { CompactOperation } from "../../route/client.js"
-import { stripEffortUpdates } from "../../effort-updates.js"
 import { Endpoint } from "../../route/endpoint.js"
 import { RequestExecutor } from "../../route/executor.js"
 import { HttpTransport } from "../../route/transport/index.js"
 import { OpenResponses } from "../open-responses.js"
 import { JsonObject, optionalNull, ProviderShared } from "../shared.js"
-import { Media } from "../../media.js"
 
-// /compact has a smaller wire contract than /responses; keep the request controls it accepts.
 const Body = Schema.Struct({
   model: Schema.String,
   input: Schema.Array(Schema.Unknown),
   instructions: optionalNull(Schema.String),
   previous_response_id: optionalNull(Schema.String),
   service_tier: optionalNull(Schema.String),
-  reasoning: Schema.optional(JsonObject),
-  text: Schema.optional(JsonObject),
-  include: OpenResponses.coreFields.include,
-  parallel_tool_calls: OpenResponses.coreFields.parallel_tool_calls,
-  tools: Schema.optional(Schema.Array(JsonObject)),
   prompt_cache_key: optionalNull(Schema.String),
   prompt_cache_retention: optionalNull(Schema.String),
   prompt_cache_options: optionalNull(
@@ -80,27 +72,16 @@ const Response = Schema.Struct({
   usage: Schema.optional(Schema.StructWithRest(OpenResponses.OpenResponsesUsage, [JsonObject])),
 })
 
-export const make = (
-  adapter: OpenResponses.ProviderAdapter,
-  lowerTools: (request: LLMRequest) => Effect.Effect<ReadonlyArray<Record<string, unknown>>, AIError>,
-): CompactOperation =>
+export const make = (adapter: OpenResponses.ProviderAdapter): CompactOperation =>
   Effect.fn("ResponsesCompaction.execute")(function* (request, executor, options) {
     const route = request.model.route
-    // The standalone compaction endpoint rejects histories containing configuration updates.
-    const native = yield* OpenResponses.lowerConversation(stripEffortUpdates(request), adapter)
-    const generation = OpenResponses.lowerGeneration(request)
-    const tools = request.tools.length === 0 ? undefined : yield* lowerTools(request)
+    const native = yield* OpenResponses.lowerConversation(request, adapter)
     const body = yield* ProviderShared.validateWith(Schema.decodeUnknownEffect(Body))(
       mergeJsonRecords(
         {
           ...native,
-          service_tier: generation.service_tier,
-          reasoning: generation.reasoning,
-          text: generation.text,
-          include: generation.include,
-          parallel_tool_calls: generation.parallel_tool_calls,
-          tools,
-          prompt_cache_key: generation.prompt_cache_key,
+          service_tier: request.providerOptions?.serviceTier,
+          prompt_cache_key: ProviderShared.promptCacheKey(request),
         },
         request.http?.body,
       ),
@@ -174,22 +155,20 @@ function toMessage(item: (typeof Response.Type.output)[number], model: LLMReques
       if (part.type === "input_image")
         return {
           type: "media",
-          media: replayMedia(part.image_url, "image/*"),
+          data: part.image_url,
+          mediaType: /^data:([^;,]+)/.exec(part.image_url)?.[1] ?? "image/*",
           providerMetadata: part.detail === undefined ? undefined : { [key]: { detail: part.detail } },
         }
+      const data = part.file_url === undefined ? part.file_data : part.file_url
       return {
         type: "media",
-        media: replayMedia(part.file_url === undefined ? part.file_data : part.file_url, "application/octet-stream"),
+        data,
         filename: part.filename,
+        mediaType: /^data:([^;,]+)/.exec(data)?.[1] ?? "application/octet-stream",
         providerMetadata: part.detail === undefined ? undefined : { [key]: { detail: part.detail } },
       }
     }),
   })
 }
-
-/** Replayed compaction items carry either a data URL or a remote URL; the data URL's own type wins when present. */
-const replayMedia = (value: string, fallbackType: string) =>
-  Media.parseDataUrl(value) ??
-  (/^https?:\/\//.test(value) ? Media.url(value, { mediaType: fallbackType }) : Media.base64(value, fallbackType))
 
 export * as ResponsesCompaction from "./responses-compaction.js"

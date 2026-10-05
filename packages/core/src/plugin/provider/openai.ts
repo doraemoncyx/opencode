@@ -1,6 +1,5 @@
 import type { IntegrationOAuthMethodRegistration } from "@opencode/plugin/effect/integration"
 import { define } from "@opencode/plugin/effect/plugin"
-import type { SessionRequest } from "@opencode/plugin/effect/session"
 import { Deferred, Effect, Option, Schema, Semaphore, Stream } from "effect"
 import type { Server } from "node:http"
 import { App } from "../../app.js"
@@ -9,7 +8,6 @@ import { Bus } from "../../bus.js"
 import { Integration } from "../../integration.js"
 import { OauthCallbackPage } from "../../oauth/page.js"
 import { Provider } from "../../provider.js"
-import { SessionAffinity } from "../../session/affinity.js"
 import type { PluginInternal } from "../internal.js"
 
 const clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -253,29 +251,27 @@ export const OpenAIPlugin = define({
       editor.method.update(headless(ctx.app))
     })
     yield* load()
-    yield* ctx.provider.transform((providers) => {
-      const item = providers.get(Provider.ID.openai)
+    yield* ctx.catalog.transform((evt) => {
+      const item = evt.provider.get(Provider.ID.openai)
       if (!item) return
-      const account = chatgpt?.metadata?.accountID
-      providers.update(item.provider.id, (provider) => {
-        provider.settings = Provider.mergeOverlay(provider.settings, {
-          transport: provider.settings?.transport ?? "websocket",
-          ...(chatgpt ? { baseURL: codexBaseURL } : {}),
+      for (const model of item.models.values()) {
+        evt.model.update(item.provider.id, model.id, (draft) => {
+          draft.capabilities.responsesWebsockets = true
+          draft.websocket = true
         })
-        if (!chatgpt) return
-        provider.headers = Provider.mergeHeaders(provider.headers, {
-          originator: "opencode",
-          "x-codex-beta-features": "remote_compaction_v2",
-          ...(typeof account === "string" ? { "chatgpt-account-id": account } : {}),
-        })
+      }
+      if (!chatgpt) return
+      item.provider.settings = Provider.mergeOverlay(item.provider.settings, { baseURL: codexBaseURL })
+      const account = chatgpt.metadata?.accountID
+      item.provider.headers = Provider.mergeHeaders(item.provider.headers, {
+        originator: "opencode",
+        "x-codex-beta-features": "remote_compaction_v2",
+        ...(typeof account === "string" ? { "chatgpt-account-id": account } : {}),
       })
-    })
-    yield* ctx.model.transform((models) => {
-      for (const model of models.list(Provider.ID.openai)) {
+      for (const model of item.models.values()) {
         // ChatGPT-plan tokens only authorize codex-eligible models, and the
         // subscription covers usage, so hide the rest and zero the cost.
-        models.update(model.providerID, model.id, (draft) => {
-          if (!chatgpt) return
+        evt.model.update(item.provider.id, model.id, (draft) => {
           if (Schema.is(Schema.Struct({ mode: Schema.Literal("pro") }))(draft.body?.reasoning)) {
             draft.enabled = false
             return
@@ -300,27 +296,16 @@ export const OpenAIPlugin = define({
     yield* ctx.session.hook(
       "model.request",
       (evt) =>
-        Effect.gen(function* () {
+        Effect.sync(() => {
           if (!chatgpt) return
           if (evt.baseURL && URL.canParse(evt.baseURL) && new URL(evt.baseURL).origin === "https://api.openai.com")
             evt.baseURL = codexBaseURL
-          const session = yield* ctx.session
-            .get({ sessionID: evt.sessionID })
-            .pipe(Effect.orElseSucceed(() => undefined))
           evt.headers.originator = "opencode"
-          // ChatGPT routes its prompt cache on this header, so children share the parent's.
-          evt.headers["session-id"] = session ? SessionAffinity.get(session) : evt.sessionID
+          evt.headers["session-id"] = evt.sessionID
         }),
       { providerID: Provider.ID.openai },
     )
-    // The ChatGPT backend rejects a requested output limit, and OpenAI counts one against rate limits.
-    const omitOutputLimit = (evt: SessionRequest) =>
-      Effect.sync(() => {
-        delete evt.options.maxTokens
-      })
-    for (const name of ["context", "compaction"] as const)
-      yield* ctx.session.hook(name, omitOutputLimit, { providerID: Provider.ID.openai })
-    const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.provider.reload())))
+    const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.catalog.reload())))
     yield* bus.subscribe(Credential.Event.Switched).pipe(
       Stream.filter((event) => event.data.integrationID === Integration.ID.make("openai")),
       Stream.runForEach(refresh),

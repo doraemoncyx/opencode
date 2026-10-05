@@ -8,7 +8,7 @@ export function workerFactory(): Worker {
   return new Worker(ShikiWorkerUrl, { type: "module" })
 }
 
-function createPool(lineDiffType: "none" | "word-line") {
+function createPool(lineDiffType: "none" | "word-alt") {
   const pool = new WorkerPoolManager(
     {
       workerFactory,
@@ -36,7 +36,7 @@ function createPool(lineDiffType: "none" | "word-line") {
 let plain: WorkerPoolManager | undefined
 let diff: WorkerPoolManager | undefined
 
-export function getWorkerPool(lineDiffType: "none" | "word-line" = "word-line"): WorkerPoolManager | undefined {
+export function getWorkerPool(lineDiffType: "none" | "word-alt" = "word-alt"): WorkerPoolManager | undefined {
   if (typeof window === "undefined") return
 
   if (lineDiffType === "none") {
@@ -44,7 +44,7 @@ export function getWorkerPool(lineDiffType: "none" | "word-line" = "word-line"):
     return plain
   }
 
-  if (!diff) diff = createPool("word-line")
+  if (!diff) diff = createPool("word-alt")
   return diff
 }
 

@@ -6,8 +6,24 @@ function history(): TitlebarHistory {
 }
 
 describe("titlebar history", () => {
-  test("trims to the maximum and keeps back and forward indexes correct", () => {
-    const state = ["/", "/a", "/b", "/c"].reduce((current, url) => applyPath(current, { url }, 3), history())
+  test("append and trim keeps max bounded", () => {
+    let state = history()
+    state = applyPath(state, { url: "/" }, 3)
+    state = applyPath(state, { url: "/a" }, 3)
+    state = applyPath(state, { url: "/b" }, 3)
+    state = applyPath(state, { url: "/c" }, 3)
+
+    expect(state.stack.map((entry) => entry.url)).toEqual(["/a", "/b", "/c"])
+    expect(state.stack.length).toBe(3)
+    expect(state.index).toBe(2)
+  })
+
+  test("back and forward indexes stay correct after trimming", () => {
+    let state = history()
+    state = applyPath(state, { url: "/" }, 3)
+    state = applyPath(state, { url: "/a" }, 3)
+    state = applyPath(state, { url: "/b" }, 3)
+    state = applyPath(state, { url: "/c" }, 3)
 
     expect(state.stack.map((entry) => entry.url)).toEqual(["/a", "/b", "/c"])
     expect(state.index).toBe(2)
@@ -55,20 +71,12 @@ describe("titlebar history", () => {
     expect(forwardPath(applyPath(back.state, back.to))?.to).toEqual(second)
   })
 
-  test("settings pages and settings state replace one history entry", () => {
+  test("replacing settings state does not add a back navigation", () => {
     const initial = applyPath(history(), { url: "/settings", state: { tab: "general" } })
     const updated = applyPath(initial, { url: "/settings", state: { tab: "models" } })
     expect(updated.stack).toHaveLength(2)
     const back = backPath(updated)!
     expect(back.to.url).toBe("/")
     expect(forwardPath(applyPath(back.state, back.to))?.to.state).toEqual({ tab: "models" })
-
-    const models = applyPath(applyPath(history(), { url: "/settings" }), { url: "/settings?tab=models" })
-    const project = applyPath(models, { url: "/settings?server=local&project=%2Fwork&tab=extensions" })
-    expect(project.stack.map((entry) => entry.url)).toEqual([
-      "/",
-      "/settings?server=local&project=%2Fwork&tab=extensions",
-    ])
-    expect(backPath(project)?.to.url).toBe("/")
   })
 })

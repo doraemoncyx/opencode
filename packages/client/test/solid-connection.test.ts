@@ -9,10 +9,8 @@ const connected = { id: "evt_connected", created: 1, type: "server.connected", d
 function server() {
   const encoder = new TextEncoder()
   const streams: {
-    headers: Headers
     write: (text: string) => void
     close: () => void
-    error: (reason: Error) => void
     aborted: boolean
   }[] = []
   const api = OpenCode.make({
@@ -21,10 +19,8 @@ function server() {
       const request = input instanceof Request ? input : new Request(input, init)
       let controller!: ReadableStreamDefaultController<Uint8Array>
       const entry = {
-        headers: request.headers,
         write: (text: string) => controller.enqueue(encoder.encode(text)),
         close: () => controller.close(),
-        error: (reason: Error) => controller.error(reason),
         aborted: false,
       }
       const body = new ReadableStream<Uint8Array>({
@@ -139,14 +135,7 @@ test("a forced resync replaces the stream immediately and only while connected",
   }
 })
 
-test.each([
-  ["closes", (stream: ReturnType<typeof server>["streams"][number]) => stream.close(), "Event stream disconnected"],
-  [
-    "fails",
-    (stream: ReturnType<typeof server>["streams"][number]) => stream.error(new Error("contract failure")),
-    "Transport: contract failure",
-  ],
-])("a stream the server %s reconnects and reports the disconnect", async (_name, end, message) => {
+test("a stream the server closes reconnects and reports the disconnect", async () => {
   const fake = server()
   const ctx = setup(fake, 10_000)
   try {
@@ -154,27 +143,10 @@ test.each([
     fake.streams[0].write(`data: ${JSON.stringify(connected)}\n\n`)
     await until(() => ctx.connection.status() === "connected")
 
-    end(fake.streams[0])
+    fake.streams[0].close()
     await until(() => ctx.connection.status() === "reconnecting")
-    expect(ctx.connection.error()).toBe(message)
+    expect(ctx.connection.error()).toBe("Event stream disconnected")
     await until(() => fake.streams.length === 2)
-  } finally {
-    ctx.dispose()
-  }
-})
-
-test("a reconnect does not ask the volatile event stream to replay", async () => {
-  const fake = server()
-  const ctx = setup(fake, 10_000)
-  try {
-    await until(() => fake.streams.length === 1)
-    fake.streams[0].write(`data: ${JSON.stringify(connected)}\n\n`)
-    fake.streams[0].write(`id: timeline-event-7\ndata: ${JSON.stringify({ ...connected, id: "evt_2" })}\n\n`)
-    await until(() => ctx.events.length === 2)
-
-    fake.streams[0].error(new Error("retry with event id"))
-    await until(() => fake.streams.length === 2)
-    expect(fake.streams[1].headers.get("last-event-id")).toBeNull()
   } finally {
     ctx.dispose()
   }

@@ -16,7 +16,7 @@ import {
   toolPart,
   userMessage,
   waitForVisualSettle,
-} from "../../utils/timeline"
+} from "./fixture"
 
 const profiles = [
   {

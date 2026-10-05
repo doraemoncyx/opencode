@@ -2,6 +2,7 @@ import { DiagramCanvas } from "../core/canvas.js"
 import { diagramTextWidth } from "../core/text.js"
 import type { GanttGrid } from "./render-grid.js"
 import type {
+  GanttCellStyle,
   GanttDiagram,
   GanttDiagramRenderOptions,
   GanttLabelLayout,

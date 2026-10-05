@@ -13,8 +13,10 @@ const CHAIN_ENV = [
   "AWS_CONTAINER_CREDENTIALS_FULL_URI",
 ]
 
-const isBedrock = (item: { readonly package: string }) =>
-  item.package.startsWith("@opencode/ai/providers/amazon-bedrock")
+const isBedrock = (item: { readonly package: string }) => {
+  const name = Provider.packageName(item.package)
+  return name.startsWith("@ai-sdk/amazon-bedrock") || name.startsWith("@opencode/ai/providers/amazon-bedrock")
+}
 
 export const AmazonBedrockPlugin = define({
   id: "opencode.provider.amazon.bedrock",
@@ -28,10 +30,10 @@ export const AmazonBedrockPlugin = define({
         method: { type: "env", names: ["AWS_BEARER_TOKEN_BEDROCK"] },
       })
     })
-    yield* ctx.provider.transform((evt) => {
-      for (const item of evt.list()) {
+    yield* ctx.catalog.transform((evt) => {
+      for (const item of evt.provider.list()) {
         if (!isBedrock(item.provider)) continue
-        evt.update(item.provider.id, (provider) => {
+        evt.provider.update(item.provider.id, (provider) => {
           const settings = provider.settings ?? {}
           const chain = typeof settings.profile === "string" || CHAIN_ENV.some((name) => process.env[name])
           // SigV4 authenticates through the AWS default chain rather than a key

@@ -27,14 +27,12 @@ const referenced = (value: unknown) => sql`
 
 export function createDraftStore(
   db: Database,
-  input: { collectDelay?: number; onError?: (error: unknown) => void } = {},
+  input: { delay?: number; onError?: (error: unknown) => void; now?: () => number } = {},
 ) {
-  // Orphans left by an earlier session are collected once the window is up rather than before it:
-  // the scan walks every stored document, and the usual grace keeps anything a renderer has
-  // uploaded in the meantime.
-  const startup = setTimeout(() => collectBlobs(db, Date.now() - blobGrace), input.collectDelay ?? 10_000)
-  startup.unref()
-  let collected = Date.now()
+  const now = input.now ?? Date.now
+  // Nothing outside this process can hold a blob id at startup, so no grace applies.
+  collectBlobs(db, Infinity)
+  let collected = now()
   let orphans = false
   const byKey = eq(document.key, sql.placeholder("key"))
   const read = db.select({ value: document.value }).from(document).where(byKey).prepare()
@@ -45,10 +43,10 @@ export function createDraftStore(
     .onConflictDoUpdate({ target: document.key, set: { value: sql.placeholder("value") } })
     .prepare()
   const writer = createWriteBehind<string | null>({
-    delay: 500,
+    delay: input.delay ?? 500,
     onError: input.onError,
     write: (batch) => {
-      const at = Date.now()
+      const at = now()
       db.transaction(() => {
         for (const [key, value] of batch) {
           if (value === null) {
@@ -92,7 +90,7 @@ export function createDraftStore(
     },
     putBlob(data: Uint8Array) {
       const id = createHash("sha256").update(data).digest("hex")
-      const touched_at = Date.now()
+      const touched_at = now()
       db.insert(blobs)
         .values({ id, data: Buffer.from(data), touched_at })
         .onConflictDoUpdate({ target: blobs.id, set: { touched_at } })
@@ -100,16 +98,11 @@ export function createDraftStore(
       orphans = true
       return id
     },
-    getBlob(id: string): Uint8Array<ArrayBuffer> | null {
-      const data = db.select({ data: blobs.data }).from(blobs).where(eq(blobs.id, id)).get()?.data
-      // node:sqlite allocates a dedicated ArrayBuffer per BLOB column value.
-      return data ? (data as Uint8Array<ArrayBuffer>) : null
+    getBlob(id: string): Uint8Array | null {
+      return db.select({ data: blobs.data }).from(blobs).where(eq(blobs.id, id)).get()?.data ?? null
     },
     flush: writer.flush,
-    close() {
-      clearTimeout(startup)
-      writer.close()
-    },
+    close: writer.close,
   }
 }
 

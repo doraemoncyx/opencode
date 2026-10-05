@@ -1,15 +1,10 @@
-import {
-  displayName,
-  getProjectAvatarSource,
-  getProjectAvatarVariant,
-  ProjectAvatar,
-  type ProjectAvatarProps,
-} from "@opencode/ui/project-avatar"
+import { ProjectAvatar, type ProjectAvatarProps } from "@opencode/ui/project-avatar"
 import { splitProps } from "solid-js"
-import type { LocalProject } from "@/shell/state/layout"
+import { displayName, getProjectAvatarSource } from "@/shell/layout/helpers"
+import { getProjectAvatarVariant, type LocalProject } from "@/shell/state/layout"
 
 type ProjectIconProps = Omit<ProjectAvatarProps, "fallback" | "src" | "variant"> & {
-  project: Pick<LocalProject, "id" | "name" | "worktree" | "icon">
+  project: LocalProject
   fallback?: string
   icon?: LocalProject["icon"]
 }

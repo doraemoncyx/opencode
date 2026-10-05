@@ -5,9 +5,9 @@ import path from "path"
 import { Context, Effect, Layer, Schema } from "effect"
 import { FSUtil } from "@opencode/util/fs-util"
 import { Location } from "./location.js"
-import { AbsolutePath, PositiveInt, RelativePath } from "./schema.js"
+import { PositiveInt, RelativePath } from "./schema.js"
 import { FileSystemSearch } from "./filesystem/search.js"
-import { Entry, FileSystem, FindInput, Write } from "@opencode/schema/filesystem"
+import { Entry, FileSystem, FindInput } from "@opencode/schema/filesystem"
 export { Entry, Match, Submatch } from "@opencode/schema/filesystem"
 
 export const ReadInput = Schema.Struct({
@@ -15,40 +15,9 @@ export const ReadInput = Schema.Struct({
 })
 export type ReadInput = typeof ReadInput.Type
 
-export const WriteInput = Schema.Struct({
-  /** Absolute, or relative to the location directory. */
-  path: Schema.String,
-  data: Schema.Uint8Array,
-})
-export type WriteInput = typeof WriteInput.Type
-
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()("FileSystem.NotFoundError", {
   path: RelativePath,
 }) {}
-
-export class DirectoryNotFoundError extends Schema.TaggedError<DirectoryNotFoundError>()(
-  "FileSystem.DirectoryNotFoundError",
-  {
-    directory: AbsolutePath,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message() {
-    return `Directory not found: ${this.directory}`
-  }
-}
-
-export class DirectoryAccessDeniedError extends Schema.TaggedError<DirectoryAccessDeniedError>()(
-  "FileSystem.DirectoryAccessDeniedError",
-  {
-    directory: AbsolutePath,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message() {
-    return `Access denied to directory: ${this.directory}`
-  }
-}
 
 export const Content = Schema.Struct({
   uri: Schema.String,
@@ -64,7 +33,7 @@ export const ListInput = Schema.Struct({
 })
 export type ListInput = typeof ListInput.Type
 
-export { FindInput, Write }
+export { FindInput }
 
 export const DEFAULT_SEARCH_LIMIT = 100
 export const DEFAULT_SEARCH_TIMEOUT_MS = 30_000
@@ -93,8 +62,6 @@ export interface Interface {
   ) => Effect.Effect<{ readonly content: Uint8Array; readonly mime: string }, NotFoundError>
   readonly list: (input?: ListInput) => Effect.Effect<Entry[]>
   readonly find: (input: FindInput) => Effect.Effect<Entry[]>
-  /** Writes a file at an absolute path or one relative to the location; not confined to it. */
-  readonly write: (input: WriteInput) => Effect.Effect<Write>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/FileSystem") {}
@@ -111,24 +78,7 @@ const baseLayer = Layer.effect(
     // configured directory as canonical; local placements keep symlink
     // canonicalization. This skip is boot-only: resolve/read/list below still
     // access the host filesystem per operation (tracked in #44568).
-    const root = location.workspaceID
-      ? location.directory
-      : yield* fs.realPath(location.directory).pipe(
-          Effect.catch((cause): Effect.Effect<never, DirectoryNotFoundError | DirectoryAccessDeniedError> => {
-            if (cause.reason._tag === "NotFound")
-              return Effect.fail(new DirectoryNotFoundError({ directory: location.directory, cause }))
-            // macOS privacy denials arrive as Unknown with an EPERM cause.
-            if (
-              cause.reason._tag === "PermissionDenied" ||
-              (cause.reason._tag === "Unknown" &&
-                cause.reason.cause instanceof Error &&
-                "code" in cause.reason.cause &&
-                cause.reason.cause.code === "EPERM")
-            )
-              return Effect.fail(new DirectoryAccessDeniedError({ directory: location.directory, cause }))
-            return Effect.die(cause)
-          }),
-        )
+    const root = location.workspaceID ? location.directory : yield* fs.realPath(location.directory).pipe(Effect.orDie)
     const resolve = Effect.fnUntraced(function* (input?: RelativePath) {
       const absolute = path.resolve(location.directory, input ?? ".")
       if (!FSUtil.contains(location.directory, absolute))
@@ -192,13 +142,6 @@ const baseLayer = Layer.effect(
               .sort((a, b) => (a.type === b.type ? a.path.localeCompare(b.path) : a.type === "directory" ? -1 : 1)),
           ),
         )
-      }),
-      // Unlike read, write reaches outside the location so clients can stage files in the
-      // server tmp directory, which the model is already told to prefer and permitted to access.
-      write: Effect.fn("FileSystem.write")(function* (input) {
-        const target = path.resolve(location.directory, input.path)
-        yield* fs.writeWithDirs(target, input.data).pipe(Effect.orDie)
-        return Write.make({ path: AbsolutePath.make(target) })
       }),
     })
   }),

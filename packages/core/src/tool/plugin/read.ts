@@ -20,7 +20,7 @@ const LocationInput = Schema.Struct({
     description: "The line or directory entry to start reading from (1-based)",
   }),
   limit: ReadToolFileSystem.PageInput.fields.limit.annotate({
-    description: "The maximum number of lines or directory entries to read (defaults to and capped at 2000)",
+    description: "The maximum number of lines or directory entries to read (defaults to 2000)",
   }),
 })
 export const Input = LocationInput
@@ -88,16 +88,15 @@ export const Plugin = {
                 if (result.target.externalDirectory !== undefined) return
                 const resolved = yield* fs.resolve(result.target.absolute)
                 const root = yield* fs.resolve(location.directory)
-                // The Location and its ancestors are already supplied by initial instructions,
-                // even when an upward walk from elsewhere in the project cannot reach root.
+                // up() searches its stop directory, so the Location-root AGENTS.md (already
+                // supplied by core initial instructions) is dropped by the dirname filter.
                 const discovered = yield* fs.up({
                   targets: [FILENAME],
                   start: result.content.type === "list-page" ? resolved : dirname(resolved),
                   stop: root,
-                  type: "file",
                 })
                 const candidates = (yield* Effect.forEach(discovered, fs.resolve)).filter(
-                  (file) => !FSUtil.contains(dirname(file), root) && file !== resolved,
+                  (file) => dirname(file) !== root,
                 )
                 if (candidates.length === 0) return
                 yield* sessionInstructions.load({ sessionID: context.sessionID, paths: candidates })
@@ -136,14 +135,9 @@ export const Plugin = {
       .pipe(Effect.orDie)
 
     const alternatePath = Effect.fn("ReadTool.alternatePath")(function* (absolute: string) {
-      const canonical = (name: string) =>
-        name
-          .normalize("NFC")
-          .replace(/[\u00a0\u202f]/g, " ")
-          .replace(/[\u2018\u2019]/g, "'")
-      const base = canonical(basename(absolute))
+      const base = basename(absolute).replace(/[\u00a0\u202f]/g, " ")
       const matches = (yield* reader.list(AbsolutePath.make(dirname(absolute)))).filter(
-        (entry) => entry.type === "file" && canonical(entry.name) === base,
+        (entry) => entry.type === "file" && entry.name.replace(/[\u00a0\u202f]/g, " ") === base,
       )
       if (matches.length !== 1) return
       return join(dirname(absolute), matches[0].name)

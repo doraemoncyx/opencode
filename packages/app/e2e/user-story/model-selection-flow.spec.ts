@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test"
-import { provider, sessionHref } from "../utils/app"
+import { fixture } from "../performance/timeline/session-timeline-stress.fixture"
+import { installStressSessionTabs, stressSessionHref } from "../performance/timeline/timeline-test-helpers"
 import { mockOpenCodeServer } from "../utils/mock-server"
 import { expectAppVisible } from "../utils/waits"
-import { openSession } from "../utils/workspace"
 
 const directory = "C:/OpenCode/NewProject"
 
@@ -115,24 +115,42 @@ test("creates a session in a new project and selects its model", async ({ page }
 
 test("restores each existing session's model and variant when switching tabs", async ({ page }) => {
   const sessions = ["A", "B"].map((name) => ({
+    ...fixture.sessions[0],
     id: `ses_model_${name}`,
     title: `Model ${name}`,
     model: { id: `model-${name}`, providerID: "opencode", variant: "balanced" },
   }))
-  await openSession(page, {
-    name: "ModelSelection",
+  await mockOpenCodeServer(page, {
+    ...fixture,
     sessions,
-    provider: provider(
-      ...sessions.map((session) => ({
-        id: session.model.id,
-        name: session.title,
-        variants: { balanced: {}, high: {} },
-      })),
-    ),
+    provider: {
+      all: [
+        {
+          id: "opencode",
+          name: "OpenCode",
+          models: Object.fromEntries(
+            sessions.map((session) => [
+              session.model.id,
+              {
+                id: session.model.id,
+                name: session.title,
+                limit: { context: 200_000 },
+                variants: { balanced: {}, high: {} },
+              },
+            ]),
+          ),
+        },
+      ],
+      connected: ["opencode"],
+      default: { providerID: "opencode", modelID: sessions[0]!.model.id },
+    },
+    pageMessages: () => ({ items: [] }),
   })
+  await installStressSessionTabs(page, { sessionIDs: sessions.map((session) => session.id) })
 
-  const hrefA = sessionHref(sessions[0]!.id)
-  const hrefB = sessionHref(sessions[1]!.id)
+  const hrefA = stressSessionHref(sessions[0]!.id)
+  const hrefB = stressSessionHref(sessions[1]!.id)
+  await page.goto(hrefA)
   const composer = page.locator('[data-component="composer"]')
   const modelControl = composer.locator('[data-action="composer-model"]')
   const variant = composer.getByRole("button", { name: "Choose model variant", exact: true })
@@ -146,15 +164,6 @@ test("restores each existing session's model and variant when switching tabs", a
   await expect(page).toHaveURL(hrefB)
   await expect(modelControl).toHaveText("Model B")
   await expect(variant).toHaveText("balanced")
-  await variant.click()
-  await page.getByRole("menuitemradio", { name: "high", exact: true }).click()
-  await expect(variant).toHaveText("high")
-
-  // A new draft starts from the current session's non-default model and chosen variant.
-  await page.getByRole("button", { name: "New session", exact: true }).click()
-  await expect(page).toHaveURL(/\/new-session\?draftId=/)
-  await expect(modelControl).toHaveText("Model B")
-  await expect(variant).toHaveText("high")
 
   await page.locator(`[data-titlebar-tab-link][href="${hrefA}"]`).click()
   await expect(page).toHaveURL(hrefA)

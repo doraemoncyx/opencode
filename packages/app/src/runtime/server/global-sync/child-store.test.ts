@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, mock, test } from "bun:test"
-import { createRoot, getOwner } from "solid-js"
+import { createRoot, getOwner, type Owner } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { State } from "./types"
 import type { QueryOptionsApi } from "../sync"
@@ -15,6 +15,7 @@ const persist: typeof persisted = (_target, _schema, initial) => [
   Object.assign(() => true, { promise: undefined }),
 ]
 
+const child = () => createStore({} as State)
 const path = { state: "", config: "", worktree: "", directory: "", home: "" }
 const data = {
   location: {
@@ -53,29 +54,13 @@ const queryOptionsApi = {
   sessions: (directory: string) => ({ queryKey: [directory, "loadSessions"] as const }),
 } as unknown as QueryOptionsApi
 
-function setup(input: { connected?: () => boolean } = {}) {
-  const bootstraps: string[] = []
-  const mcpLoads: string[] = []
-  const offset = querySingles.length
+function createOwner(callback: (owner: Owner) => void) {
   return createRoot((dispose) => {
     const owner = getOwner()
     if (!owner) throw new Error("owner required")
-    const manager = createChildStoreManager({
-      owner,
-      connected: input.connected ?? (() => true),
-      scope: ServerScope.local,
-      persist,
-      isBooting: () => false,
-      isLoadingSessions: () => false,
-      onBootstrap: (directory) => bootstraps.push(directory),
-      onMcp: (directory) => mcpLoads.push(directory),
-      onDispose() {},
-      translate: (key) => key,
-      queryOptions: queryOptionsApi,
-      data,
-      global: { path },
-    })
-    return { manager, bootstraps, mcpLoads, queries: () => querySingles.slice(offset), dispose }
+    callback(owner)
+
+    return dispose
   })
 }
 
@@ -108,25 +93,68 @@ beforeAll(async () => {
 
 describe("createChildStoreManager", () => {
   test("does not evict the active directory during mark", () => {
-    const { manager, dispose } = setup()
-    try {
-      Array.from({ length: 30 }, (_, index) => `/pinned-${index}`).forEach((directory) => {
-        manager.children[directory] = createStore({} as State)
-        manager.pin(directory)
-      })
-
-      manager.children["/active"] = createStore({} as State)
-      manager.mark("/active")
-
-      expect(manager.children["/active"]).toBeDefined()
-    } finally {
+    const owner = createRoot((dispose) => {
+      const current = getOwner()
       dispose()
-    }
+      return current
+    })
+    if (!owner) throw new Error("owner required")
+
+    const manager = createChildStoreManager({
+      owner,
+      connected: () => true,
+      scope: ServerScope.local,
+      persist,
+      isBooting: () => false,
+      isLoadingSessions: () => false,
+      onBootstrap() {},
+      onMcp() {},
+      onDispose() {},
+      translate: (key) => key,
+      queryOptions: queryOptionsApi,
+      data,
+      global: { path },
+    })
+
+    Array.from({ length: 30 }, (_, index) => `/pinned-${index}`).forEach((directory) => {
+      manager.children[directory] = child()
+      manager.pin(directory)
+    })
+
+    const directory = "/active"
+    manager.children[directory] = child()
+    manager.mark(directory)
+
+    expect(manager.children[directory]).toBeDefined()
   })
 
   test("starts new child stores as loading and bootstraps them on first access", () => {
-    const { manager, bootstraps, dispose } = setup()
+    const bootstraps: string[] = []
+    let manager: ReturnType<typeof createChildStoreManager> | undefined
+
+    const dispose = createOwner((owner) => {
+      manager = createChildStoreManager({
+        owner,
+        connected: () => true,
+        scope: ServerScope.local,
+        persist,
+        isBooting: () => false,
+        isLoadingSessions: () => false,
+        onBootstrap(directory) {
+          bootstraps.push(directory)
+        },
+        onMcp() {},
+        onDispose() {},
+        translate: (key) => key,
+        queryOptions: queryOptionsApi,
+        data,
+        global: { path },
+      })
+    })
+
     try {
+      if (!manager) throw new Error("manager required")
+
       const [store] = manager.child("/project")
 
       expect(store.status).toBe("loading")
@@ -137,8 +165,29 @@ describe("createChildStoreManager", () => {
   })
 
   test("provides the requested directory while the path query is pending", () => {
-    const { manager, dispose } = setup()
+    let manager: ReturnType<typeof createChildStoreManager> | undefined
+
+    const dispose = createOwner((owner) => {
+      manager = createChildStoreManager({
+        owner,
+        connected: () => true,
+        scope: ServerScope.local,
+        persist,
+        isBooting: () => false,
+        isLoadingSessions: () => false,
+        onBootstrap() {},
+        onMcp() {},
+        onDispose() {},
+        translate: (key) => key,
+        queryOptions: queryOptionsApi,
+        data,
+        global: { path },
+      })
+    })
+
     try {
+      if (!manager) throw new Error("manager required")
+
       const [store] = manager.child("/project", { bootstrap: false })
 
       expect(store.path.directory).toBe("/project")
@@ -148,11 +197,67 @@ describe("createChildStoreManager", () => {
     }
   })
 
-  test("syncs MCP only when requested for the directory", () => {
-    const { manager, mcpLoads, queries, dispose } = setup()
+  test("writes refreshed VCS data to the child store", () => {
+    let manager: ReturnType<typeof createChildStoreManager> | undefined
+    const dispose = createOwner((owner) => {
+      manager = createChildStoreManager({
+        owner,
+        connected: () => true,
+        scope: ServerScope.local,
+        persist,
+        isBooting: () => false,
+        isLoadingSessions: () => false,
+        onBootstrap() {},
+        onMcp() {},
+        onDispose() {},
+        translate: (key) => key,
+        queryOptions: queryOptionsApi,
+        data,
+        global: { path },
+      })
+    })
+
     try {
+      if (!manager) throw new Error("manager required")
+      const [store] = manager.child("/project", { bootstrap: false })
+
+      manager.vcs("/project", { branch: "feature", default_branch: "main" })
+
+      expect(store.vcs).toEqual({ branch: "feature", default_branch: "main" })
+    } finally {
+      dispose()
+    }
+  })
+
+  test("syncs MCP only when requested for the directory", () => {
+    let manager: ReturnType<typeof createChildStoreManager> | undefined
+    const offset = querySingles.length
+    const mcpLoads: string[] = []
+
+    const dispose = createOwner((owner) => {
+      manager = createChildStoreManager({
+        owner,
+        connected: () => true,
+        scope: ServerScope.local,
+        persist,
+        isBooting: () => false,
+        isLoadingSessions: () => false,
+        onBootstrap() {},
+        onMcp(directory) {
+          mcpLoads.push(directory)
+        },
+        onDispose() {},
+        translate: (key) => key,
+        queryOptions: queryOptionsApi,
+        data,
+        global: { path },
+      })
+    })
+
+    try {
+      if (!manager) throw new Error("manager required")
       const [, setStore] = manager.child("/project", { bootstrap: false })
-      expect(queries()).toHaveLength(1)
+      expect(querySingles.length - offset).toBe(1)
 
       setStore("status", "complete")
       manager.child("/project", { bootstrap: false, mcp: true })
@@ -166,37 +271,113 @@ describe("createChildStoreManager", () => {
   })
 
   test("keeps non-bootstrapping children passive until a real directory access", () => {
-    const { manager, bootstraps, queries, dispose } = setup()
-    try {
-      const [store] = manager.child("/project", { bootstrap: false })
+    let manager: ReturnType<typeof createChildStoreManager> | undefined
+    const offset = querySingles.length
+    const bootstraps: string[] = []
 
-      expect(queries()).toHaveLength(1)
-      expect(queries()[0]?.().enabled).toBe(false)
+    const dispose = createOwner((owner) => {
+      manager = createChildStoreManager({
+        owner,
+        connected: () => true,
+        scope: ServerScope.local,
+        persist,
+        isBooting: () => false,
+        isLoadingSessions: () => false,
+        onBootstrap(directory) {
+          bootstraps.push(directory)
+        },
+        onMcp() {},
+        onDispose() {},
+        translate: (key) => key,
+        queryOptions: queryOptionsApi,
+        data,
+        global: { path },
+      })
+    })
+
+    try {
+      if (!manager) throw new Error("manager required")
+      const [store] = manager.child("/project", { bootstrap: false })
+      const queries = querySingles.slice(offset)
+
+      expect(queries).toHaveLength(1)
+      expect(queries[0]?.().enabled).toBe(false)
       expect(store.path.directory).toBe("/project")
       expect(store.provider_ready).toBe(false)
       expect(store.lsp_ready).toBe(false)
       expect(bootstraps).toEqual([])
 
       manager.child("/project")
-      expect(queries()[0]?.().enabled).toBe(true)
+      expect(queries[0]?.().enabled).toBe(true)
       expect(bootstraps).toEqual(["/project"])
 
       manager.child("/project", { bootstrap: false })
-      expect(queries()[0]?.().enabled).toBe(true)
+      expect(queries[0]?.().enabled).toBe(true)
+    } finally {
+      dispose()
+    }
+  })
+
+  test("does not mark unsynced provider data as ready", () => {
+    let manager: ReturnType<typeof createChildStoreManager> | undefined
+
+    const dispose = createOwner((owner) => {
+      manager = createChildStoreManager({
+        owner,
+        connected: () => true,
+        scope: ServerScope.local,
+        persist,
+        isBooting: () => false,
+        isLoadingSessions: () => false,
+        onBootstrap() {},
+        onMcp() {},
+        onDispose() {},
+        translate: (key) => key,
+        queryOptions: queryOptionsApi,
+        data,
+        global: { path },
+      })
+    })
+
+    try {
+      if (!manager) throw new Error("manager required")
+      const [store] = manager.child("/cancelled")
+      expect(store.provider_ready).toBe(false)
     } finally {
       dispose()
     }
   })
 
   test("does not enable location queries before the event handshake", () => {
-    const connection = { connected: false }
-    const { manager, queries, dispose } = setup({ connected: () => connection.connected })
-    try {
-      manager.child("/handshake")
-      expect(queries()[0]?.().enabled).toBe(false)
+    let manager: ReturnType<typeof createChildStoreManager> | undefined
+    let connected = false
+    const offset = querySingles.length
+    const dispose = createOwner((owner) => {
+      manager = createChildStoreManager({
+        owner,
+        connected: () => connected,
+        scope: ServerScope.local,
+        persist,
+        isBooting: () => false,
+        isLoadingSessions: () => false,
+        onBootstrap() {},
+        onMcp() {},
+        onDispose() {},
+        translate: (key) => key,
+        queryOptions: queryOptionsApi,
+        data,
+        global: { path },
+      })
+    })
 
-      connection.connected = true
-      expect(queries()[0]?.().enabled).toBe(true)
+    try {
+      if (!manager) throw new Error("manager required")
+      manager.child("/handshake")
+      const queries = querySingles.slice(offset)
+      expect(queries[0]?.().enabled).toBe(false)
+
+      connected = true
+      expect(queries[0]?.().enabled).toBe(true)
     } finally {
       dispose()
     }

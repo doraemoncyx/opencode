@@ -1,6 +1,6 @@
 import { expect } from "bun:test"
 import { Effect, Schema } from "effect"
-import { LLM, Media, Message } from "../../src/index.js"
+import { LLM, Message } from "../../src/index.js"
 import { OpenAI, Azure, XAI } from "../../src/providers.js"
 import { compileRequest } from "../../src/route/client.js"
 import { it } from "../lib/effect.js"
@@ -16,7 +16,8 @@ for (const model of [
       const message = Message.user(
         details.map((detail) => ({
           type: "media",
-          media: Media.url("https://example.com/image.png", { mediaType: "image/png" }),
+          mediaType: "image/png",
+          data: "https://example.com/image.png",
           providerMetadata:
             detail === undefined ? undefined : { [model.route.providerMetadataKey ?? model.provider]: { detail } },
         })),
@@ -47,7 +48,8 @@ it.effect("rejects malformed image detail instead of silently discarding it", ()
         messages: [
           Message.user({
             type: "media",
-            media: Media.url("https://example.com/image.png", { mediaType: "image/png" }),
+            mediaType: "image/png",
+            data: "https://example.com/image.png",
             providerMetadata: { openai: { detail: 42 } },
           }),
         ],

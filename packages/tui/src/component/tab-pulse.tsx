@@ -29,7 +29,7 @@ type TabPulseOptions = RenderableOptions<TabPulseRenderable> & {
   onLevel?: (level: number) => void
 }
 
-export const clamp = (value: number) => Math.max(0, Math.min(1, value))
+const clamp = (value: number) => Math.max(0, Math.min(1, value))
 export const smootherstep = (value: number) => value * value * value * (value * (value * 6 - 15) + 10)
 const RUN_DURATION = 2_800
 const RUN_ATTACK = 450
@@ -777,6 +777,7 @@ export function TabPulse(props: {
   flashColor?: RGBA
   outerFlashColor?: RGBA
   flashTail?: number
+  outerFlashTail?: number
   completionColor?: RGBA
   outerCompletionColor?: RGBA
   backgroundColor: RGBA
@@ -807,7 +808,7 @@ export function TabPulse(props: {
       flashColor={props.flashColor ?? props.color}
       outerFlashColor={props.outerFlashColor ?? props.flashColor ?? props.outerColor ?? props.color}
       flashTail={props.flashTail}
-      outerFlashTail={props.flashTail}
+      outerFlashTail={props.outerFlashTail ?? props.flashTail}
       completionColor={props.completionColor ?? props.color}
       outerCompletionColor={props.outerCompletionColor ?? props.completionColor ?? props.outerColor ?? props.color}
       backgroundColor={props.backgroundColor}

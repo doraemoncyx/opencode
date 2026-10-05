@@ -3,11 +3,11 @@ title: "Commands"
 description: "Reference for the opencode command line."
 ---
 
-Every command accepts `--help` for its full flag list, for example `opencode run --help`. Some server-backed commands accept `--standalone` to run a private server or `--server <url>` to target a specific one; check the command's help for its supported flags.
+Every command accepts `--help` for its full flag list, for example `opencode run --help`. Commands that talk to a server also accept `--standalone` to run a private server and `--server <url>` to target a specific one.
 
 ## run
 
-Sends a message and prints the reply without opening the interactive interface.
+`opencode run` sends a message and prints the reply without opening the interactive interface.
 
 ```bash
 $ opencode run "Explain this repository"
@@ -70,7 +70,7 @@ $ opencode run --help
 
 ## mini
 
-Starts the minimal interactive interface instead of the full-screen TUI.
+`opencode mini` starts the minimal interactive interface instead of the full-screen TUI.
 
 ```bash
 $ opencode mini
@@ -96,7 +96,7 @@ $ opencode mini --help
 
 ## session
 
-Manages sessions.
+`opencode session` manages sessions.
 
 ```bash
 $ opencode session list
@@ -146,7 +146,7 @@ $ opencode session --help
 
 ## auth
 
-Manages AI providers and credentials.
+`opencode auth` manages AI providers and credentials.
 
 ```bash
 $ opencode auth list
@@ -167,7 +167,7 @@ $ opencode auth login anthropic
 Log in with a specific authentication method.
 
 ```bash
-$ opencode auth login anthropic --method key
+$ opencode auth login anthropic --method api-key
 ```
 
 Log out of a saved account.
@@ -190,7 +190,7 @@ $ opencode auth --help
 
 ## models
 
-Lists every available model.
+`opencode models` lists every available model.
 
 ```bash
 $ opencode models
@@ -204,7 +204,7 @@ $ opencode models --help
 
 ## mcp
 
-Manages MCP (Model Context Protocol) servers.
+`opencode mcp` manages MCP (Model Context Protocol) servers.
 
 ```bash
 $ opencode mcp list
@@ -254,7 +254,7 @@ $ opencode mcp --help
 
 ## plugin
 
-Manages plugins.
+`opencode plugin` manages plugins.
 
 ```bash
 $ opencode plugin list
@@ -298,7 +298,7 @@ $ opencode plugin --help
 
 ## stats
 
-Shows shareable usage statistics.
+`opencode stats` shows shareable usage statistics.
 
 ```bash
 $ opencode stats
@@ -336,7 +336,7 @@ $ opencode stats --help
 
 ## serve
 
-Starts the API and web server. See [Web](/cli/web).
+`opencode serve` starts the API and web server. See [Web](/cli/web).
 
 ```bash
 $ opencode serve
@@ -362,14 +362,13 @@ $ opencode serve --help
 
 ## pair
 
-Prints one-time links, plus a QR code of the first one, that sign a browser or
-app in to the server. Links expire after 5 minutes and work once.
+`opencode pair` shows server pairing information, including URLs, credentials, and a QR code.
 
 ```bash
 $ opencode pair
 ```
 
-Use an external URL in the links.
+Advertise an external URL in the QR code.
 
 ```bash
 $ opencode pair --url https://dev.example.com
@@ -383,7 +382,7 @@ $ opencode pair --help
 
 ## service
 
-Manages the background server. See [Web](/cli/web).
+`opencode service` manages the background server. See [Web](/cli/web).
 
 ```bash
 $ opencode service start
@@ -443,17 +442,9 @@ View all subcommands and flags.
 $ opencode service --help
 ```
 
-## reload
-
-Reloads configuration without restarting the server. Running sessions continue with fresh services at the next step boundary.
-
-```bash
-$ opencode reload
-```
-
 ## api
 
-Makes a request to the running server.
+`opencode api` makes a request to the running server.
 
 ```bash
 $ opencode api GET /api/session
@@ -462,13 +453,13 @@ $ opencode api GET /api/session
 Call an operation ID with a query parameter.
 
 ```bash
-$ opencode api session.list --param limit=10
+$ opencode api v2.session.list --param limit=10
 ```
 
 Send a JSON body.
 
 ```bash
-$ opencode api session.create --data '{"title": "New session"}'
+$ opencode api v2.session.create --data '{"title": "New session"}'
 ```
 
 Add a request header.
@@ -485,7 +476,7 @@ $ opencode api --help
 
 ## acp
 
-Starts an Agent Client Protocol server over stdin and stdout for editor integrations. It runs until the client closes the connection.
+`opencode acp` starts an Agent Client Protocol server over stdin and stdout for editor integrations. It runs until the client closes the connection.
 
 ```bash
 $ opencode acp
@@ -499,7 +490,7 @@ $ opencode acp --help
 
 ## debug
 
-Provides debugging and troubleshooting tools.
+`opencode debug` provides debugging and troubleshooting tools.
 
 ```bash
 $ opencode debug agents
@@ -531,7 +522,7 @@ $ opencode debug --help
 
 ## upgrade
 
-Upgrades OpenCode to the latest or a specific version. Alias: `update`.
+`opencode upgrade` upgrades OpenCode to the latest or a specific version. Alias: `update`.
 
 ```bash
 $ opencode upgrade
@@ -540,7 +531,7 @@ $ opencode upgrade
 Upgrade to a specific version with a specific package manager.
 
 ```bash
-$ opencode upgrade 2.0.21 --method bun
+$ opencode upgrade 1.18.15 --method bun
 ```
 
 View all subcommands and flags.
@@ -551,7 +542,7 @@ $ opencode upgrade --help
 
 ## uninstall
 
-Removes OpenCode and all related files.
+`opencode uninstall` removes OpenCode and all related files.
 
 ```bash
 $ opencode uninstall

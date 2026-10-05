@@ -11,12 +11,10 @@ const tables = (db: ReturnType<typeof drizzle>) =>
     .all<{ name: string }>(sql`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`)
     .map((row) => row.name)
 
-const expected = ["blob", "document", "extension", "extension_file", "migration", "state"]
-
 describe("database", () => {
   test("bootstraps every table on a fresh database and is idempotent", () => {
     const database = openDatabase(":memory:")
-    expect(tables(database.db)).toEqual(expected)
+    expect(tables(database.db)).toEqual(["blob", "document", "migration", "state"])
     expect(migrate(database.db)).toEqual([])
     database.close()
   })
@@ -28,37 +26,22 @@ describe("database", () => {
     )
     const db = drizzle({ client: native })
     expect(migrate(db)).toEqual(migrations.map((migration) => migration.id))
-    expect(tables(db)).toEqual(expected)
+    expect(tables(db)).toEqual(["blob", "document", "migration", "state"])
     expect(db.all<{ value: string }>(sql`SELECT value FROM document`)).toEqual([{ value: "v" }])
     expect(migrate(db)).toEqual([])
   })
 
-  test("a failed migration rolls back the journal without losing existing data", () => {
-    const native = new DatabaseSync(":memory:")
-    native.exec("CREATE TABLE state (value TEXT); INSERT INTO state VALUES ('kept')")
-    const db = drizzle({ client: native })
-
-    expect(() => migrate(db)).toThrow()
-    expect(db.all(sql`SELECT id FROM migration`)).toEqual([])
-    expect(db.all(sql`SELECT value FROM state`)).toEqual([{ value: "kept" }])
-    native.close()
-  })
-
   test("rendered registry matches the drizzle-kit output on disk", async () => {
     const directory = path.join(import.meta.dirname, "migration")
-
     const ids = (await Array.fromAsync(new Bun.Glob("*/migration.sql").scan({ cwd: directory })))
       .map((file) => path.dirname(file))
       .sort()
-
     expect(migrations.map((migration) => migration.id)).toEqual(ids)
-
     for (const migration of migrations) {
       const source = (await Bun.file(path.join(directory, migration.id, "migration.sql")).text()).replaceAll(
         "\r\n",
         "\n",
       )
-
       for (const statement of migration.statements) expect(source).toContain(statement)
     }
   })

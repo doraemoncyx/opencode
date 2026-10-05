@@ -1,6 +1,6 @@
 import { CliRenderEvents, InputRenderable, RGBA, ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { Keymap, type KeymapCommand } from "../context/keymap"
-import { useTheme } from "../context/theme"
+import { useTheme, useThemes } from "../context/theme"
 import { entries, filter, flatMap, groupBy, pipe } from "remeda"
 import { batch, createEffect, createMemo, createSignal, For, Show, type JSX, on, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
@@ -29,7 +29,6 @@ export interface DialogSelectProps<T> {
   onSelect?: (option: DialogSelectOption<T>) => void
   onCancel?: () => void
   skipFilter?: boolean
-  search?: (query: string) => readonly DialogSelectOption<T>[]
   renderFilter?: boolean
   locked?: boolean
   preserveSelection?: boolean
@@ -49,7 +48,6 @@ export interface DialogSelectProps<T> {
 type DialogSelectActionBase<T> = {
   command: string
   title: string
-  bind?: string
   side?: "left" | "right"
   hidden?: boolean
   disabled?: boolean | ((option: DialogSelectOption<T> | undefined) => boolean)
@@ -73,11 +71,14 @@ export interface DialogSelectOption<T = any> {
   searchText?: string
   searchFooter?: JSX.Element | string
   details?: string[]
+  detailsColor?: RGBA
+  detailsWrap?: boolean
   footer?: JSX.Element | string
   footerColor?: RGBA
   titleWidth?: number
   truncateTitle?: boolean | "left"
   category?: string
+  categoryView?: JSX.Element
   disabled?: boolean
   bg?: RGBA
   fg?: RGBA
@@ -105,7 +106,9 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   type VisibleAction = (Action & { label: string }) | FooterHint
 
   const dialog = useDialog()
-  const theme = useTheme().surface("dialog")
+  const themes = useThemes()
+  const theme = useTheme("elevated")
+  const mode = themes.mode
   const config = useConfig().data
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const renderer = useRenderer()
@@ -135,7 +138,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     on(
       [() => props.focusTarget ?? props.current, () => (props.focusTarget === undefined ? undefined : flat())],
       ([current]) => {
-        if (props.search || props.focusCurrent === false) return
+        if (props.focusCurrent === false) return
         if (props.focusTarget !== undefined && (props.preserveSelection || store.filter.length > 0)) return
         if (current !== undefined) {
           const currentIndex = flat().findIndex((opt) => isDeepEqual(opt.value, current))
@@ -182,7 +185,6 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   })
 
   const filtered = createMemo(() => {
-    if (props.search) return props.search(store.filter).filter((x) => x.disabled !== true)
     if (props.skipFilter || props.renderFilter === false) return props.options.filter((x) => x.disabled !== true)
     const needle = store.filter.toLowerCase()
     const options = pipe(
@@ -209,7 +211,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     setFocusedAction(undefined)
   })
 
-  const flatten = createMemo(() => props.search !== undefined || (props.flat && store.filter.length > 0))
+  const flatten = createMemo(() => props.flat && store.filter.length > 0)
 
   const grouped = createMemo<[string, DialogSelectOption<T>[]][]>(() => {
     if (flatten()) return filtered().length ? [["", filtered()]] : []
@@ -246,7 +248,6 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     on(
       () => props.options,
       () => {
-        if (props.search) return
         if (
           !props.preserveSelection &&
           ((props.focusTarget ?? props.current) === undefined || props.focusCurrent === false)
@@ -303,36 +304,6 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
       },
     ),
   )
-  createEffect(
-    on(
-      [
-        flat,
-        () => store.filter,
-        () => (props.focusCurrent === false ? undefined : (props.focusTarget ?? props.current)),
-      ],
-      ([options, query, current], previous) => {
-        if (!props.search) return
-        const queryChanged = previous !== undefined && query !== previous[1]
-        const currentChanged = current !== undefined && (previous === undefined || !isDeepEqual(current, previous[2]))
-        selection = intent()
-        const intended = selection
-        const index = intended ? options.findIndex((option) => isDeepEqual(option.value, intended.value)) : -1
-        const next = index >= 0 ? index : reconcileSelection(store.selected, options.length)
-        const option = options[next]
-        if (!option) return
-        setStore("selected", next)
-        selection = option
-        scrollAfterLayout(queryChanged || currentChanged, option.value)
-
-        function intent() {
-          if (queryChanged && query) return options[0]
-          if ((queryChanged || currentChanged) && current !== undefined) return { value: current }
-          if (queryChanged) return options[reconcileSelection(store.selected, options.length)]
-          return selection
-        }
-      },
-    ),
-  )
   onCleanup(() => {
     if (!pendingScroll) return
     renderer.off(CliRenderEvents.FRAME, pendingScroll)
@@ -341,7 +312,6 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
 
   createEffect(
     on([() => store.filter, () => props.focusTarget ?? props.current], ([filter, current]) => {
-      if (props.search) return
       if (filter.length > 0) resetSelection = true
       if (filter.length > 0) {
         const option = flat()[0]
@@ -508,7 +478,6 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           id: item.command,
           title: item.title,
           group: "Dialog",
-          bind: item.bind,
           run: () => trigger(item),
         })),
         ...(visible.length
@@ -627,10 +596,10 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     if (!isActionItem(action.item))
       return (
         <text>
-          <span style={{ fg: theme.text.base }}>
+          <span style={{ fg: theme.text.default }}>
             <b>{action.item.title}</b>{" "}
           </span>
-          <span style={{ fg: theme.text.muted }}>{action.item.label}</span>
+          <span style={{ fg: theme.text.subdued }}>{action.item.label}</span>
         </text>
       )
     const item = action.item
@@ -648,7 +617,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               ? theme.text.action.primary.disabled
               : active()
                 ? theme.text.action.primary.focused
-                : theme.text.base
+                : theme.text.default
           }
           attributes={active() ? TextAttributes.BOLD : undefined}
         >
@@ -660,7 +629,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               ? theme.text.action.primary.disabled
               : active()
                 ? theme.text.action.primary.focused
-                : theme.text.muted
+                : theme.text.subdued
           }
         >
           {" " + item.label}
@@ -674,11 +643,11 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
       <box paddingLeft={4} paddingRight={4}>
         <box flexDirection="row" justifyContent="space-between">
           {props.titleView ?? (
-            <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
+            <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
               {props.title}
             </text>
           )}
-          <text fg={theme.text.muted} onMouseUp={() => (props.onCancel ?? dialog.clear)()}>
+          <text fg={theme.text.subdued} onMouseUp={() => (props.onCancel ?? dialog.clear)()}>
             esc
           </text>
         </box>
@@ -706,7 +675,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                 }, 1)
               }}
               placeholder={props.placeholder ?? "Search"}
-              placeholderColor={theme.text.muted}
+              placeholderColor={theme.text.subdued}
             />
           </box>
         </Show>
@@ -720,14 +689,14 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               fallback={
                 props.emptyView ?? (
                   <box paddingLeft={4} paddingRight={4}>
-                    <text fg={theme.text.muted}>No items available</text>
+                    <text fg={theme.text.subdued}>No items available</text>
                   </box>
                 )
               }
             >
               {props.noMatchView ?? (
                 <box paddingLeft={4} paddingRight={4}>
-                  <text fg={theme.text.muted}>No results found</text>
+                  <text fg={theme.text.subdued}>No results found</text>
                 </box>
               )}
             </Show>
@@ -746,9 +715,16 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                 <>
                   <Show when={category}>
                     <box paddingTop={index() > 0 ? 1 : 0} paddingLeft={3}>
-                      <text fg={theme.hue.accent[200]} attributes={TextAttributes.BOLD}>
-                        {category}
-                      </text>
+                      <Show
+                        when={options[0]?.categoryView}
+                        fallback={
+                          <text fg={theme.hue.accent[mode() === "light" ? 800 : 200]} attributes={TextAttributes.BOLD}>
+                            {category}
+                          </text>
+                        }
+                      >
+                        {options[0]?.categoryView}
+                      </Show>
                     </box>
                   </Show>
                   <For each={options}>
@@ -786,7 +762,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                             backgroundColor={
                               active()
                                 ? actionFocused()
-                                  ? theme.background.raised.high
+                                  ? theme.background.surface.overlay
                                   : (option.bg ?? theme.background.action.primary.focused)
                                 : RGBA.fromInts(0, 0, 0, 0)
                             }
@@ -816,8 +792,13 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                           <For each={option.details}>
                             {(detail) => (
                               <box paddingLeft={3} paddingRight={3}>
-                                <text fg={theme.text.muted} wrapMode="none">
-                                  {Locale.truncateMiddle(detail, Math.max(1, Math.min(76, dimensions().width - 12)))}
+                                <text
+                                  fg={option.detailsColor ?? theme.text.subdued}
+                                  wrapMode={option.detailsWrap ? "word" : "none"}
+                                >
+                                  {option.detailsWrap
+                                    ? detail
+                                    : Locale.truncateMiddle(detail, Math.max(1, Math.min(76, dimensions().width - 12)))}
                                 </text>
                               </box>
                             )}
@@ -862,12 +843,12 @@ function Option(props: {
   activeColor?: RGBA
   onMouseOver?: () => void
 }) {
-  const theme = useTheme().surface("dialog")
+  const theme = useTheme("elevated")
   const text = createMemo(() => {
     if (props.active && !props.muted) return props.activeColor ?? theme.text.action.primary.focused
-    if (props.muted && (props.active || props.current)) return theme.text.muted
+    if (props.muted && (props.active || props.current)) return theme.text.subdued
     if (props.current) return theme.text.formfield.selected
-    return theme.text.base
+    return theme.text.default
   })
 
   return (
@@ -897,7 +878,7 @@ function Option(props: {
               ? Locale.truncateLeft(props.title, props.titleWidth ?? 61)
               : Locale.truncate(props.title, props.titleWidth ?? 61))}
         <Show when={props.description}>
-          <span style={{ fg: props.active && !props.muted ? text() : theme.text.muted }}>
+          <span style={{ fg: props.active && !props.muted ? text() : theme.text.subdued }}>
             {" " + props.description}
           </span>
         </Show>
@@ -909,8 +890,8 @@ function Option(props: {
               props.active && !props.muted
                 ? text()
                 : props.muted && (props.active || props.current)
-                  ? theme.text.muted
-                  : (props.footerColor ?? theme.text.muted)
+                  ? theme.text.subdued
+                  : (props.footerColor ?? theme.text.subdued)
             }
           >
             {props.footer}

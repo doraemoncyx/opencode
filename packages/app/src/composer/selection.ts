@@ -1,6 +1,7 @@
-import { batch, createEffect, createMemo, on } from "solid-js"
+import { batch, type Accessor, createEffect, createMemo, on } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { ComposerControls } from "./adapter"
+import { useLayout } from "@/shell/state/layout"
 import { useLocal, type ModelKey, type ModelSelection } from "@/providers/models/selection"
 import { useWorkspaceLocation } from "@/workspaces/location"
 import { useProviders } from "@/providers/catalog/providers"
@@ -11,11 +12,13 @@ import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } fro
 import { useComposerState } from "./persistence"
 import { useConfiguredModel } from "@/providers/models/configured"
 
-export function createComposerControls(input: { model?: ModelSelection } = {}) {
+export function createComposerControls(input: { sessionKey: Accessor<string>; model?: ModelSelection }) {
+  const layout = useLayout()
   const local = useLocal()
   const sdk = useWorkspaceLocation()
   const data = useData()
   const providers = useProviders(() => sdk().directory)
+  const view = layout.view(input.sessionKey)
 
   return createMemo<ComposerControls>(() => {
     return {
@@ -33,6 +36,10 @@ export function createComposerControls(input: { model?: ModelSelection } = {}) {
           !(input.model ?? local.model).ready() ||
           (local.agent.visible() && data.location.agent.list({ directory: sdk().directory }) === undefined) ||
           !providers.ready(),
+      },
+      session: {
+        tabs: layout.tabs(input.sessionKey),
+        reviewPanel: view.reviewPanel,
       },
     }
   })

@@ -1,10 +1,16 @@
-import { expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { messageIdFromHash } from "./message-id-from-hash"
 
-test.each([
-  ["#message-abc123", "abc123"],
-  ["message-42", "42"],
-  ["#review-panel", undefined],
-])("reads the message ID from %s", (hash, id) => {
-  expect(messageIdFromHash(hash)).toBe(id)
+describe("messageIdFromHash", () => {
+  test("parses hash with leading #", () => {
+    expect(messageIdFromHash("#message-abc123")).toBe("abc123")
+  })
+
+  test("parses raw hash fragment", () => {
+    expect(messageIdFromHash("message-42")).toBe("42")
+  })
+
+  test("ignores non-message anchors", () => {
+    expect(messageIdFromHash("#review-panel")).toBeUndefined()
+  })
 })

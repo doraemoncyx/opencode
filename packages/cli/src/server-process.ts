@@ -1,19 +1,19 @@
 export * as ServerProcess from "./server-process"
 
 import { NodeServices } from "@effect/platform-node"
-import { Service } from "@opencode/client/effect/service"
+import { Service, type DiscoverOptions } from "@opencode/client/effect/service"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Global } from "@opencode/util/global"
 import { OPENCODE_ARTIFACT, OPENCODE_CHANNEL, OPENCODE_VERSION } from "./version"
 import { AppProcess } from "@opencode/util/process"
 import { randomBytes, randomUUID } from "node:crypto"
-import { Effect, Option, Redacted, Schema } from "effect"
+import { Effect, Option, Redacted, Schedule, Schema } from "effect"
 import { PersistentPty } from "@opencode/schema/persistent-pty"
 import { HttpServer } from "effect/unstable/http"
 import { Env } from "./env"
 import { ServiceConfig } from "./services/service-config"
-import { RetainedImage } from "./services/retained-image"
 import { ServiceRegistration } from "./services/service-registration"
+import { Updater } from "./services/updater"
 import { WebUi } from "./services/web-ui"
 import { databasePath } from "./database-path"
 
@@ -49,11 +49,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
     inherited === undefined
       ? undefined
       : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(PersistentPty.Handoff))(inherited).pipe(
-          Effect.catch(() =>
-            Effect.logWarning("Ignoring invalid PTY restart handoff; persistent terminals will start fresh").pipe(
-              Effect.as(undefined),
-            ),
-          ),
+          Effect.mapError(() => new Error("Invalid PTY restart handoff")),
         )
   const global = yield* Global.Service
   if (options.mode === "service") yield* Effect.sync(() => process.chdir(global.home))
@@ -64,14 +60,11 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
       const config = options.mode === "service" ? yield* ServiceConfig.read() : {}
       const hostname = options.hostname ?? config.hostname ?? "127.0.0.1"
       const port = options.port ?? config.port ?? (options.mode === "service" ? ServiceConfig.defaultPort() : undefined)
-      const findIncumbent =
+      const incumbent =
         serviceOptions !== undefined && port !== undefined
-          ? Service.incumbent({ ...serviceOptions, url: serviceURL(hostname, port) })
+          ? yield* Service.incumbent({ ...serviceOptions, url: serviceURL(hostname, port) })
           : undefined
-      if (findIncumbent !== undefined && (yield* findIncumbent) !== undefined) return
-      // Keep a package-manager or curl install replaceable while the service runs; Desktop updates its own copy.
-      if (options.mode === "service" && process.platform === "win32" && RetainedImage.installed(global.home))
-        yield* RetainedImage.retain(global.cache, "service")
+      if (incumbent !== undefined) return
       const { start } = yield* Effect.promise(() => import("@opencode/server/process"))
       const environmentPassword = yield* Env.password
       // Keep the lease credential out of the environment inherited by tools.
@@ -79,16 +72,20 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
         delete process.env.OPENCODE_PASSWORD
         delete process.env.OPENCODE_SERVER_PASSWORD
       }
+      // Managed (service) mode keeps its configured credential, stdio keeps the
+      // environment credential, and a foreground `serve` runs without authentication.
       const password =
         options.mode === "service"
           ? config.password || randomBytes(32).toString("base64url")
-          : environmentPassword
-            ? Redacted.value(environmentPassword)
-            : randomBytes(32).toString("base64url")
-      if (!password) return yield* Effect.fail(new Error("Missing server password"))
+          : options.mode === "stdio"
+            ? environmentPassword
+              ? Redacted.value(environmentPassword)
+              : randomBytes(32).toString("base64url")
+            : undefined
+      if (options.mode !== "default" && !password) return yield* Effect.fail(new Error("Missing server password"))
       const instanceID = randomUUID()
       const transform = yield* WebUi.handler()
-      const launch = start(
+      const server = yield* start(
         {
           app: {
             name: process.env.OPENCODE_CLIENT ?? OPENCODE_ARTIFACT,
@@ -99,6 +96,9 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           port,
           cors: options.cors ?? config.cors,
           password,
+          // The web UI is served from this listener, so the browser that opens it on
+          // this machine cannot supply credentials. Remote peers still authenticate.
+          localAuth: true,
           pty: { handoff },
           simulation: truthy(process.env.OPENCODE_SIMULATE),
           database: {
@@ -128,7 +128,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
                 : !truthy(process.env.OPENCODE_DISABLE_FFF),
           },
         },
-        serviceOptions === undefined
+        serviceOptions === undefined || password === undefined
           ? undefined
           : {
               onListen: (address, shutdown) =>
@@ -144,35 +144,43 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
                 }),
             },
         transform,
-      )
-      const server = yield* launch.pipe(
+      ).pipe(
         Effect.catch((error) => {
-          if (findIncumbent === undefined || !addressInUse(error)) return Effect.fail(error)
-          return Effect.gen(function* () {
-            const deadline = Date.now() + 15_000
-            while (Date.now() < deadline) {
-              const found = yield* findIncumbent.pipe(Effect.timeoutOption(deadline - Date.now()))
-              if (Option.isSome(found) && found.value !== undefined) return
-              yield* Effect.sleep("100 millis")
-              if (Date.now() >= deadline) break
-              // Failed binds close their scope; a successful bind may take longer than this window to boot.
-              const server = yield* launch.pipe(Effect.catchIf(addressInUse, () => Effect.void))
-              if (server !== undefined) return server
-            }
-            return yield* Effect.fail(
-              new Error(
-                `Managed service port ${port} on ${hostname} is already in use by another process. ` +
-                  "Configure another port with `opencode service set port <port>` and start the service again.",
-                { cause: error },
-              ),
-            )
-          })
+          if (serviceOptions === undefined || port === undefined || !addressInUse(error)) return Effect.fail(error)
+          return recognizeIncumbent(serviceOptions, hostname, port).pipe(
+            Effect.flatMap((found) =>
+              found
+                ? Effect.void
+                : Effect.fail(
+                    new Error(
+                      `Managed service port ${port} on ${hostname} is already in use by another process. ` +
+                        "Configure another port with `opencode service set port <port>` and start the service again.",
+                      { cause: error },
+                    ),
+                  ),
+            ),
+          )
         }),
       )
       if (server === undefined) return
       const url = HttpServer.formatAddress(server.address)
       console.log(options.mode === "stdio" ? JSON.stringify({ url }) : `server listening on ${url}`)
-      if (foreground && !environmentPassword) console.log(`server password ${password}`)
+      if (foreground && password !== undefined) console.log(`server password ${password}`)
+      yield* Updater.Service.pipe(
+        Effect.flatMap((updater) =>
+          Updater.pollUpdates({
+            check: updater.run().pipe(
+              Effect.flatMap((result) => {
+                if (!result) return Effect.void
+                if (result.type === "available") return server.updateAvailable(result.version)
+                return server.updated(result.version)
+              }),
+            ),
+          }),
+        ),
+        Effect.provide(Updater.layer),
+        Effect.forkScoped,
+      )
       return yield* options.mode === "service"
         ? server.shutdown
         : options.mode === "stdio"
@@ -180,6 +188,15 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           : Effect.never
     }).pipe(Effect.annotateLogs({ role: "server" })),
   )
+})
+
+const recognizeIncumbent = Effect.fnUntraced(function* (options: DiscoverOptions, hostname: string, port: number) {
+  const found = yield* Service.incumbent({ ...options, url: serviceURL(hostname, port) }).pipe(
+    Effect.filterOrFail((value) => value !== undefined),
+    Effect.retry(Schedule.spaced("100 millis")),
+    Effect.timeoutOption("15 seconds"),
+  )
+  return Option.isSome(found)
 })
 
 function serviceURL(hostname: string, port: number) {

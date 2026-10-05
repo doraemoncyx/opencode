@@ -15,7 +15,7 @@ import {
   setupTimeline,
   toolPart,
   userMessage,
-} from "../../utils/timeline"
+} from "./fixture"
 
 test("adds a subagent child-session link without replacing the row", async ({ page }, testInfo) => {
   const taskID = "prt_subagent_link"

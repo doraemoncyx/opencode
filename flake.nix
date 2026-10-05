@@ -12,6 +12,7 @@
         "aarch64-linux"
         "x86_64-linux"
         "aarch64-darwin"
+        "x86_64-darwin"
       ];
       forEachSystem = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
       rev = self.shortRev or self.dirtyShortRev or "dirty";
@@ -21,7 +22,7 @@
         default = pkgs.mkShell {
           packages = with pkgs; [
             bun
-            nodejs
+            nodejs_20
             pkg-config
             openssl
             git

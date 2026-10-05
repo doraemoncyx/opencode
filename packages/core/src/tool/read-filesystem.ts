@@ -3,6 +3,7 @@ export * as ReadToolFileSystem from "./read-filesystem.js"
 import path from "path"
 import { pathToFileURL } from "url"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
+import { decodeText, detectEncoding, gbkTextDecoder, type FileEncoding } from "@opencode/util/encoding"
 import { Context, Effect, Layer, Schema } from "effect"
 import { lookup } from "mime-types"
 import { Environment } from "../environment/index.js"
@@ -42,10 +43,10 @@ export class MediaIngestLimitError extends Schema.TaggedError<MediaIngestLimitEr
 
 export class OffsetOutOfRangeError extends Schema.TaggedError<OffsetOutOfRangeError>()(
   "ReadTool.OffsetOutOfRangeError",
-  { offset: Schema.Number, lines: Schema.Number },
+  { offset: Schema.Number },
 ) {
   override get message() {
-    return `Offset ${this.offset} is out of range for this file (${this.lines} ${this.lines === 1 ? "line" : "lines"})`
+    return `Offset ${this.offset} is out of range`
   }
 }
 
@@ -68,7 +69,7 @@ export type ReadError =
 
 export const PageInput = Schema.Struct({
   offset: Schema.optionalKey(NonNegativeInt),
-  limit: Schema.optionalKey(NonNegativeInt),
+  limit: Schema.optionalKey(NonNegativeInt.check(Schema.isLessThanOrEqualTo(MAX_READ_LINES))),
 })
 export type PageInput = typeof PageInput.Type
 
@@ -148,6 +149,9 @@ export const read = Effect.fn("ReadTool.read")(function* (
     }
   }
 
+  const encoding = detectEncoding(
+    first.bytes.length >= first.info.size ? first.bytes : dropIncompleteUtf8Tail(first.bytes),
+  )
   const paged = first.info.size > MAX_READ_BYTES || page.offset !== undefined || page.limit !== undefined
   if (!paged) {
     if (first.bytes.includes(0)) return yield* new BinaryFileError({ resource })
@@ -155,22 +159,16 @@ export const read = Effect.fn("ReadTool.read")(function* (
       type: "file" as const,
       uri: pathToFileURL(input).href,
       name: path.basename(input),
-      content: new TextDecoder().decode(first.bytes).split("\n").map(clampLine).join("\n"),
+      content: decodeText(first.bytes, encoding),
       encoding: "utf8" as const,
       mime: mimeType(input),
     }
   }
 
   if (first.bytes.length >= first.info.size) {
-    const result = textPage(first.bytes, true, page)
+    const result = textPage(first.bytes, true, page, encoding)
     if (result === undefined) return yield* Effect.die("Read page did not settle for a complete first chunk")
-    return yield* makeTextPage(
-      input,
-      resource,
-      result,
-      first.bytes.subarray(0, result.consumed).includes(0),
-      lineCount(textLeaf(first.bytes).summary.lines, first.bytes.at(-1)),
-    )
+    return yield* makeTextPage(input, resource, result, first.bytes.subarray(0, result.consumed).includes(0))
   }
 
   const offset = page.offset || 1
@@ -193,7 +191,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
           return [leaf.bytes.subarray(Math.max(0, start - leafStart))]
         }),
       )
-      const result = textPage(selected, eof, { limit })
+      const result = textPage(selected, eof, { limit }, encoding)
       if (result !== undefined) {
         const translated = {
           ...result,
@@ -207,7 +205,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
           checked += leaf.summary.bytes
           return length > 0 && leaf.bytes.subarray(0, length).includes(0)
         })
-        return yield* makeTextPage(input, resource, translated, binary, lineCount(lines, leaves.at(-1)?.bytes.at(-1)))
+        return yield* makeTextPage(input, resource, translated, binary)
       }
     }
 
@@ -240,11 +238,10 @@ const makeTextPage = Effect.fnUntraced(function* (
   resource: string,
   result: NonNullable<ReturnType<typeof textPage>>,
   binary: boolean,
-  lines: number,
 ) {
   if (binary) return yield* new BinaryFileError({ resource })
   if (result.entries.length === 0 && result.offset !== 1)
-    return yield* new OffsetOutOfRangeError({ offset: result.offset, lines })
+    return yield* new OffsetOutOfRangeError({ offset: result.offset })
   return new TextPage({
     type: "text-page",
     content: result.entries.join("\n"),
@@ -288,10 +285,27 @@ const list = (items: ReadonlyArray<Environment.DirEntry>, page: PageInput) => {
   })
 }
 
-const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput) => {
+// A chunk read from a large file can end mid-character. Dropping the
+// incomplete UTF-8 tail keeps a chopped multi-byte sequence from being mistaken
+// for GBK; GBK lead/trail bytes are unaffected because a matching prefix still
+// carries the surrounding CJK text. Newline (0x0A) never occurs inside a UTF-8
+// or GBK character, so line boundaries stay byte-safe.
+const dropIncompleteUtf8Tail = (bytes: Uint8Array) => {
+  for (let length = 1; length <= Math.min(4, bytes.length); length++) {
+    const byte = bytes[bytes.length - length]
+    if (byte < 0x80) break
+    if (byte >= 0xc0) {
+      const width = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : 2
+      return length < width ? bytes.subarray(0, bytes.length - length) : bytes
+    }
+  }
+  return bytes
+}
+
+const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput, encoding: FileEncoding) => {
   const offset = page.offset || 1
   const limit = Math.min(page.limit || MAX_READ_LINES, MAX_READ_LINES)
-  const decoded = new TextDecoder().decode(bytes)
+  const decoded = (encoding === "gbk" ? gbkTextDecoder() : new TextDecoder()).decode(bytes)
   const split = decoded.split("\n")
   const complete = eof ? (split.at(-1) === "" ? split.slice(0, -1) : split) : split.slice(0, -1)
   const available = complete.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line))
@@ -305,7 +319,7 @@ const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput) => {
       next = line
       break
     }
-    const text = clampLine(value)
+    const text = value.length > MAX_LINE_LENGTH ? value.slice(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : value
     const lineSize = Buffer.byteLength(text, "utf-8") + (entries.length > 0 ? 1 : 0)
     if (size + lineSize > MAX_READ_BYTES) {
       next = line
@@ -322,12 +336,6 @@ const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput) => {
   const consumed = consumedLines === 0 ? 0 : (nthNewline(bytes, consumedLines) ?? bytes.length)
   return { entries, offset, next, consumed }
 }
-
-const clampLine = (line: string) =>
-  line.length > MAX_LINE_LENGTH ? line.slice(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : line
-
-// A trailing newline ends the last line instead of starting an empty one.
-const lineCount = (newlines: number, last: number | undefined) => newlines + (last === undefined || last === 10 ? 0 : 1)
 
 type TextSummary = { readonly bytes: number; readonly lines: number }
 // Request-local augmented rope. Subtree byte and newline weights locate a line

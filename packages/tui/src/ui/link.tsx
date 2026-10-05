@@ -1,6 +1,6 @@
 import type { JSX } from "solid-js"
 import type { RGBA } from "@opentui/core"
-import { openUrl } from "@opencode/util/open"
+import open from "open"
 
 export interface LinkProps {
   href: string
@@ -25,7 +25,7 @@ export function Link(props: LinkProps) {
       width={props.width}
       wrapMode={props.wrapMode}
       onMouseUp={() => {
-        openUrl(props.href).catch(() => {})
+        open(props.href).catch(() => {})
       }}
     >
       <a href={props.href}>{displayText}</a>

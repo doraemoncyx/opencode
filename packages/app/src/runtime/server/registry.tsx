@@ -4,12 +4,15 @@ import { type SetStoreFunction, type Store } from "solid-js/store"
 import { Persist, persisted } from "@/runtime/persistence/storage"
 import { pathKey } from "@/workspaces/path-key"
 import { ServerScope } from "@/runtime/server/scope"
-import type { ServerEntry } from "@opencode/gui-extensions/sdk"
 import { ServerHttp, ServerHttpBase, ServerKey, serverState } from "./persistence"
+import type { SshItem } from "@/servers/ssh/types"
 
 type ServerState = ReturnType<typeof serverState>["current"]["Type"]
-// Retain closed paths until reopened so settings can exclude them from the server inventory.
-// The Home page independently limits the visible recently closed entries.
+// The store retains more history than is displayed. Consumers filter recently closed entries
+// against the live project list (dropping deleted projects) and then cap the visible count via
+// RECENTLY_CLOSED_DISPLAY_LIMIT. Retaining extra history ensures entries that are temporarily
+// filtered out do not evict still-visible ones from the persisted store.
+const RECENTLY_CLOSED_HISTORY_LIMIT = 16
 export const RECENTLY_CLOSED_DISPLAY_LIMIT = 5
 
 export function normalizeServerUrl(input: string) {
@@ -22,6 +25,7 @@ export function normalizeServerUrl(input: string) {
 export function serverName(conn?: ServerConnection.Any, ignoreDisplayName = false) {
   if (!conn) return ""
   if (conn.displayName && !ignoreDisplayName) return conn.displayName
+  if (conn.type === "ssh") return conn.host
   return conn.http.url.replace(/^https?:\/\//, "").replace(/\/+$/, "")
 }
 
@@ -47,7 +51,6 @@ export function createServerProjects(input: {
   }
   return {
     list: current,
-    closed: currentClosed,
     recentlyClosed: currentClosed,
     remove,
     open(directory: string) {
@@ -69,7 +72,10 @@ export function createServerProjects(input: {
     close(directory: string) {
       remove(directory)
       const key = pathKey(directory)
-      const closed = [directory, ...currentClosed().filter((worktree) => pathKey(worktree) !== key)]
+      const closed = [directory, ...currentClosed().filter((worktree) => pathKey(worktree) !== key)].slice(
+        0,
+        RECENTLY_CLOSED_HISTORY_LIMIT,
+      )
       setStore("recentlyClosed", input.scope(), closed)
     },
     expand(directory: string) {
@@ -138,43 +144,48 @@ export namespace ServerConnection {
   // Regular web connections
   export type Http = typeof ServerHttp.Type
 
-  // Regular desktop server
   export type Sidecar = {
     type: "sidecar"
-    variant: "base"
     http: HttpBase
-    reconnect?: (signal: AbortSignal) => Promise<HttpBase>
-  } & Base
+  } & (
+    | // Regular desktop server
+    { variant: "base"; reconnect?: (signal: AbortSignal) => Promise<HttpBase> }
+    // WSL server (windows only)
+    | {
+        variant: "wsl"
+        distro: string
+      }
+  ) &
+    Base
 
-  // A server a GUI extension contributes (e.g. SSH or WSL), keyed `${extension}:${id}`
-  export type Extension = {
-    type: "extension"
-    key: string
-    extension: string
-    state: ServerEntry["state"]
-    connecting: boolean
-    authenticationRequired: boolean
-    /** The extension re-resolves the endpoint (e.g. a tunnel), so the connection can drop and come back. */
-    managed: boolean
+  // Remote server desktop can SSH into
+  export type Ssh = {
+    type: "ssh"
+    stage?: SshItem["stage"]
+    connecting?: boolean
+    authenticationRequired?: boolean
+    id?: string
+    host: string
+    // SSH client exposes an HTTP server for the app to use as a proxy
     http: HttpBase
     reconnect?: (signal: AbortSignal) => Promise<HttpBase>
-    /** Called before opening a server that is not ready. Resolves true once it is. */
-    connect?: () => Promise<boolean>
   } & Base
 
   export type Any =
     | Http
     // All these are desktop-only
-    | (Sidecar | Extension)
+    | (Sidecar | Ssh)
 
   export const key = (conn: Any): Key => {
     switch (conn.type) {
       case "http":
         return Key.make(conn.http.url)
-      case "sidecar":
+      case "sidecar": {
+        if (conn.variant === "wsl") return Key.make(`wsl:${conn.distro}`)
         return Key.make("sidecar")
-      case "extension":
-        return Key.make(conn.key)
+      }
+      case "ssh":
+        return Key.make(`ssh:${conn.id ?? conn.host}`)
     }
   }
 
@@ -182,14 +193,6 @@ export namespace ServerConnection {
   export type Key = typeof Key.Type
 
   export const builtin = (conn: Any) => conn.type === "sidecar" && conn.variant === "base"
-  /** Starts sign-in for a server that asks for it; false when it does not. */
-  export const authenticate = (conn: Any, onConnected?: () => void) => {
-    if (conn.type !== "extension" || !conn.authenticationRequired || !conn.connect) return false
-    void conn.connect().then((ready) => {
-      if (ready) onConnected?.()
-    })
-    return true
-  }
   export const local = (conn?: Any) =>
     !!conn && (builtin(conn) || (conn.type === "http" && isLocalHost(conn.http.url) === "local"))
 }
@@ -202,7 +205,7 @@ export const { use: useServers, provider: ServersProvider } = createSimpleContex
     canonicalLocalServer?: ServerConnection.Key
     servers?: Array<ServerConnection.Any>
   }) => {
-    const [store, setStore, _, hydrated] = persisted(
+    const [store, setStore, _] = persisted(
       {
         ...Persist.global("server"),
         sync: true,
@@ -260,9 +263,6 @@ export const { use: useServers, provider: ServersProvider } = createSimpleContex
       get visible() {
         return visibleServers()
       },
-      // Named to avoid the context `ready` gate: consumers that derive from persisted project
-      // state wait on this, but the provider must not block first render on storage.
-      hydrated,
       isHidden(key: ServerConnection.Key) {
         return store.hidden[key] ?? false
       },

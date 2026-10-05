@@ -168,6 +168,12 @@
     align-items: center;
     flex-shrink: 0;
   }
+
+  [data-slot="block-duration"] {
+    margin-inline-start: auto;
+    padding-inline-start: 8px;
+    flex-shrink: 0;
+  }
 }
 
 [data-component="collapsible"].tool-collapsible[data-compact="true"] > [data-slot="collapsible-trigger"] {

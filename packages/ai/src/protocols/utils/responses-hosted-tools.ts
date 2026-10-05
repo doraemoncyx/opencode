@@ -33,7 +33,7 @@ export const onDone: (
   state: OpenResponses.ParserState,
   item: Item,
   tools: Definitions,
-) => Effect.Effect<OpenResponses.StepResult, AIError> = Effect.fnUntraced(
+) => Effect.Effect<OpenResponses.StepResult, AIError> = Effect.fn("ResponsesHostedTools.onDone")(
   function* (state, item, tools) {
     const tool = tools[item.type]
     if (!tool) return [state, []] satisfies OpenResponses.StepResult

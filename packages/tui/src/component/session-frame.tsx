@@ -76,12 +76,12 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
   let rightNode: BoxRenderable | undefined
   let panelNode: BoxRenderable | undefined
   createResource(
-    () => (sessions.available() ? props.sessionID : undefined),
+    () => (config.data.session.terminal ? props.sessionID : undefined),
     (sessionID) => sessions.refresh(sessionID).catch(() => undefined),
   )
   const session = () => sessions.get(props.sessionID)
   const selectedTerminal = () => {
-    if (!sessions.available()) return
+    if (!config.data.session.terminal) return
     const value = session()
     return value.terminals.find((terminal) => terminal.id === value.selectedTerminalID)
   }
@@ -193,7 +193,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
           dialog.clear()
         },
       },
-      ...(sessions.available()
+      ...(config.data.session.terminal
         ? [
             {
               id: "terminal.toggle",
@@ -291,7 +291,6 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
             promptMuted={activePane() !== "session"}
             sidebarVisible={rightPane() === "sidebar"}
             onToggleSidebar={toggleSidebar}
-            terminals={sessions.available()}
             visibleTerminalID={rightPane() === "terminal" ? selectedTerminal()?.id : undefined}
             onTerminalPicker={(show) => (showTerminals = show)}
             width={sessionWidth()}

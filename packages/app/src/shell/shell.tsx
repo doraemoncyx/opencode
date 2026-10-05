@@ -1,30 +1,41 @@
-import { Show, Suspense, type ParentProps } from "solid-js"
+import { lazy, Show, Suspense, type ParentProps } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
 import { ResizeHandle } from "@opencode/ui/resize-handle"
-import { Titlebar } from "@/shell/titlebar/titlebar"
+import { Titlebar, type TitlebarUpdate } from "@/shell/titlebar/titlebar"
 import { usePlatform } from "@/runtime/platform/platform"
 import { ToastRegion } from "@/shell/notifications/toast"
-import { UploadToastHost } from "@/composer/attachments/uploads"
 import { TitlebarRightProvider } from "@/shell/titlebar/right-slot"
 import { useSettingsSurface } from "@/settings/surface"
 import { useSettings } from "@/settings/model"
-import { ExtensionServerCover } from "@/runtime/extension/server-shell"
-import { ExtensionSlot } from "@/runtime/extension/render"
+import { SshAuthentication } from "@/servers/ssh/authentication"
+
+const DebugBar = lazy(() => import("@/shell/debug/debug-bar").then((module) => ({ default: module.DebugBar })))
 
 export default function Layout(props: ParentProps) {
   const platform = usePlatform()
   const settings = useSettingsSurface()
   const preferences = useSettings()
   const mobile = createMediaQuery("(max-width: 767px)")
-
-  const [state, setState] = createStore<{ tabsWidth: number; tabsMount: HTMLElement | undefined }>({
+  const [state, setState] = createStore({
+    debugTools: false,
     tabsWidth: 260,
-    tabsMount: undefined,
+    tabsMount: undefined as HTMLElement | undefined,
   })
-
   const verticalTabs = () => preferences.appearance.tabLayout() === "vertical" && !mobile()
   const bottomTitlebar = () => mobile() && preferences.general.mobileTitlebarPosition() === "bottom"
+
+  const update: TitlebarUpdate = {
+    get version() {
+      const state = platform.updater?.state()
+      if (state?.status !== "ready") return undefined
+      return state.version
+    },
+    get installing() {
+      return platform.updater?.state().status === "installing"
+    },
+    install: () => void platform.updater?.install(),
+  }
 
   return (
     <TitlebarRightProvider>
@@ -42,7 +53,15 @@ export default function Layout(props: ParentProps) {
             : "max(0px, calc(8px - var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))))",
         }}
       >
-        <Titlebar verticalTabs={verticalTabs() ? { mount: state.tabsMount } : undefined} />
+        <Titlebar
+          update={update}
+          verticalTabs={verticalTabs() ? { mount: state.tabsMount } : undefined}
+          debugTools={
+            import.meta.env.DEV
+              ? { visible: state.debugTools, toggle: () => setState("debugTools", (value) => !value) }
+              : undefined
+          }
+        />
         <div class="flex flex-1 min-h-0 min-w-0 flex-row">
           <Show when={verticalTabs()}>
             <aside
@@ -79,14 +98,17 @@ export default function Layout(props: ParentProps) {
               "--settings-top-inset": mobile() && !bottomTitlebar() ? "0px" : "var(--shell-top-inset, 8px)",
             }}
           >
-            <ExtensionServerCover>
+            <SshAuthentication>
               <Suspense>{props.children}</Suspense>
-            </ExtensionServerCover>
+            </SshAuthentication>
           </main>
         </div>
-        <ExtensionSlot at="window.bottom" input={{}} />
+        <Show when={import.meta.env.DEV && state.debugTools}>
+          <Suspense>
+            <DebugBar inline />
+          </Suspense>
+        </Show>
         <ToastRegion />
-        <UploadToastHost />
       </div>
     </TitlebarRightProvider>
   )

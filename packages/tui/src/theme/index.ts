@@ -1,33 +1,25 @@
-import { migrateV1, parseThemeDocument, type ThemeDocument, type ModeDefinition } from "@opencode/theme/tui"
+import { Schema } from "effect"
+import { migrateV1, resolveThemeDocument, ThemeDocument, themeDecodeError } from "@opencode/theme/tui"
 import { resolveThemeColors } from "./resolve"
 import { DEFAULT_THEMES, type Theme, type ThemeV1Json } from "./v1"
-import opencode from "./assets/v2/opencode.json" with { type: "json" }
 
-export { DEFAULT_THEMES, type Theme, type ThemeV1Json } from "./v1"
+export { DEFAULT_THEMES, generateSyntax, selectedForeground, type Theme, type ThemeV1Json } from "./v1"
+export { resolveThemeDocument, type ThemeDocument }
 
 export type ThemeDocumentSource = Record<string, unknown>
 
+const pluginThemes: Record<string, ThemeDocumentSource> = {}
 let customThemes: Record<string, ThemeDocumentSource> = {}
 let systemTheme: ThemeDocumentSource | undefined
 const listeners = new Set<(themes: Record<string, ThemeDocumentSource>) => void>()
 const parsed = new WeakMap<object, ThemeDocument>()
-let opencodeTheme: (ThemeDocument & {
-  readonly light: ModeDefinition
-  readonly dark: ModeDefinition
-}) | undefined
-
-export function getOpenCodeTheme() {
-  if (opencodeTheme) return opencodeTheme
-  const document = parseThemeDocument(opencode, "opencode") as NonNullable<typeof opencodeTheme>
-  opencodeTheme = document
-  return document
-}
+const decodeThemeDocument = Schema.decodeUnknownSync(ThemeDocument, { reportInput: true })
 
 function listThemes(): Record<string, ThemeDocumentSource> {
-  // Priority: defaults < custom files < generated system.
+  // Priority: defaults < plugin installs < custom files < generated system.
   const themes: Record<string, ThemeDocumentSource> = {
     ...DEFAULT_THEMES,
-    opencode: getOpenCodeTheme(),
+    ...pluginThemes,
     ...customThemes,
   }
   return {
@@ -47,14 +39,20 @@ export function allThemes() {
 
 export function isThemeSource(source: unknown): source is ThemeDocumentSource {
   if (typeof source !== "object" || source === null || Array.isArray(source)) return false
-  return "theme" in source || "base" in source
+  return "theme" in source || "version" in source
 }
 
 export function parseTheme(source: ThemeDocumentSource, name = "theme") {
   const cached = parsed.get(source)
   if (cached) return cached
 
-  const document = "theme" in source ? migrateV1(source as ThemeV1Json) : parseThemeDocument(source, name)
+  const version = source.version ?? 1
+  const document =
+    version === 1
+      ? migrateV1(source as ThemeV1Json)
+      : version === 2
+        ? decodeV2Theme(source, name)
+        : unsupportedThemeVersion(version)
 
   parsed.set(source, document)
   return document
@@ -82,6 +80,27 @@ export function hasTheme(name: string) {
   return allThemes()[name] !== undefined
 }
 
+export function addTheme(name: string, theme: unknown) {
+  if (!name) return false
+  if (!isThemeSource(theme)) return false
+  if (hasTheme(name)) return false
+  pluginThemes[name] = theme
+  syncThemes()
+  return true
+}
+
+export function upsertTheme(name: string, theme: unknown) {
+  if (!name) return false
+  if (!isThemeSource(theme)) return false
+  if (customThemes[name] !== undefined) {
+    customThemes[name] = theme
+  } else {
+    pluginThemes[name] = theme
+  }
+  syncThemes()
+  return true
+}
+
 export function resolveTheme(theme: ThemeV1Json, mode: "dark" | "light"): Theme {
   const resolved = resolveThemeColors(theme, mode)
   return {
@@ -89,4 +108,16 @@ export function resolveTheme(theme: ThemeV1Json, mode: "dark" | "light"): Theme 
     _hasSelectedListItemText: resolved.hasSelectedListItemText,
     thinkingOpacity: resolved.thinkingOpacity,
   }
+}
+
+function decodeV2Theme(source: ThemeDocumentSource, name: string) {
+  try {
+    return decodeThemeDocument(source)
+  } catch (error) {
+    throw themeDecodeError(error, name)
+  }
+}
+
+function unsupportedThemeVersion(version: unknown): never {
+  throw new Error(`Unsupported theme version: ${String(version)}`)
 }

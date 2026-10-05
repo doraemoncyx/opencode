@@ -1,5 +1,4 @@
 import { type AstNode, type Binding, referenceError, typeError } from "./model.js"
-import type { Value } from "./objects.js"
 
 export class ScopeStack {
   private readonly scopes: Array<Map<string, Binding>>
@@ -16,7 +15,7 @@ export class ScopeStack {
     scope.set(name, { mutable, value: undefined, initialized: false })
   }
 
-  initialize(name: string, value: Value, node: AstNode): void {
+  initialize(name: string, value: unknown, node: AstNode): void {
     const binding = this.current().get(name)
     if (!binding || binding.initialized !== false) {
       throw typeError(`Identifier '${name}' has not been reserved for initialization.`, node)
@@ -25,7 +24,7 @@ export class ScopeStack {
     binding.initialized = true
   }
 
-  declare(name: string, value: Value, mutable: boolean, node: AstNode): void {
+  declare(name: string, value: unknown, mutable: boolean, node: AstNode): void {
     const scope = this.current()
     if (scope.has(name)) {
       throw typeError(`Identifier '${name}' has already been declared.`, node)
@@ -33,7 +32,7 @@ export class ScopeStack {
     scope.set(name, { mutable, value, initialized: true })
   }
 
-  get(name: string, node: AstNode): Value {
+  get(name: string, node: AstNode): unknown {
     const binding = this.resolve(name)
 
     if (!binding) {
@@ -47,7 +46,7 @@ export class ScopeStack {
     return binding.value
   }
 
-  set(name: string, value: Value, node: AstNode): Value {
+  set(name: string, value: unknown, node: AstNode): unknown {
     const binding = this.resolve(name)
 
     if (!binding) {

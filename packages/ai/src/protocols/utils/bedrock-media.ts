@@ -76,8 +76,8 @@ function documentName(filename: string | undefined, names: Set<string>) {
   return name
 }
 
-const mediaBase64 = Effect.fnUntraced(function* (part: MediaPart) {
-  const media = yield* ProviderShared.requireInlineMedia("Bedrock Converse", part.media)
+const mediaBase64 = Effect.fn("BedrockMedia.mediaBase64")(function* (part: MediaPart) {
+  const media = ProviderShared.normalizeMedia(part)
   const bytes = yield* Effect.fromResult(Encoding.decodeBase64(media.base64)).pipe(
     Effect.mapError((cause) =>
       ProviderShared.invalidRequest("Bedrock Converse media data must be valid base64", cause),
@@ -91,16 +91,14 @@ const mediaBase64 = Effect.fnUntraced(function* (part: MediaPart) {
 // document block. Image MIME types not in `IMAGE_FORMATS` (e.g. `image/svg+xml`)
 // get an image-specific error so the caller knows it's a format-support issue,
 // not a kind-detection issue.
-export const lower = Effect.fnUntraced(function* (part: MediaPart, documentNames: Set<string>) {
-  const mime = part.media.mediaType.toLowerCase()
+export const lower = Effect.fn("BedrockMedia.lower")(function* (part: MediaPart, documentNames: Set<string>) {
+  const mime = part.mediaType.toLowerCase()
   const imageFormat = IMAGE_FORMATS[mime as keyof typeof IMAGE_FORMATS]
   if (imageFormat) {
     return [{ image: { format: imageFormat, source: { bytes: yield* mediaBase64(part) } } } satisfies ImageBlock]
   }
   if (mime.startsWith("image/"))
-    return yield* ProviderShared.invalidRequest(
-      `Bedrock Converse does not support image media type ${part.media.mediaType}`,
-    )
+    return yield* ProviderShared.invalidRequest(`Bedrock Converse does not support image media type ${part.mediaType}`)
   const documentFormat = DOCUMENT_FORMATS[mime as keyof typeof DOCUMENT_FORMATS]
   if (documentFormat) {
     const name = documentName(part.filename, documentNames)
@@ -114,7 +112,7 @@ export const lower = Effect.fnUntraced(function* (part: MediaPart, documentNames
         ]
       : [block]
   }
-  return yield* ProviderShared.invalidRequest(`Bedrock Converse does not support media type ${part.media.mediaType}`)
+  return yield* ProviderShared.invalidRequest(`Bedrock Converse does not support media type ${part.mediaType}`)
 })
 
 export * as BedrockMedia from "./bedrock-media.js"

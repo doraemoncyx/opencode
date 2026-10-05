@@ -23,7 +23,7 @@ export function getProjectAvatarVariant(key?: string) {
 
 const [all, setAll] = createSignal<string[]>([])
 const [active, setActive] = createSignal<string | undefined>(undefined)
-const [sideOpen, setSideOpen] = createSignal(false)
+const [reviewOpen, setReviewOpen] = createSignal(false)
 
 export function useCurrentRoute() {
   return () => ({ type: "home" as const })
@@ -44,10 +44,10 @@ const tabs = {
 }
 
 const view = {
-  side: {
-    opened: sideOpen,
-    toggle() {
-      setSideOpen((opened) => !opened)
+  reviewPanel: {
+    opened: reviewOpen,
+    open() {
+      setReviewOpen(true)
     },
   },
 }

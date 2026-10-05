@@ -39,56 +39,29 @@ const mergeStringRecords = (
 export const ProviderOptions = Schema.Record(Schema.String, Schema.Unknown)
 export type ProviderOptions = Schema.Schema.Type<typeof ProviderOptions>
 
-export const ProviderMetadata = Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Unknown)).annotate({
-  identifier: "LLM.ProviderMetadata",
-})
-export type ProviderMetadata = Schema.Schema.Type<typeof ProviderMetadata>
-
 export const mergeProviderOptions = (
   ...items: ReadonlyArray<ProviderOptions | undefined>
 ): ProviderOptions | undefined => mergeJsonRecords(...items)
-
-/** Milliseconds for an HTTP timeout, or `false` to disable it. */
-export const HttpTimeout = Schema.Union([Schema.Number.check(Schema.isGreaterThan(0)), Schema.Literal(false)])
-export type HttpTimeout = Schema.Schema.Type<typeof HttpTimeout>
-
-/** Applied to `headerTimeout` and `chunkTimeout` when a request leaves them unset. */
-export const DEFAULT_HTTP_TIMEOUT_MS = 300_000
 
 export class HttpOptions extends Schema.Class<HttpOptions>("AI.HttpOptions")({
   body: Schema.optional(JsonSchema),
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   query: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-  /** Time allowed for the whole request, from send until the response completes. Unbounded when unset. */
-  timeout: Schema.optional(HttpTimeout),
-  /** Time allowed for response headers to arrive. */
-  headerTimeout: Schema.optional(HttpTimeout),
-  /** Time allowed between streamed response chunks once headers have arrived. */
-  chunkTimeout: Schema.optional(HttpTimeout),
 }) {}
 
 export namespace HttpOptions {
   export type Input = HttpOptions | ConstructorParameters<typeof HttpOptions>[0]
 
-  /** Normalize HTTP option input into the canonical `HttpOptions` class; `undefined` stays `undefined`. */
-  export function make(input: Input): HttpOptions
-  export function make(input: Input | undefined): HttpOptions | undefined
-  export function make(input: Input | undefined) {
-    if (input === undefined || input instanceof HttpOptions) return input
-    return new HttpOptions(input)
-  }
+  /** Normalize HTTP option input into the canonical `HttpOptions` class. */
+  export const make = (input: Input) => (input instanceof HttpOptions ? input : new HttpOptions(input))
 }
 
 export const mergeHttpOptions = (...items: ReadonlyArray<HttpOptions | undefined>): HttpOptions | undefined => {
   const body = mergeJsonRecords(...items.map((item) => item?.body))
   const headers = mergeStringRecords(...items.map((item) => item?.headers))
   const query = mergeStringRecords(...items.map((item) => item?.query))
-  const timeout = items.findLast((item) => item?.timeout !== undefined)?.timeout
-  const headerTimeout = items.findLast((item) => item?.headerTimeout !== undefined)?.headerTimeout
-  const chunkTimeout = items.findLast((item) => item?.chunkTimeout !== undefined)?.chunkTimeout
-  if (!body && !headers && !query && timeout === undefined && headerTimeout === undefined && chunkTimeout === undefined)
-    return undefined
-  return new HttpOptions({ body, headers, query, timeout, headerTimeout, chunkTimeout })
+  if (!body && !headers && !query) return undefined
+  return new HttpOptions({ body, headers, query })
 }
 
 export class GenerationOptions extends Schema.Class<GenerationOptions>("LLM.GenerationOptions")({
@@ -162,24 +135,13 @@ export namespace LanguageModelDefaults {
     return new LanguageModelDefaults({
       generation: input.generation === undefined ? undefined : GenerationOptions.make(input.generation),
       providerOptions: input.providerOptions,
-      http: HttpOptions.make(input.http),
+      http: input.http === undefined ? undefined : HttpOptions.make(input.http),
     })
   }
 }
 
-/** Provider-defined string enum: known values for autocomplete, any string accepted. */
-export type OpenString<Known extends string> = Known | (string & {})
-
-export const ReasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const
-export type ReasoningEffort = OpenString<(typeof ReasoningEfforts)[number]>
-export const ReasoningEffort = Schema.declare<ReasoningEffort>(
-  (value): value is ReasoningEffort => typeof value === "string",
-  { title: "ReasoningEffort" },
-)
-
-/** Tool schema sanitizer for a model family. `none` opts out of the protocol and model-name defaults. */
-export const LanguageModelSanitizerCompatibility = Schema.Literals(["gemini", "moonshot", "none"])
-export type LanguageModelSanitizerCompatibility = Schema.Schema.Type<typeof LanguageModelSanitizerCompatibility>
+export const LanguageModelToolSchemaCompatibility = Schema.Literals(["gemini", "moonshot"])
+export type LanguageModelToolSchemaCompatibility = Schema.Schema.Type<typeof LanguageModelToolSchemaCompatibility>
 
 export const LanguageModelMaxTokensFieldCompatibility = Schema.Literals(["max_completion_tokens", "max_tokens"])
 export type LanguageModelMaxTokensFieldCompatibility = Schema.Schema.Type<
@@ -189,7 +151,7 @@ export type LanguageModelMaxTokensFieldCompatibility = Schema.Schema.Type<
 export class LanguageModelCompatibility extends Schema.Class<LanguageModelCompatibility>(
   "LLM.LanguageModelCompatibility",
 )({
-  sanitizer: Schema.optional(LanguageModelSanitizerCompatibility),
+  toolSchema: Schema.optional(LanguageModelToolSchemaCompatibility),
   reasoningField: Schema.optional(Schema.String),
   /** Require every assistant message to include its reasoning field, even when empty. */
   requireReasoning: Schema.optional(Schema.Boolean),
@@ -199,15 +161,10 @@ export class LanguageModelCompatibility extends Schema.Class<LanguageModelCompat
   supportsStore: Schema.optional(Schema.Boolean),
   supportsUsageInStreaming: Schema.optional(Schema.Boolean),
   supportsStrictMode: Schema.optional(Schema.Boolean),
-  // Accepts `prompt_cache_key` in the Chat Completions body. Chat omits the
-  // key unless this is set; session-affinity headers still flow regardless.
-  supportsPromptCacheKey: Schema.optional(Schema.Boolean),
   zaiToolStream: Schema.optional(Schema.Boolean),
   requireSignature: Schema.optional(Schema.Boolean),
   /** Supports Anthropic's thinking-prefix mismatch controls. Overrides model-ID detection. */
   supportsThinkingBlockBinding: Schema.optional(Schema.Boolean),
-  /** Supports per-message effort updates. Overrides model-ID detection. */
-  supportsEffortUpdates: Schema.optional(Schema.Boolean),
 }) {}
 
 export namespace LanguageModelCompatibility {

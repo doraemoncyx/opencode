@@ -2,7 +2,6 @@ import { For, createMemo } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { SessionDocument } from "../document"
 import type { SessionUserActions } from "../actions"
-import type { TimelineDetail } from "./detail"
 import { createReactiveTimelineProjection, TimelineRow, type ReasoningMode } from "./projection"
 import { createSessionTimelineRowRenderer, type SessionUserPresentation } from "./session-timeline-row"
 
@@ -15,7 +14,6 @@ export type SessionTimelineProps = {
   reasoningMode?: ReasoningMode
   shellToolDefaultOpen?: boolean
   editToolDefaultOpen?: boolean
-  timelineDetail?: TimelineDetail
   class?: string
 }
 
@@ -26,7 +24,6 @@ export function SessionTimeline(props: SessionTimelineProps) {
     reasoningMode: () => props.reasoningMode ?? "compact",
     shellToolDefaultOpen: () => props.shellToolDefaultOpen ?? false,
     editToolDefaultOpen: () => props.editToolDefaultOpen ?? false,
-    timelineDetail: props.timelineDetail && (() => props.timelineDetail!),
   })
   const [toolOpen, setToolOpen] = createStore<Record<string, boolean | undefined>>({})
   const renderer = createSessionTimelineRowRenderer({
@@ -38,7 +35,6 @@ export function SessionTimeline(props: SessionTimelineProps) {
     reasoningMode: () => props.reasoningMode ?? "compact",
     shellToolDefaultOpen: () => props.shellToolDefaultOpen ?? false,
     editToolDefaultOpen: () => props.editToolDefaultOpen ?? false,
-    timelineDetail: props.timelineDetail && (() => props.timelineDetail!),
     disclosure: {
       value: (key) => toolOpen[key],
       set: (key, open) => setToolOpen(key, open),

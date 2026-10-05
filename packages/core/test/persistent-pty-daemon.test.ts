@@ -1,7 +1,6 @@
 import { expect } from "bun:test"
 import { spawn } from "node:child_process"
-import { existsSync } from "node:fs"
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import net from "node:net"
 import os from "node:os"
 import path from "node:path"
@@ -13,7 +12,7 @@ const pong = { type: "pong", instance_id: "test", pid: process.pid, protocol: 7 
 
 it.live("rediscovers a same-protocol daemon after its registration rotates", () =>
   Effect.gen(function* () {
-    const { root, directory } = yield* temporaryRuntime()
+    const directory = yield* temporaryDirectory()
     const socketPath = path.join(directory, "daemon.sock")
     let token = "old-token"
     let instance = "old-instance"
@@ -25,7 +24,7 @@ it.live("rediscovers a same-protocol daemon after its registration rotates", () 
       return request.op === "list" ? { type: "terminals", terminals: [] } : { type: "ok" }
     })
     yield* Effect.promise(() => writeRegistration(directory, socketPath, instance, token))
-    const daemon = yield* makeDaemonTransport(root, "daemon")
+    const daemon = yield* makeDaemonTransport(directory)
     yield* daemon.request({ op: "list" })
 
     token = "new-token"
@@ -45,7 +44,7 @@ it.live("rediscovers a same-protocol daemon after its registration rotates", () 
 
 it.live("rediscovers a rotated registration when acquiring a subscription", () =>
   Effect.gen(function* () {
-    const { root, directory } = yield* temporaryRuntime()
+    const directory = yield* temporaryDirectory()
     const socketPath = path.join(directory, "daemon.sock")
     let token = "old-token"
     let instance = "old-instance"
@@ -68,7 +67,7 @@ it.live("rediscovers a rotated registration when acquiring a subscription", () =
       }
     })
     yield* Effect.promise(() => writeRegistration(directory, socketPath, instance, token))
-    const daemon = yield* makeDaemonTransport(root, "daemon")
+    const daemon = yield* makeDaemonTransport(directory)
     yield* daemon.request({ op: "list" })
 
     token = "new-token"
@@ -90,7 +89,7 @@ it.live("rediscovers a rotated registration when acquiring a subscription", () =
 
 it.live("retries a start-required request when connection fails before dispatch", () =>
   Effect.gen(function* () {
-    const { root, directory } = yield* temporaryRuntime()
+    const directory = yield* temporaryDirectory()
     const firstSocket = path.join(directory, "first.sock")
     const secondSocket = path.join(directory, "second.sock")
     const first = yield* listen(firstSocket, (_socket, request) => {
@@ -98,7 +97,7 @@ it.live("retries a start-required request when connection fails before dispatch"
       return { type: "terminals", terminals: [] }
     })
     yield* Effect.promise(() => writeRegistration(directory, firstSocket))
-    const daemon = yield* makeDaemonTransport(root, "daemon")
+    const daemon = yield* makeDaemonTransport(directory)
     yield* daemon.request({ op: "list" })
     yield* Effect.promise(first.close)
 
@@ -116,7 +115,7 @@ it.live("retries a start-required request when connection fails before dispatch"
 
 it.live("does not replay a dispatched mutating request when its response is lost", () =>
   Effect.gen(function* () {
-    const { root, directory } = yield* temporaryRuntime()
+    const directory = yield* temporaryDirectory()
     const socketPath = path.join(directory, "daemon.sock")
     let creates = 0
     yield* listen(socketPath, (socket, request) => {
@@ -126,7 +125,7 @@ it.live("does not replay a dispatched mutating request when its response is lost
       return undefined
     })
     yield* Effect.promise(() => writeRegistration(directory, socketPath))
-    const daemon = yield* makeDaemonTransport(root, "daemon")
+    const daemon = yield* makeDaemonTransport(directory)
     const error = yield* Effect.flip(daemon.request({ op: "create" }, true))
 
     expect(error.kind).toBe("response")
@@ -136,7 +135,7 @@ it.live("does not replay a dispatched mutating request when its response is lost
 
 it.live("rejects incompatible daemons without replacing or killing them", () =>
   Effect.gen(function* () {
-    const { root, directory } = yield* temporaryRuntime()
+    const directory = yield* temporaryDirectory()
     const existing = yield* Effect.acquireRelease(
       Effect.sync(() => spawn("sleep", ["30"])),
       (child) =>
@@ -154,7 +153,7 @@ it.live("rejects incompatible daemons without replacing or killing them", () =>
         JSON.stringify({ instance_id: "old", pid: existing.pid, protocol: 6, socket: "/unused", token: "old" }),
       ),
     )
-    const daemon = yield* makeDaemonTransport(root, "daemon", () => Promise.resolve("/missing/opencode-pty"))
+    const daemon = yield* makeDaemonTransport(directory, () => Promise.resolve("/missing/opencode-pty"))
 
     const optional = yield* Effect.flip(daemon.requestIfRunning({ op: "list" }))
     expect(optional).toMatchObject({
@@ -170,84 +169,6 @@ it.live("rejects incompatible daemons without replacing or killing them", () =>
     expect(process.kill(existing.pid, 0)).toBeTrue()
   }),
 )
-
-it.live("moves an inherited legacy registration into the runtime root and keeps its lock file", () =>
-  Effect.gen(function* () {
-    const base = yield* temporaryDirectory()
-    const legacy = path.join(base, "legacy", "inherited")
-    const socketPath = path.join(base, "daemon.sock")
-    yield* listen(socketPath, (_socket, request) => {
-      if (request.op === "ping") return pong
-      return { type: "terminals", terminals: [] }
-    })
-    yield* Effect.promise(async () => {
-      await mkdir(legacy, { recursive: true })
-      await writeFile(path.join(legacy, "service.lock"), "")
-      await writeRegistration(legacy, socketPath)
-    })
-    const lock = yield* Effect.promise(() => stat(path.join(legacy, "service.lock")))
-    const daemon = yield* makeDaemonTransport(path.join(base, "root"), "fresh", undefined, {
-      directory: legacy,
-      instanceID: "test",
-      ticket: "ticket",
-      expiresAt: Date.now() + 60_000,
-    })
-
-    const migrated = path.join(base, "root", "inherited")
-    expect(existsSync(path.join(legacy, "service.json"))).toBeFalse()
-    expect((yield* Effect.promise(() => stat(path.join(migrated, "service.lock")))).ino).toBe(lock.ino)
-    expect(existsSync(path.join(migrated, "service.json"))).toBeTrue()
-    expect(yield* daemon.request({ op: "list" })).toEqual({ type: "terminals", terminals: [] })
-  }),
-)
-
-it.live("starts fresh instead of failing when an inherited registration is gone or expired", () =>
-  Effect.gen(function* () {
-    const base = yield* temporaryDirectory()
-    const legacy = path.join(base, "legacy")
-    yield* Effect.promise(() => mkdir(legacy))
-    for (const expiresAt of [Date.now() + 60_000, Date.now() - 1]) {
-      const daemon = yield* makeDaemonTransport(path.join(base, "root"), "fresh", undefined, {
-        directory: legacy,
-        instanceID: "test",
-        ticket: "ticket",
-        expiresAt,
-      })
-      expect(yield* daemon.handoff).toBeNull()
-      expect(yield* daemon.requestIfRunning({ op: "list" })).toBeUndefined()
-    }
-  }),
-)
-
-it.live("stops a discovered inherited daemon when adoption fails", () =>
-  Effect.gen(function* () {
-    const { root, directory } = yield* temporaryRuntime()
-    const socketPath = path.join(directory, "daemon.sock")
-    let shutdowns = 0
-    yield* listen(socketPath, (_socket, request) => {
-      if (request.op === "ping") return pong
-      if (request.op === "shutdown") shutdowns++
-      return { type: "ok" }
-    })
-    yield* Effect.promise(() => writeRegistration(directory, socketPath))
-    yield* makeDaemonTransport(root, "fresh", undefined, {
-      directory,
-      instanceID: "replaced",
-      ticket: "ticket",
-      expiresAt: Date.now() + 60_000,
-    })
-    expect(shutdowns).toBe(1)
-  }),
-)
-
-function temporaryRuntime() {
-  return Effect.gen(function* () {
-    const root = yield* temporaryDirectory()
-    const directory = path.join(root, "daemon")
-    yield* Effect.promise(() => mkdir(directory))
-    return { root, directory }
-  })
-}
 
 function temporaryDirectory() {
   return Effect.acquireRelease(

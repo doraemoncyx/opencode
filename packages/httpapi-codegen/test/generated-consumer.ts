@@ -32,4 +32,4 @@ export const program = OpenCode.make().pipe(
   }),
 )
 
-export const requiresHttpClient: Effect.Effect<unknown, never, HttpClient.HttpClient> = program
+const _requiresHttpClient: Effect.Effect<unknown, never, HttpClient.HttpClient> = program

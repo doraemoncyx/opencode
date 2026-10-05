@@ -1,3 +1,4 @@
+import { Bus } from "@opencode/core/bus"
 import { Event } from "@opencode/schema/event"
 import { Effect, Stream } from "effect"
 import { HttpServerResponse } from "effect/unstable/http"

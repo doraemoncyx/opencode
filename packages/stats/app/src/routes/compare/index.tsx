@@ -11,6 +11,7 @@ import {
   ComparisonCardsSection,
   comparisonHref,
   modelRefFromCatalog,
+  type ComparisonModelRef,
   type ComparisonPair,
 } from "../compare-cards"
 import { formatCatalogLabName, getModelCatalog, type ModelCatalogEntry } from "../model-catalog"

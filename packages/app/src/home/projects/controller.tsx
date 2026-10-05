@@ -16,7 +16,7 @@ import { Persistence } from "@/runtime/persistence/schema"
 import type { HomeController } from "../model"
 import { useGlobal } from "@/runtime/server/runtime"
 import { SessionTransfer } from "@opencode/schema/session-transfer"
-import { useRevealProject } from "./reveal"
+import { useSshAuthenticate } from "@/servers/ssh/authenticate"
 
 export const HomeServersSchema = Schema.Struct({
   collapsed: Persistence.record(Persistence.fallback(Schema.Boolean, () => false)),
@@ -31,8 +31,7 @@ export function createHomeProjectsController(home: HomeController) {
   const settings = useSettingsSurface()
   const serverManagement = useServerActionsController()
   const global = useGlobal()
-  const authenticate = ServerConnection.authenticate
-  const revealProject = useRevealProject()
+  const authenticate = useSshAuthenticate()
   const [_state, setState, _, ready] = persisted(Persist.global("home.servers"), HomeServersSchema, { collapsed: {} })
   const [state] = createResource(
     () => ready.promise ?? Promise.resolve(),
@@ -41,6 +40,10 @@ export function createHomeProjectsController(home: HomeController) {
   )
   function directories(project: LocalProject) {
     return [project.worktree, ...(project.sandboxes ?? [])]
+  }
+
+  function canRevealProject(conn: ServerConnection.Any) {
+    return platform.platform === "desktop" && !!platform.openPath && ServerConnection.local(conn)
   }
 
   function choose(conn: ServerConnection.Any) {
@@ -162,8 +165,16 @@ export function createHomeProjectsController(home: HomeController) {
       move: (conn: ServerConnection.Any, worktree: string, index: number) => {
         home.server.context(conn).projects.move(worktree, index)
       },
-      canReveal: revealProject.available,
-      reveal: revealProject.reveal,
+      canReveal: canRevealProject,
+      reveal: (conn: ServerConnection.Any, project: LocalProject) => {
+        if (!platform.openPath || !canRevealProject(conn)) return
+        platform.openPath(project.worktree).catch((cause: unknown) =>
+          showToast({
+            title: language.t("common.requestFailed"),
+            description: errorMessage(cause, language.t("common.requestFailed")),
+          }),
+        )
+      },
     },
     utility: {
       settings: openSettings,

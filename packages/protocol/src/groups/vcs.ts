@@ -3,20 +3,9 @@ import { Location } from "@opencode/schema/location"
 import { NonNegativeInt, PositiveInt, optional } from "@opencode/schema/schema"
 import { Vcs } from "@opencode/schema/vcs"
 import { Schema } from "effect"
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
-import { ConflictError, InvalidRequestError, ServiceUnavailableError } from "../errors.js"
-
-const InitQuery = Schema.Struct({
-  ...LocationQuery.fields,
-  provider: Schema.optional(Schema.String),
-})
-
-export class VcsInitNotSupportedError extends Schema.TaggedError<VcsInitNotSupportedError>()(
-  "VcsInitNotSupportedError",
-  { providerID: Schema.String, message: Schema.String },
-  { httpApiStatus: 501 },
-) {}
+import { ServiceUnavailableError } from "../errors.js"
 
 const BranchesQuery = Schema.Struct({
   ...LocationQuery.fields,
@@ -32,22 +21,6 @@ const DiffQuery = Schema.Struct({
 })
 
 export const VcsGroup = HttpApiGroup.make("server.vcs")
-  .add(
-    HttpApiEndpoint.post("vcs.init", "/api/vcs/init", {
-      query: InitQuery,
-      success: HttpApiSchema.NoContent,
-      error: [ConflictError, InvalidRequestError, VcsInitNotSupportedError, ServiceUnavailableError],
-    })
-      .annotateMerge(locationQueryOpenApi)
-      .annotateMerge(
-        OpenApi.annotations({
-          identifier: "vcs.init",
-          summary: "Initialize VCS repository",
-          description:
-            "Initialize a repository using the selected VCS provider in a markerless project's directory and refresh its location services. Omitting provider defaults to git; built-in git and hg providers support initialization. An unknown provider returns 400; a registered provider without init returns 501.",
-        }),
-      ),
-  )
   .add(
     HttpApiEndpoint.get("vcs.get", "/api/vcs", {
       query: LocationQuery,
@@ -93,14 +66,14 @@ export const VcsGroup = HttpApiGroup.make("server.vcs")
       ),
   )
   .add(
-    HttpApiEndpoint.get("vcs.branch.list", "/api/vcs/branch", {
+    HttpApiEndpoint.get("vcs.branches", "/api/vcs/branches", {
       query: BranchesQuery,
       success: Location.response(Vcs.BranchList),
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
         OpenApi.annotations({
-          identifier: "vcs.branch.list",
+          identifier: "vcs.branches",
           summary: "VCS branches",
           description: "List local and remote branches available at the requested location.",
         }),

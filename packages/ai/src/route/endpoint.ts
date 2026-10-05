@@ -1,11 +1,12 @@
 import type { LLMRequest } from "../schema/index.js"
+import * as ProviderShared from "../protocols/shared.js"
 
-export interface EndpointInput<Body, Request = LLMRequest> {
-  readonly request: Request
+export interface EndpointInput<Body> {
+  readonly request: LLMRequest
   readonly body: Body
 }
 
-export type EndpointPart<Body, Request = LLMRequest> = string | ((input: EndpointInput<Body, Request>) => string)
+export type EndpointPart<Body> = string | ((input: EndpointInput<Body>) => string)
 
 /**
  * Declarative URL construction for one route.
@@ -16,29 +17,26 @@ export type EndpointPart<Body, Request = LLMRequest> = string | ((input: Endpoin
  *
  * `path` may be a string or a function of `EndpointInput`, for routes whose
  * URL embeds the model id, region, or another body field (e.g. Bedrock,
- * Gemini). Media routes reuse the same shape with their own request type.
+ * Gemini).
  */
-export interface Definition<Body, Request = LLMRequest> {
+export interface Definition<Body> {
   readonly baseURL?: string
-  readonly path: EndpointPart<Body, Request>
+  readonly path: EndpointPart<Body>
   readonly query?: Record<string, string>
 }
 
-export type EndpointPatch<Body, Request = LLMRequest> = Partial<Definition<Body, Request>>
+export type EndpointPatch<Body> = Partial<Definition<Body>>
 
 /** Construct an `Endpoint` from a path string or path function. */
-export const path = <Body, Request = LLMRequest>(
-  value: EndpointPart<Body, Request>,
-  options: Omit<Definition<Body, Request>, "path"> = {},
-): Definition<Body, Request> => ({
+export const path = <Body>(
+  value: EndpointPart<Body>,
+  options: Omit<Definition<Body>, "path"> = {},
+): Definition<Body> => ({
   ...options,
   path: value,
 })
 
-export const merge = <Body, Request = LLMRequest>(
-  base: Definition<Body, Request>,
-  patch: EndpointPatch<Body, Request>,
-): Definition<Body, Request> => ({
+export const merge = <Body>(base: Definition<Body>, patch: EndpointPatch<Body>): Definition<Body> => ({
   ...base,
   ...patch,
   baseURL: patch.baseURL ?? base.baseURL,
@@ -46,16 +44,11 @@ export const merge = <Body, Request = LLMRequest>(
   query: patch.query === undefined ? base.query : { ...base.query, ...patch.query },
 })
 
-export const trimBaseUrl = (value: string) => value.replace(/\/+$/, "")
-
-const renderPart = <Body, Request>(part: EndpointPart<Body, Request>, input: EndpointInput<Body, Request>) =>
+const renderPart = <Body>(part: EndpointPart<Body>, input: EndpointInput<Body>) =>
   typeof part === "function" ? part(input) : part
 
-export const render = <Body, Request = LLMRequest>(
-  endpoint: Definition<Body, Request>,
-  input: EndpointInput<Body, Request>,
-) => {
-  const url = new URL(`${trimBaseUrl(endpoint.baseURL ?? "")}${renderPart(endpoint.path, input)}`)
+export const render = <Body>(endpoint: Definition<Body>, input: EndpointInput<Body>) => {
+  const url = new URL(`${ProviderShared.trimBaseUrl(endpoint.baseURL ?? "")}${renderPart(endpoint.path, input)}`)
   for (const [key, value] of Object.entries(endpoint.query ?? {})) url.searchParams.set(key, value)
   return url
 }

@@ -78,7 +78,7 @@ function ResolvedDraftContent(props: { draft: DraftTab }) {
   )
 }
 
-// The draft page only renders the prompt composer.
+// The draft page only renders the prompt composer, so it drops TerminalProvider.
 // FileProvider and CommentsProvider stay because Composer uses file search and comment context.
 function DraftProviders(props: ParentProps) {
   return (

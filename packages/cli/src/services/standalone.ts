@@ -1,3 +1,4 @@
+import { Service, type Endpoint } from "@opencode/client/effect/service"
 import { CrossSpawnSpawner } from "@opencode/util/cross-spawn-spawner"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Deferred, Effect, Schema, Stream } from "effect"
@@ -52,8 +53,7 @@ const makeEndpoint = Effect.fn("cli.standalone.endpoint")(
       url: ready.url,
       auth: { type: "basic" as const, username: "opencode", password },
       pid: proc.pid,
-      exited: proc.exitCode,
-    }
+    } satisfies Endpoint & { readonly pid: number }
   },
   Effect.provide(LayerNode.compile(CrossSpawnSpawner.node)),
 )

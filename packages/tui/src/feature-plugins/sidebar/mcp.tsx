@@ -1,9 +1,9 @@
 import { Plugin } from "@opencode/plugin/tui"
-import { createMemo, For, Match, Show, Switch } from "solid-js"
+import { createMemo, For, Match, Show, Switch, createSignal } from "solid-js"
 import { DialogMcp } from "../../component/dialog-mcp"
 
-export function SidebarMcp(props: { context: Plugin.Context; sessionID: string }) {
-  const [view, updateView] = props.context.storage.store("view", { initial: { open: true } })
+function View(props: { context: Plugin.Context; sessionID: string }) {
+  const [open, setOpen] = createSignal(true)
   const theme = props.context.theme
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const list = createMemo(() => props.context.data.location.mcp.server.list(session()?.location) ?? [])
@@ -13,40 +13,31 @@ export function SidebarMcp(props: { context: Plugin.Context; sessionID: string }
   )
 
   const dot = (status: string) => {
-    if (status === "connected") return theme.text.feedback.success.base
-    if (status === "failed") return theme.text.feedback.error.base
-    if (status === "disabled") return theme.text.muted
-    if (status === "needs_auth") return theme.text.feedback.warning.base
-    return theme.text.muted
+    if (status === "connected") return theme.text.feedback.success.default
+    if (status === "failed") return theme.text.feedback.error.default
+    if (status === "disabled") return theme.text.subdued
+    if (status === "needs_auth") return theme.text.feedback.warning.default
+    return theme.text.subdued
   }
 
   return (
     <Show when={list().length > 0}>
       <box>
-        <box
-          flexDirection="row"
-          gap={1}
-          onMouseDown={() => {
-            if (list().length <= 2) return
-            void updateView((draft) => {
-              draft.open = !draft.open
-            }).catch((error) => console.error("Failed to persist MCP sidebar state", error))
-          }}
-        >
+        <box flexDirection="row" gap={1} onMouseDown={() => list().length > 2 && setOpen((x) => !x)}>
           <Show when={list().length > 2}>
-            <text fg={theme.text.base}>{view.open ? "▼" : "▶"}</text>
+            <text fg={theme.text.default}>{open() ? "▼" : "▶"}</text>
           </Show>
-          <text fg={theme.text.base}>
+          <text fg={theme.text.default}>
             <b>MCP</b>
-            <Show when={!view.open}>
-              <span style={{ fg: theme.text.muted }}>
+            <Show when={!open()}>
+              <span style={{ fg: theme.text.subdued }}>
                 {" "}
                 ({on()} active{bad() > 0 ? `, ${bad()} error${bad() > 1 ? "s" : ""}` : ""})
               </span>
             </Show>
           </text>
         </box>
-        <Show when={list().length <= 2 || view.open}>
+        <Show when={list().length <= 2 || open()}>
           <For each={list()}>
             {(item) => (
               <box
@@ -67,11 +58,11 @@ export function SidebarMcp(props: { context: Plugin.Context; sessionID: string }
                 >
                   •
                 </text>
-                <text fg={theme.text.base} wrapMode="none" truncate flexGrow={1} flexShrink={1} minWidth={0}>
+                <text fg={theme.text.default} wrapMode="none" truncate flexGrow={1} flexShrink={1} minWidth={0}>
                   <b>{item.name}</b>
                 </text>
                 <text
-                  fg={item.status.status === "failed" ? theme.text.feedback.error.base : theme.text.muted}
+                  fg={item.status.status === "failed" ? theme.text.feedback.error.default : theme.text.subdued}
                   wrapMode="none"
                   flexShrink={0}
                 >
@@ -97,7 +88,7 @@ export default Plugin.define({
   setup(context) {
     context.ui.slot({
       append: "sidebar.content",
-      render: (props) => <SidebarMcp context={context} sessionID={props.sessionID} />,
+      render: (props) => <View context={context} sessionID={props.sessionID} />,
     })
   },
 })

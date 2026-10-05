@@ -124,7 +124,7 @@ export class InvalidProviderOutputError extends Schema.TaggedError<InvalidProvid
   "AI.Error.InvalidProviderOutput",
 )("InvalidProviderOutput", {
   ...ReasonFields,
-  classification: Schema.optional(Schema.Literals(["incomplete-stream"])),
+  classification: Schema.optional(Schema.Literals(["incomplete-stream", "invalid-frame"])),
   route: Schema.optional(Schema.String),
 }) {}
 
@@ -132,12 +132,6 @@ export class UnknownProviderError extends Schema.TaggedError<UnknownProviderErro
   "UnknownProvider",
   ReasonFields,
 ) {}
-
-/** A caller-supplied deadline elapsed, such as `Generation.await` polling past its `Poll.timeout`. */
-export class TimeoutError extends Schema.TaggedError<TimeoutError>("AI.Error.Timeout")("Timeout", {
-  ...ReasonFields,
-  timeoutMs: Schema.optional(Schema.Number),
-}) {}
 
 export const AIErrorReason = Schema.Union([
   InvalidRequestError,
@@ -151,7 +145,6 @@ export const AIErrorReason = Schema.Union([
   TransportError,
   InvalidProviderOutputError,
   UnknownProviderError,
-  TimeoutError,
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type AIErrorReason = Schema.Schema.Type<typeof AIErrorReason>
 

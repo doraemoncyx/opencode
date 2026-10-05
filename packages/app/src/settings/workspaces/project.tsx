@@ -1,19 +1,14 @@
 import { Icon } from "@opencode/ui/icon"
-import {
-  displayName,
-  getProjectAvatarVariant,
-  ProjectAvatar,
-  PROJECT_AVATAR_VARIANTS,
-} from "@opencode/ui/project-avatar"
+import { ProjectAvatar, PROJECT_AVATAR_VARIANTS } from "@opencode/ui/project-avatar"
 import { Textarea } from "@opencode/ui/textarea"
 import { TextInput } from "@opencode/ui/text-input"
-import { For, Show, type Component } from "solid-js"
+import { For, Show, onCleanup, type Component } from "solid-js"
 import { useLanguage } from "@/runtime/i18n/language"
-import type { LocalProject } from "@/shell/state/layout"
+import { getProjectAvatarVariant, type LocalProject } from "@/shell/state/layout"
 import { ServerConnection, serverName } from "@/runtime/server/registry"
 import { useSettingsServers } from "@/settings/servers/inventory"
+import { displayName } from "@/shell/layout/helpers"
 import { ProjectIcon } from "@/shell/layout/project-icon"
-import { ProjectOptions } from "./project-options"
 import { SettingsList } from "@/settings/list"
 import { SettingsRow } from "@/settings/row"
 import { createEditProjectModel } from "./project-model"
@@ -23,39 +18,31 @@ export const SettingsProjectGeneral: Component<{
   project: LocalProject
   server: ServerConnection.Any
   onOpenServer: () => void
-  onClose: () => void
 }> = (props) => {
   const language = useLanguage()
   const model = createEditProjectModel(props)
   const servers = useSettingsServers()
+  // Losing focus is not guaranteed before this view unmounts, so flush text edits that
+  // are still pending instead of dropping them.
+  onCleanup(() => {
+    model.saveName()
+    model.saveStartup()
+  })
 
   return (
     <>
       <div class="settings-tab-header">
         <div class="settings-tab-header-row">
-          <div class="flex min-w-0 items-center gap-3">
-            <ProjectIcon
-              project={props.project}
-              fallback={model.store.name || model.defaultName()}
-              icon={{
-                color: model.store.color,
-                url: props.project.icon?.url,
-                override: model.store.iconOverride,
-              }}
-              class="!size-8 shrink-0 [&_[data-slot=project-avatar-surface]]:!rounded-[6px] [&_[data-slot=project-avatar-surface]]:!text-[16px]"
-            />
-            <div class="flex min-w-0 flex-col gap-1">
-              <h2 class="settings-tab-title truncate">
-                <bdi dir="auto">{model.store.name || displayName(props.project)}</bdi>
-              </h2>
-              <Show when={servers().length > 1}>
-                <button type="button" class="project-settings-server-link" onClick={() => props.onOpenServer()}>
-                  <bdi dir="auto">{serverName(props.server) || ServerConnection.key(props.server)}</bdi>
-                </button>
-              </Show>
-            </div>
+          <div class="flex min-w-0 flex-col gap-1">
+            <h2 class="settings-tab-title truncate">
+              <bdi dir="auto">{model.store.name || displayName(props.project)}</bdi>
+            </h2>
+            <Show when={servers().length > 1}>
+              <button type="button" class="project-settings-server-link" onClick={() => props.onOpenServer()}>
+                <bdi dir="auto">{serverName(props.server) || ServerConnection.key(props.server)}</bdi>
+              </button>
+            </Show>
           </div>
-          <ProjectOptions server={props.server} project={props.project} size="large" onClose={props.onClose} />
         </div>
       </div>
 
@@ -73,7 +60,13 @@ export const SettingsProjectGeneral: Component<{
                 value={model.store.name}
                 placeholder={model.folderName()}
                 aria-label={language.t("project.settings.name.title")}
-                onInput={(event) => model.setStore("name", event.currentTarget.value)}
+                onInput={(event) => model.setName(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  // Enter has no form to submit, so commit the value the way blur does.
+                  if (event.key !== "Enter") return
+                  event.preventDefault()
+                  event.currentTarget.blur()
+                }}
                 onBlur={model.saveName}
               />
             </div>
@@ -131,9 +124,7 @@ export const SettingsProjectGeneral: Component<{
                     return (
                       <button
                         type="button"
-                        aria-label={language.t("dialog.project.edit.color.select", {
-                          color: language.t(`common.color.${color}`),
-                        })}
+                        aria-label={language.t("dialog.project.edit.color.select", { color })}
                         aria-pressed={selected()}
                         class="project-settings-color"
                         classList={{ "project-settings-color--selected": selected() }}
@@ -169,7 +160,7 @@ export const SettingsProjectGeneral: Component<{
               placeholder={language.t("dialog.project.edit.worktree.startup.placeholder")}
               aria-label={language.t("dialog.project.edit.worktree.startup")}
               spellcheck={false}
-              onInput={(event) => model.setStore("startup", event.currentTarget.value)}
+              onInput={(event) => model.setStartup(event.currentTarget.value)}
               onBlur={model.saveStartup}
             />
             <div class="project-settings-startup-hint flex flex-col">

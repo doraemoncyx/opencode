@@ -1,6 +1,6 @@
 export * as SessionRunnerRetry from "./retry.js"
 
-import { AIError, isRetryable } from "@opencode/ai"
+import { AIError, isContextOverflowFailure } from "@opencode/ai"
 import { Agent } from "@opencode/schema/agent"
 import { Model } from "@opencode/schema/model"
 import { SessionError } from "@opencode/schema/session-error"
@@ -10,8 +10,7 @@ import type { PluginHooks } from "../../plugin/hooks.js"
 import { SessionEvent } from "../event.js"
 import { SessionMessage } from "../message.js"
 import { SessionSchema } from "../schema.js"
-
-export { isRetryable }
+import { toSessionError } from "../to-session-error.js"
 
 interface Input {
   readonly cause: AIError
@@ -28,8 +27,47 @@ export interface Decision {
   readonly delay: number
 }
 
+export function isRetryable(error: AIError) {
+  const override = error.reason.http?.headers["x-should-retry"]
+  if (override === "true") return true
+  if (override === "false") return false
+  switch (error.reason._tag) {
+    case "RateLimit":
+    case "ProviderInternal":
+      return true
+    // HTTP transport errors carry no delivery and always retry. WebSocket marks accepted and rejected
+    // requests as final; not-sent and ambiguous (no frame observed) are still pre-output.
+    case "Transport":
+      return error.reason.delivery !== "accepted" && error.reason.delivery !== "rejected"
+    case "InvalidProviderOutput":
+      return error.reason.classification === "incomplete-stream" || error.reason.classification === "invalid-frame"
+    // Unrecognized failures retry: classification records affirmative
+    // deterministic evidence, and transient failures are exactly the ones
+    // that arrive in shapes no classifier anticipates.
+    case "UnknownProvider":
+      return true
+    case "Authentication":
+    case "QuotaExceeded":
+    case "ContentPolicy":
+    case "InvalidRequest":
+    case "UnsupportedOperation":
+    case "NoRoute":
+      return false
+    default: {
+      const exhaustive: never = error.reason
+      return exhaustive
+    }
+  }
+}
+
 /** Bound provider-requested delays so a hostile or buggy retry-after cannot stall a session for hours. */
 const RETRY_AFTER_MAX = Duration.toMillis("15 minutes")
+
+/** A malformed stream frame is transient, but repeated malformed frames are terminal after a few tries. */
+const FRAME_RETRY_LIMIT = 3
+
+const isInvalidFrame = (cause: AIError) =>
+  cause.reason._tag === "InvalidProviderOutput" && cause.reason.classification === "invalid-frame"
 
 const retryAfter = (input: Input) => {
   if (input.cause.reason._tag === "RateLimit" || input.cause.reason._tag === "ProviderInternal")
@@ -39,13 +77,7 @@ const retryAfter = (input: Input) => {
   return undefined
 }
 
-// Exponential from 2s capped at 10s per gap, for 10 retries: 2, 4, 8, then 10 × 7, about 84s of
-// waiting when every attempt fails (67–101s with jitter). `min` takes the faster schedule, so the
-// cap applies per gap; `max` with `recurs` bounds the count.
-const schedule = Schedule.max([
-  Schedule.min([Schedule.exponential("2 seconds"), Schedule.spaced("10 seconds")]),
-  Schedule.recurs(10),
-]).pipe(
+const schedule = Schedule.max([Schedule.exponential("2 seconds"), Schedule.recurs(4)]).pipe(
   Schedule.jittered,
   Schedule.setInputType<Input>(),
   Schedule.modifyDelay(({ input, duration: delay }) => {
@@ -55,25 +87,19 @@ const schedule = Schedule.max([
   }),
 )
 
-// A timed-out attempt already waited minutes before failing, so the general allowance would let a
-// dead provider hold a step for most of an hour. Cap those attempts well below it.
-const MAX_TIMEOUT_RETRIES = 3
-
-const isTimeout = (error: AIError) => error.reason._tag === "Transport" && error.reason.code === "Timeout"
-
 export const policy = (sessionID: SessionSchema.ID) =>
   Effect.gen(function* () {
     const step = yield* Schedule.toStep(schedule)
     let attempt = 1
-    let timeouts = 0
+    let frameAttempts = 0
     return (input: Input) =>
       Effect.gen(function* () {
+        if (isInvalidFrame(input.cause) && frameAttempts >= FRAME_RETRY_LIMIT) return { retry: false as const }
         const now = yield* Clock.currentTimeMillis
         const next = yield* step(now, input).pipe(Pull.catchDone(() => Effect.succeed(undefined)))
         if (!next) return { retry: false as const }
         const [, duration] = next
         attempt++
-        if (isTimeout(input.cause)) timeouts++
         const delay = Math.ceil(Duration.toMillis(duration))
         const event: PluginHooks.Domains["session"]["retry"] = {
           sessionID,
@@ -81,15 +107,34 @@ export const policy = (sessionID: SessionSchema.ID) =>
           model: input.model,
           error: input.error,
           attempt,
-          decision: input.retry && timeouts <= MAX_TIMEOUT_RETRIES ? { retry: true, delay } : { retry: false },
+          decision: input.retry ? { retry: true, delay } : { retry: false },
         }
         yield* input.hook(event)
         if (!event.decision.retry) return event.decision
+        if (isInvalidFrame(input.cause)) frameAttempts++
         const normalized =
           Number.isFinite(event.decision.delay) && event.decision.delay >= 0 ? Math.ceil(event.decision.delay) : delay
         return { retry: true as const, attempt, delay: normalized }
       })
   })
+
+/**
+ * Retries one auxiliary request's transient failures under a shared `policy` allowance, letting the
+ * session retry hook adjust each decision. Context overflow is never transient: callers recover it.
+ */
+export const transient =
+  (decide: Effect.Success<ReturnType<typeof policy>>, input: Pick<Input, "agent" | "model" | "hook">) =>
+  <A, R>(effect: Effect.Effect<A, AIError, R>) =>
+    Effect.retry(effect, {
+      while: (cause) =>
+        Effect.gen(function* () {
+          if (isContextOverflowFailure(cause)) return false
+          const decision = yield* decide({ ...input, cause, error: toSessionError(cause), retry: isRetryable(cause) })
+          if (!decision.retry) return false
+          yield* Effect.sleep(decision.delay)
+          return true
+        }),
+    })
 
 export const make = (bus: Bus.Interface, sessionID: SessionSchema.ID) =>
   Effect.gen(function* () {

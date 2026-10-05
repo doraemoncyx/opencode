@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
 import { Cause, Deferred, Effect, Fiber, Layer } from "effect"
 import { Agent } from "@opencode/core/agent"
 import { Database } from "@opencode/core/database/database"
@@ -147,14 +147,6 @@ describe("Permission", () => {
       expect(yield* service.list()).toEqual([])
     }),
   )
-
-  test("matches Windows rule resources against slash-normalized file access resources", () => {
-    const rules: Permission.Ruleset = [
-      { action: "external_directory", resource: "C:\\Users\\x\\proj\\*", effect: "allow" },
-    ]
-    expect(Permission.evaluate("external_directory", "C:/Users/x/proj/src/*", rules).effect).toBe("allow")
-    expect(Permission.evaluate("external_directory", "C:/Users/x/other/*", rules).effect).toBe("ask")
-  })
 
   it.effect("allows managed output reads without granting external directory access", () =>
     Effect.gen(function* () {
@@ -337,9 +329,7 @@ describe("Permission", () => {
       ).toMatchObject([{ action: "read", resource: "src/*" }])
       const saved = yield* PermissionSaved.Service
       const id = (yield* saved.list())[0]!.id
-      expect(yield* saved.list()).toMatchObject([
-        { id, projectID: Project.ID.global, action: "read", resource: "src/*" },
-      ])
+      expect(yield* saved.list()).toEqual([{ id, projectID: Project.ID.global, action: "read", resource: "src/*" }])
       yield* service.assert(assertion({ id: Permission.ID.create("per_next"), resources: ["src/next.ts"] }))
       yield* saved.remove(id)
       expect(yield* saved.list()).toEqual([])

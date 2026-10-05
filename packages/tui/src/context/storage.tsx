@@ -44,7 +44,7 @@ function segment(value: string) {
   return value
 }
 
-export function createStorage(root: string, channel: string) {
+function createStorage(root: string, channel: string) {
   const entries = new Map<string, { readonly value: Entry<object>; readonly reload: () => void }>()
   const memories = new Map<string, MemoryEntry<object>>()
   const pending = new Set<Promise<void>>()
@@ -110,32 +110,18 @@ export function createStorage(root: string, channel: string) {
     },
   }
 
-  let reloadTimer: ReturnType<typeof setTimeout> | undefined
-  let watcher: ReturnType<typeof watch> | undefined
-  try {
-    watcher = watch(directory, () => {
-      clearTimeout(reloadTimer)
-      // Atomic writes notify for the temporary file before its final rename, and some
-      // platforms coalesce the rename event. Reload after the event burst has settled.
-      reloadTimer = setTimeout(() => entries.forEach((entry) => entry.reload()), 50)
-    })
-    watcher.on("error", (error) => {
-      clearTimeout(reloadTimer)
-      watcher?.close()
-      watcher = undefined
-      console.error("Storage directory watcher failed, live-reload disabled", { directory, error })
-    })
-  } catch (error) {
-    // fs.watch throws synchronously (e.g. ENOSPC when the inotify watch limit is
-    // exhausted). Losing cross-process live-reload is recoverable; crashing the
-    // whole TUI over it is not, so degrade instead of propagating.
-    console.error("Failed to watch storage directory, live-reload disabled", { directory, error })
-  }
+  let reload: ReturnType<typeof setTimeout> | undefined
+  const watcher = watch(directory, () => {
+    clearTimeout(reload)
+    // Atomic writes notify for the temporary file before its final rename, and some
+    // platforms coalesce the rename event. Reload after the event burst has settled.
+    reload = setTimeout(() => entries.forEach((entry) => entry.reload()), 50)
+  })
   return {
     storage,
     close: () => {
-      clearTimeout(reloadTimer)
-      watcher?.close()
+      clearTimeout(reload)
+      watcher.close()
     },
   }
 }

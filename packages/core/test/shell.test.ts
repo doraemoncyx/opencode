@@ -6,6 +6,31 @@ import { which } from "@opencode/core/util/which"
 import fs from "node:fs/promises"
 import { tmpdir } from "./fixture/tmpdir"
 
+const withWindowsApp = async (name: string, fn: (alias: string) => void | Promise<void>) => {
+  await using directory = await tmpdir()
+  const alias = path.join(directory.path, "Microsoft", "WindowsApps", `${name}.exe`)
+  await fs.mkdir(path.dirname(alias), { recursive: true })
+  await fs.writeFile(alias, "")
+  const previous = { localAppData: process.env.LOCALAPPDATA, path: process.env.PATH, pathWin: process.env.Path }
+  process.env.LOCALAPPDATA = directory.path
+  process.env.PATH = directory.path
+  if (process.platform === "win32") process.env.Path = directory.path
+  ShellSelect.resolve.reset()
+  try {
+    await fn(alias)
+  } finally {
+    if (previous.localAppData === undefined) delete process.env.LOCALAPPDATA
+    else process.env.LOCALAPPDATA = previous.localAppData
+    if (previous.path === undefined) delete process.env.PATH
+    else process.env.PATH = previous.path
+    if (process.platform === "win32") {
+      if (previous.pathWin === undefined) delete process.env.Path
+      else process.env.Path = previous.pathWin
+    }
+    ShellSelect.resolve.reset()
+  }
+}
+
 const withShell = async (shell: string | undefined, fn: () => void | Promise<void>) => {
   const prev = process.env.SHELL
   if (shell === undefined) delete process.env.SHELL
@@ -34,6 +59,12 @@ describe("shell", () => {
     expect(ShellSelect.login("C:/tools/pwsh.exe")).toBe(false)
   })
 
+  test("resolves a Store app execution alias when which misses", async () => {
+    await withWindowsApp("pwsh", async (alias) => {
+      expect(ShellSelect.resolve({ priority: "config" }, "pwsh")).toBe(alias)
+    })
+  })
+
   test("falls back when configured shell cannot be resolved", async () => {
     await withShell(undefined, async () => {
       const configured = ShellSelect.resolve({ priority: "config" })
@@ -53,12 +84,16 @@ describe("shell", () => {
     expect(ShellSelect.args("/usr/bin/fish", "echo hi")).toEqual(["-c", "echo hi"])
     expect(ShellSelect.args("/bin/zsh", "echo hi")).toEqual(["-c", "echo hi"])
     expect(ShellSelect.args("/bin/bash", "echo hi")).toEqual(["-c", "echo hi"])
+    const payload =
+      process.platform === "win32"
+        ? "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\nWrite-Output hi"
+        : "Write-Output hi"
     expect(ShellSelect.args("pwsh", "Write-Output hi")).toEqual([
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      "Write-Output hi",
+      payload,
     ])
   })
 

@@ -93,7 +93,7 @@ test.each([
       config: {
         get: async () => ({
           animations: false,
-          tabs: { mode: "off" },
+          tabs: { enabled: false },
           keybinds: {
             "session.line.up": "f6",
             "session.page.down": "f7",

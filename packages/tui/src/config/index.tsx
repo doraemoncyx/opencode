@@ -54,9 +54,6 @@ export const Plugin = Schema.Union([
   }),
 ])
 
-export const DiffSource = Schema.Union([Vcs.Mode, Schema.Literal("turn")])
-export type DiffSource = Schema.Schema.Type<typeof DiffSource>
-
 export const Cursor = Schema.Struct({
   style: Schema.optional(Schema.Literals(["block", "underline", "line", "default"])).annotate({
     description: "Cursor shape. Use 'default' to preserve the terminal setting",
@@ -98,6 +95,7 @@ export const Info = Schema.Struct({
   ).annotate({ description: "Scrolling behavior" }),
   attention: Schema.optional(
     Schema.Struct({
+      enabled: Schema.optional(Schema.Boolean).annotate({ description: "Enable attention alerts" }),
       notifications: Schema.optional(Schema.Boolean).annotate({ description: "Show system notifications" }),
       sound: Schema.optional(Schema.Boolean).annotate({ description: "Play attention sounds" }),
       volume: Schema.optional(
@@ -111,9 +109,8 @@ export const Info = Schema.Struct({
   ).annotate({ description: "System notification and sound settings" }),
   diffs: Schema.optional(
     Schema.Struct({
-      source: Schema.optional(DiffSource).annotate({
-        description:
-          "Initial diff source; defaults to 'branch' (branch and uncommitted changes). 'turn' shows the session's last turn and falls back to 'branch' outside a session",
+      source: Schema.optional(Vcs.Mode).annotate({
+        description: "Initial diff source; defaults to 'branch' (branch and uncommitted changes)",
       }),
       wrap: Schema.optional(Schema.Literals(["word", "none"])).annotate({
         description: "Line wrapping behavior in diff output",
@@ -151,6 +148,7 @@ export const Info = Schema.Struct({
       sidebar: Schema.optional(Schema.Literals(["auto", "hide"])).annotate({
         description: "Session sidebar visibility; 'auto' shows it when space permits",
       }),
+      terminal: Schema.optional(Schema.Boolean).annotate({ description: "Enable persistent session terminal panes" }),
       scrollbar: Schema.optional(Schema.Boolean).annotate({ description: "Show the session transcript scrollbar" }),
       thinking: Schema.optional(Schema.Literals(["show", "hide"])).annotate({
         description: "Show or hide model reasoning by default",
@@ -158,14 +156,11 @@ export const Info = Schema.Struct({
       grouping: Schema.optional(Schema.Literals(["auto", "none"])).annotate({
         description: "Group related transcript items automatically or render each item separately",
       }),
-      verbosity: Schema.optional(Schema.Literals(["low", "medium", "high"])).annotate({
-        description: "Transcript detail level: low summarizes each run of tools and thoughts, high opens exploration and instruction groups",
-      }),
       image_preview: Schema.optional(Schema.Boolean).annotate({
         description: "Show user attachment and tool-result images in the session transcript",
       }),
       tps: Schema.optional(Schema.Boolean).annotate({
-        description: "Show average tokens per second",
+        description: "Show output tokens per second in assistant footers",
       }),
       markdown: Schema.optional(Schema.Literals(["source", "rendered"])).annotate({
         description: "Show Markdown syntax markers or conceal them in rendered transcript content",
@@ -180,11 +175,8 @@ export const Info = Schema.Struct({
   ).annotate({ description: "Session transcript presentation settings" }),
   tabs: Schema.optional(
     Schema.Struct({
-      mode: Schema.optional(Schema.Literals(["auto", "on", "off"])).annotate({
-        description: "Use session tabs always, never, or when the terminal environment supports them",
-      }),
       enabled: Schema.optional(Schema.Boolean).annotate({
-        description: "Legacy tab toggle; use mode instead",
+        description: "Use a persistent tab strip instead of pinned quick-switch sessions",
       }),
       scope: Schema.optional(Schema.Literals(["global", "cwd"])).annotate({
         description: "Share tabs globally or keep a separate set for each working directory",
@@ -251,6 +243,7 @@ export type Info = Schema.Schema.Type<typeof Info>
 
 export type Resolved = Omit<Info, "attention" | "cursor" | "keybinds" | "leader" | "mouse" | "session" | "tabs"> & {
   attention: {
+    enabled: boolean
     notifications: boolean
     sound: boolean
     volume: number
@@ -270,7 +263,6 @@ export type Resolved = Omit<Info, "attention" | "cursor" | "keybinds" | "leader"
     tps: boolean
   }
   tabs: {
-    mode: "auto" | "on" | "off"
     enabled: boolean
     scope: "global" | "cwd"
     layout: "horizontal" | "vertical"
@@ -278,12 +270,7 @@ export type Resolved = Omit<Info, "attention" | "cursor" | "keybinds" | "leader"
   }
 }
 
-export function resolve(
-  input: Info,
-  options: { terminalSuspend: boolean; environment?: Readonly<Record<string, string | undefined>> },
-): Resolved {
-  const tabsMode =
-    input.tabs?.mode ?? (input.tabs?.enabled === undefined ? "auto" : input.tabs.enabled ? "on" : "off")
+export function resolve(input: Info, options: { terminalSuspend: boolean }): Resolved {
   const keybinds: TuiKeybind.KeybindOverrides = { ...input.keybinds }
   if (!options.terminalSuspend) {
     keybinds["terminal.suspend"] = "none"
@@ -298,8 +285,9 @@ export function resolve(
   return {
     ...input,
     attention: {
-      notifications: input.attention?.notifications ?? false,
-      sound: input.attention?.sound ?? false,
+      enabled: input.attention?.enabled ?? false,
+      notifications: input.attention?.notifications ?? true,
+      sound: input.attention?.sound ?? true,
       volume: input.attention?.volume ?? 0.4,
       sound_pack: input.attention?.sound_pack ?? "opencode.default",
       sounds: input.attention?.sounds ?? {},
@@ -319,12 +307,13 @@ export function resolve(
       ...input.session,
       new_location: input.session?.new_location ?? "launch",
       permissions: input.session?.permissions ?? "prompt",
+      // Persistent terminal panes need the opencode-pty daemon, which does not ship Windows binaries.
+      terminal: input.session?.terminal ?? process.platform !== "win32",
       tps: input.session?.tps ?? true,
     },
     tabs: {
       ...input.tabs,
-      mode: tabsMode,
-      enabled: tabsMode === "on" || (tabsMode === "auto" && (options.environment ?? process.env).HERDR_ENV !== "1"),
+      enabled: input.tabs?.enabled ?? true,
       scope: input.tabs?.scope ?? "cwd",
       layout: input.tabs?.layout ?? "horizontal",
       indicators: input.tabs?.indicators ?? "status",
@@ -341,7 +330,7 @@ const ConfigContext = createContext<{
 export function ConfigProvider(props: {
   config: Resolved
   service?: Interface
-  options?: { terminalSuspend: boolean; environment?: Readonly<Record<string, string | undefined>> }
+  options?: { terminalSuspend: boolean }
   children: JSX.Element
 }) {
   const [config, setConfig] = createStore(props.config)

@@ -6,19 +6,12 @@ import { useLanguage } from "@/runtime/i18n/language"
 export function SettingsSearchEmpty(props: { query: string }) {
   const language = useLanguage()
   const [state, setState] = createStore({ query: props.query })
-  let container: HTMLDivElement | undefined
+  let quoted: HTMLSpanElement | undefined
   let measure: HTMLSpanElement | undefined
   const text = (query: string) => language.t("settings.search.empty.query", { query })
   const update = () => {
-    if (!container || !measure) return
-    const style = getComputedStyle(container)
-    measure.textContent = language.t("settings.search.empty", { query: "" })
-    // Measure the available query space independently of its current truncated text.
-    const width =
-      container.clientWidth -
-      parseFloat(style.paddingInlineStart) -
-      parseFloat(style.paddingInlineEnd) -
-      measure.getBoundingClientRect().width
+    if (!quoted || !measure) return
+    const width = quoted.getBoundingClientRect().width
     const fits = (query: string) => {
       measure!.textContent = text(query)
       return measure!.getBoundingClientRect().width <= width
@@ -47,22 +40,21 @@ export function SettingsSearchEmpty(props: { query: string }) {
 
   createEffect(update)
   onMount(() => {
-    if (!container || !measure) return
+    if (!quoted || !measure) return
     // The measuring text also observes font changes that do not resize the available space.
-    createResizeObserver([container, measure], update)
+    createResizeObserver([quoted, measure], update)
   })
 
   return (
     <>
       <div
-        ref={container}
         class="settings-search-empty"
         role="status"
         aria-label={language.t("settings.search.empty", { query: text(props.query) })}
       >
         {language.rich("settings.search.empty", {
           query: (
-            <span class="settings-search-empty-quoted">
+            <span ref={quoted} class="settings-search-empty-quoted">
               <bdi dir="auto">{text(state.query)}</bdi>
             </span>
           ),

@@ -329,7 +329,7 @@ describe("Tool", () => {
         {
           before: make(),
           "": make(),
-          ["x".repeat(129)]: make(),
+          ["x".repeat(65)]: make(),
           "echo.tool": constant("first"),
           echo_tool: constant("last"),
           execute: make(),
@@ -343,27 +343,6 @@ describe("Tool", () => {
       expect((yield* snapshot.execute(call("after"))).output).toEqual({ text: "after" })
       expect((yield* snapshot.execute(call("echo_tool"))).output).toEqual({ text: "last" })
       expect(snapshot.codeModeCatalog?.tools).toEqual([])
-    }),
-  )
-
-  it.effect("registers 128-character MCP tool names in Code Mode", () =>
-    Effect.gen(function* () {
-      const service = yield* Tool.Service
-      const name = "x".repeat(128)
-      yield* transform(service, { [name]: make(), ["x".repeat(129)]: make() }, { namespace: "cloudflare" })
-
-      const snapshot = yield* service.snapshot()
-      expect(codeModeListings(snapshot.codeModeCatalog!).map((tool) => tool.path)).toEqual([`cloudflare.${name}`])
-      const result = yield* snapshot.execute({
-        ...call("execute"),
-        call: {
-          type: "tool-call",
-          id: "call-long-mcp-name",
-          name: "execute",
-          input: { code: `return (await tools.cloudflare[${JSON.stringify(name)}]({ text: "hello" })).text` },
-        },
-      })
-      expect(result.content).toEqual([{ type: "text", text: "hello" }])
     }),
   )
 
@@ -838,6 +817,64 @@ describe("Tool", () => {
     }),
   )
 
+  it.effect("suggests a near tool name for an unknown call", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      yield* transform(service, { shell: constant("ran"), "fastfilesearch_multi_grep": constant("ran") }, { codemode: false })
+      const snapshot = yield* service.snapshot()
+      const available = new Map(snapshot.definitions.map((definition) => [definition.name, definition]))
+      const rejected = (name: string) =>
+        snapshot.execute({ ...call(name), definitions: available }).pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        )
+
+      expect(yield* rejected("bash")).toBe(
+        'No tool named "bash" is currently available. Did you mean "shell"? Please use a tool from the available tool list.',
+      )
+      expect(yield* rejected("multi_grep")).toBe(
+        'No tool named "multi_grep" is currently available. Did you mean "fastfilesearch_multi_grep"? Please use a tool from the available tool list.',
+      )
+      expect(yield* rejected("missing")).toBe(
+        'No tool named "missing" is currently available. Please use a tool from the available tool list.',
+      )
+    }),
+  )
+
+  it.effect("names the tool whose input shape matches when a call reaches the wrong one", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      yield* transform(
+        service,
+        { shell: { ...constant("ran"), input: Schema.Struct({ command: Schema.String }) } },
+        { codemode: false },
+      )
+      const snapshot = yield* service.snapshot()
+      const available = new Map(snapshot.definitions.map((definition) => [definition.name, definition]))
+      const rejected = (name: string, input: unknown) =>
+        snapshot
+          .execute({
+            sessionID,
+            ...identity,
+            definitions: available,
+            call: { type: "tool-call", id: `call-${name}`, name, input },
+          })
+          .pipe(
+            Effect.flip,
+            Effect.map((error) => error.message),
+          )
+
+      // Code Mode's `execute` is advertised in the same request, so its `{ code }` input is the hint.
+      expect(yield* rejected("shell", { code: "let value = 1" })).toContain(
+        "The arguments look like input for the `execute` tool. Call `execute` with `{ code }` instead.",
+      )
+      // A malformed call for the right tool keeps its own error without an unrelated suggestion.
+      expect(yield* rejected("shell", {})).toBe(
+        'Invalid arguments for tool "shell":\n- command: Missing key\n\nArguments provided:\n{}\n\nUpdate the arguments and call the tool again.',
+      )
+    }),
+  )
+
   it.effect("exposes execution only through a snapshot", () =>
     Effect.gen(function* () {
       const service = yield* Tool.Service
@@ -874,21 +911,6 @@ describe("Tool", () => {
       expect(contexts).toEqual([
         { sessionID, ...identity, id: Tool.CallID.make("call-context"), progress: expect.any(Function) },
       ])
-    }),
-  )
-  it.effect("lists registered tools by effective name", () =>
-    Effect.gen(function* () {
-      const service = yield* Tool.Service
-      yield* transform(service, { echo: make() }, { codemode: false })
-      yield* transform(service, { count: { ...constant("1"), name: "count" } }, { namespace: "acme" })
-
-      expect((yield* service.list()).map((tool) => [tool.id, tool.name])).toEqual([
-        ["echo", "echo"],
-        ["acme_count", "count"],
-      ])
-
-      yield* service.transform((editor) => editor.remove("echo"))
-      expect((yield* service.list()).map((tool) => tool.id)).toEqual(["acme_count"])
     }),
   )
   ;[

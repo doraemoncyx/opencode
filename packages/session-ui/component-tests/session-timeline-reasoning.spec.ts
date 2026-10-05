@@ -1,7 +1,9 @@
 import { expect, story } from "../../storybook/playwright/story"
 
-for (const mode of ["hidden", "compact", "full"] as const) {
-  for (const reasoning of ["blank", "heading"] as const) {
+const REASONING_TEXT = "I will inspect the timeline before changing its state."
+
+for (const mode of ["hidden", "compact", "snippet", "full"] as const) {
+  for (const reasoning of ["none", "blank", "heading"] as const) {
     story(`projects ${mode} mode with ${reasoning} active reasoning`, async ({ mount }) => {
       const timeline = await mount("current-session-timeline-rows--conversation", {
         args: { scenario: "reasoning", mode, reasoning },
@@ -9,7 +11,7 @@ for (const mode of ["hidden", "compact", "full"] as const) {
       await expect(timeline.locator('[data-timeline-row="UserMessage"]')).toContainText(
         "Find why the Session header shifts after the first streamed response.",
       )
-      const active = mode !== "hidden"
+      const active = mode !== "hidden" && reasoning !== "none"
       const part = timeline.locator('[data-timeline-part-id="msg_projection_assistant:reasoning:0"]')
       await expect(timeline.locator('[data-timeline-row="Thinking"]')).toHaveCount(active ? 1 : 0)
       await expect(part).toHaveCount(active ? 1 : 0)
@@ -18,15 +20,22 @@ for (const mode of ["hidden", "compact", "full"] as const) {
         return
       }
       const trigger = part.getByRole("button")
-      const body = part.getByText("I will inspect the timeline before changing its state.", { exact: true })
+      const body = part.locator('[data-component="markdown"]').getByText(REASONING_TEXT, { exact: true })
+      const preview = part.locator('[data-slot="reasoning-preview"]')
       await expect(trigger).toHaveAttribute("aria-expanded", String(mode === "full"))
       await expect(part.locator('[data-component="text-shimmer"]')).toHaveAttribute("data-active", "true")
-      if (mode === "compact") {
+      await expect(preview).toHaveCount(mode === "snippet" ? 1 : 0)
+      if (mode === "full") {
+        await expect(body).toBeVisible()
+        await expect(trigger).not.toContainText("Inspecting stability")
+      } else {
+        // A collapsed thought names itself; preview mode also shows its opening lines.
         await expect(trigger).toContainText("Inspecting stability")
         await expect(body).toBeHidden()
         await trigger.click()
-        await expect(trigger).toHaveAttribute("aria-expanded", "true")
       }
+      await expect(trigger).toHaveAttribute("aria-expanded", "true")
+      await expect(preview).toHaveCount(0)
       await expect(body).toBeVisible()
       await trigger.click()
       await expect(trigger).toHaveAttribute("aria-expanded", "false")
@@ -52,10 +61,9 @@ for (const mode of ["hidden", "compact", "full"] as const) {
         const trigger = group.locator(':scope > [data-component="collapsible"] > [data-slot="collapsible-trigger"]')
         await expect(trigger).toHaveText(/^Used\s*1\s*Skill$/)
         await expect(trigger).toHaveAttribute("aria-expanded", "false")
-        await expect(group.locator('[data-component="context-tool-group-trigger"]')).toHaveAttribute(
-          "aria-label",
-          "Used 1 Skill",
-        )
+        await expect(
+          group.locator('[data-component="context-tool-group-trigger"] [data-slot="basic-tool-tool-title"]'),
+        ).toHaveText("Skill")
         await expect(timeline.getByText("Inspecting stability", { exact: true })).toBeHidden()
         await trigger.click()
         await expect(trigger).toHaveAttribute("aria-expanded", "true")
@@ -69,17 +77,25 @@ for (const mode of ["hidden", "compact", "full"] as const) {
       if (mode === "hidden") return
       const thought = part.locator('[data-slot="collapsible-trigger"]')
       const thoughtTitle = thought.locator('[data-slot="basic-tool-tool-title"]')
+      const subtitles = thought.locator('[data-slot="basic-tool-tool-subtitle"]')
+      const duration = thought.locator('[data-slot="block-duration"]')
+      const body = part.locator('[data-component="markdown"]').getByText(REASONING_TEXT, { exact: true })
       await expect(thoughtTitle).toContainText("Thought")
       await expect(thoughtTitle).toHaveCSS("font-size", "13px")
       await expect(thoughtTitle).toHaveCSS("line-height", "16px")
-      await expect(thought.locator('[data-slot="basic-tool-tool-subtitle"]')).toHaveText("7s")
       await expect(thought).toHaveAttribute("aria-expanded", String(mode === "full"))
-      await expect(thought).not.toContainText("Inspecting stability")
       await expect(part.locator('[data-component="text-shimmer"]')).toHaveAttribute("data-active", "false")
-      if (mode === "compact") await thought.click()
-      await expect(
-        part.getByText("I will inspect the timeline before changing its state.", { exact: true }),
-      ).toBeVisible()
+      // A finished thought keeps its label while collapsed; only the expanded row drops it.
+      if (mode === "full") await expect(subtitles).toHaveText([])
+      else await expect(subtitles).toHaveText(["Inspecting stability"])
+      // Elapsed time sits in its own trailing slot, not among the subtitles.
+      await expect(duration).toHaveText("7.00s")
+      if (mode === "snippet") {
+        await expect(part.locator('[data-slot="reasoning-preview-line"]')).toHaveText([REASONING_TEXT])
+        await expect(body).toBeHidden()
+      }
+      if (mode !== "full") await thought.click()
+      await expect(body).toBeVisible()
     })
   }
 }

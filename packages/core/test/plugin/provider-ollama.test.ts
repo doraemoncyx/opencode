@@ -1,4 +1,5 @@
 import { Bus } from "@opencode/core/bus"
+import { Catalog } from "@opencode/core/catalog"
 import { Config } from "@opencode/core/config"
 import { Integration } from "@opencode/core/integration"
 import { Model } from "@opencode/core/model"
@@ -78,18 +79,17 @@ describe("OllamaPlugin", () => {
       }),
       ({ requests, server }) =>
         Effect.gen(function* () {
-          const providers = yield* Provider.Service
-          const modelState = yield* Model.Service
+          const catalog = yield* Catalog.Service
           const providerID = Provider.ID.make("ollama")
           expect(OllamaPlugin.id).toBe("opencode.provider.ollama")
           expect(ProviderPlugins.map((item) => item.id)).toContain("opencode.provider.ollama")
           yield* addPlugin(server.url.origin)
           const model = yield* eventually(
-            modelState.get(providerID, Model.ID.make("gemma3:4b")),
+            catalog.model.get(providerID, Model.ID.make("gemma3:4b")),
             (item) => item !== undefined,
           )
 
-          expect(yield* providers.get(providerID)).toEqual({
+          expect(yield* catalog.provider.get(providerID)).toEqual({
             id: providerID,
             name: "Ollama",
             activation: "enabled",
@@ -103,10 +103,10 @@ describe("OllamaPlugin", () => {
             capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
             limit: { context: 131_072, output: 32_000 },
           })
-          expect(yield* modelState.get(providerID, Model.ID.make("unknown-context"))).toMatchObject({
+          expect(yield* catalog.model.get(providerID, Model.ID.make("unknown-context"))).toMatchObject({
             limit: { context: 200_000, output: 32_000 },
           })
-          expect(yield* modelState.get(providerID, Model.ID.make("nomic-embed"))).toBeUndefined()
+          expect(yield* catalog.model.get(providerID, Model.ID.make("nomic-embed"))).toBeUndefined()
           expect(requests).toContainEqual({ method: "GET", path: "/api/tags" })
           expect(requests).toContainEqual({ method: "POST", path: "/api/show", model: "gemma3:4b" })
           expect(requests).toContainEqual({ method: "POST", path: "/api/show", model: "nomic-embed" })
@@ -143,11 +143,11 @@ describe("OllamaPlugin", () => {
       }),
       ({ state, requests, server }) =>
         Effect.gen(function* () {
-          const modelState = yield* Model.Service
+          const catalog = yield* Catalog.Service
           const providerID = Provider.ID.make("ollama")
           const modelID = Model.ID.make("qwen3:8b")
           yield* addPlugin(server.url.origin, "5 millis")
-          yield* eventually(modelState.get(providerID, modelID), (model) => model?.limit.context === 32_768)
+          yield* eventually(catalog.model.get(providerID, modelID), (model) => model?.limit.context === 32_768)
           yield* eventually(
             Effect.sync(() => requests.tags),
             (count) => count >= 2,
@@ -156,12 +156,12 @@ describe("OllamaPlugin", () => {
 
           state.digest = "digest-2"
           state.context = 65_536
-          yield* eventually(modelState.get(providerID, modelID), (model) => model?.limit.context === 65_536)
+          yield* eventually(catalog.model.get(providerID, modelID), (model) => model?.limit.context === 65_536)
           expect(requests.show).toBe(2)
 
           state.fail = true
           yield* Effect.promise(() => Bun.sleep(30))
-          expect((yield* modelState.get(providerID, modelID))?.limit.context).toBe(65_536)
+          expect((yield* catalog.model.get(providerID, modelID))?.limit.context).toBe(65_536)
         }),
       ({ server }) => Effect.promise(() => server.stop(true)),
     ),
@@ -185,8 +185,7 @@ describe("OllamaPlugin", () => {
       }),
       ({ models, server }) =>
         Effect.gen(function* () {
-          const providers = yield* Provider.Service
-          const modelState = yield* Model.Service
+          const catalog = yield* Catalog.Service
           const integrations = yield* Integration.Service
           const providerID = Provider.ID.make("ollama")
           yield* integrations.transform((editor) => {
@@ -198,34 +197,33 @@ describe("OllamaPlugin", () => {
               method: { type: "env", names: ["OLLAMA_API_KEY"] },
             })
           })
-          yield* providers.transform((editor) => {
-            editor.update(providerID, (provider) => {
+          yield* catalog.transform((editor) => {
+            editor.provider.update(providerID, (provider) => {
               provider.name = "Ollama"
-              provider.package = "@opencode/ai/providers/openai-compatible"
+              provider.package = "aisdk:@ai-sdk/openai-compatible"
               provider.integrationID = Integration.ID.make("ollama")
             })
-            editor.models.update(providerID, Model.ID.make("static-model"), () => {})
+            editor.model.update(providerID, Model.ID.make("static-model"), () => {})
           })
 
           yield* addPlugin(server.url.origin, "5 millis")
           yield* eventually(
-            modelState.get(providerID, Model.ID.make("discovered-model")),
+            catalog.model.get(providerID, Model.ID.make("discovered-model")),
             (model) => model !== undefined,
           )
           expect(yield* integrations.get(Integration.ID.make("ollama"))).toBeUndefined()
-          expect((yield* providers.get(providerID))?.activation).toBe("enabled")
-          expect(yield* modelState.get(providerID, Model.ID.make("static-model"))).toBeUndefined()
+          expect((yield* catalog.provider.get(providerID))?.activation).toBe("enabled")
+          expect(yield* catalog.model.get(providerID, Model.ID.make("static-model"))).toBeUndefined()
 
           models.splice(0)
           yield* eventually(
-            providers.snapshot(),
-            (snapshot) => snapshot.records.get(providerID)?.models.has(Model.ID.make("static-model")) === true,
+            catalog.model.get(providerID, Model.ID.make("static-model")),
+            (model) => model !== undefined,
           )
-          expect(yield* modelState.get(providerID, Model.ID.make("discovered-model"))).toBeUndefined()
-          expect(yield* modelState.get(providerID, Model.ID.make("static-model"))).toBeUndefined()
+          expect(yield* catalog.model.get(providerID, Model.ID.make("discovered-model"))).toBeUndefined()
           expect(yield* integrations.get(Integration.ID.make("ollama"))).toBeDefined()
-          expect((yield* providers.get(providerID))?.activation).toBe("auto")
-          expect((yield* providers.get(providerID))?.integrationID).toBe(Integration.ID.make("ollama"))
+          expect((yield* catalog.provider.get(providerID))?.activation).toBe("auto")
+          expect((yield* catalog.provider.get(providerID))?.integrationID).toBe(Integration.ID.make("ollama"))
         }),
       ({ server }) => Effect.promise(() => server.stop(true)),
     ),
@@ -267,13 +265,12 @@ describe("OllamaPlugin", () => {
         ({ requests, initial, configured }) =>
           Effect.gen(function* () {
             const bus = yield* Bus.Service
-            const providers = yield* Provider.Service
-            const modelState = yield* Model.Service
+            const catalog = yield* Catalog.Service
             const config = yield* Config.Test
             const providerID = Provider.ID.make("ollama")
             yield* addPlugin(initial.url.origin)
             yield* eventually(
-              modelState.get(providerID, Model.ID.make("initial-model")),
+              catalog.model.get(providerID, Model.ID.make("initial-model")),
               (model) => model !== undefined,
             )
 
@@ -281,13 +278,13 @@ describe("OllamaPlugin", () => {
             yield* config.setEntries([configuration({ baseURL, apiKey: "old" }), configuration({ apiKey: "secret" })])
             yield* bus.publish(Event.Updated, {})
             yield* eventually(
-              modelState.get(providerID, Model.ID.make("configured-model")),
+              catalog.model.get(providerID, Model.ID.make("configured-model")),
               (model) => model !== undefined,
             )
             expect(requests).toContainEqual({ authorization: "Bearer secret", method: "GET", path: "/proxy/api/tags" })
             expect(requests).toContainEqual({ authorization: "Bearer secret", method: "POST", path: "/proxy/api/show" })
-            expect(yield* modelState.get(providerID, Model.ID.make("initial-model"))).toBeUndefined()
-            expect((yield* providers.get(providerID))?.settings).toEqual({
+            expect(yield* catalog.model.get(providerID, Model.ID.make("initial-model"))).toBeUndefined()
+            expect((yield* catalog.provider.get(providerID))?.settings).toEqual({
               baseURL,
               provider: "ollama",
               apiKey: "secret",
@@ -296,7 +293,7 @@ describe("OllamaPlugin", () => {
             requests.splice(0)
             yield* config.setEntries([configuration({ baseURL, apiKey: "secret" }), configuration({ apiKey: null })])
             yield* bus.publish(Event.Updated, {})
-            yield* eventually(providers.get(providerID), (provider) => provider?.settings?.apiKey === "")
+            yield* eventually(catalog.provider.get(providerID), (provider) => provider?.settings?.apiKey === "")
             expect(requests).toContainEqual({ authorization: null, method: "GET", path: "/proxy/api/tags" })
             expect(requests).toContainEqual({ authorization: null, method: "POST", path: "/proxy/api/show" })
           }),

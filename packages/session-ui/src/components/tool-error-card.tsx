@@ -6,6 +6,8 @@ import { Icon } from "@opencode/ui/icon"
 import { IconButton } from "@opencode/ui/icon-button"
 import { Tooltip } from "@opencode/ui/tooltip"
 import { useI18n } from "@opencode/ui/context/i18n"
+import { BlockDuration } from "./block-duration"
+import type { BlockTime } from "../message/block-time"
 
 export interface ToolErrorCardProps extends Omit<ComponentProps<typeof Card>, "children" | "variant"> {
   tool: string
@@ -17,6 +19,8 @@ export interface ToolErrorCardProps extends Omit<ComponentProps<typeof Card>, "c
   subtitle?: string
   href?: string
   onSubtitleClick?: (event: MouseEvent) => void
+  /** Wall-clock interval for the failed tool call. */
+  time?: BlockTime
 }
 
 export function ToolErrorCard(props: ToolErrorCardProps) {
@@ -37,6 +41,7 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
     "subtitle",
     "href",
     "onSubtitleClick",
+    "time",
   ])
   const setOpen = (value: boolean) => {
     if (props.open === undefined) setState("open", value)
@@ -126,6 +131,7 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
                 </div>
               </div>
             </div>
+            <Show when={props.time}>{(time) => <BlockDuration time={time()} live={!time().end} />}</Show>
             <Collapsible.Arrow />
           </div>
         </Collapsible.Trigger>

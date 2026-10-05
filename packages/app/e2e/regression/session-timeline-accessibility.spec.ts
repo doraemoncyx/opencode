@@ -1,5 +1,11 @@
 import { expect, test } from "@playwright/test"
-import { assistantMessage, setupTimeline, shell, textPart, userMessage } from "../utils/timeline"
+import {
+  assistantMessage,
+  setupTimeline,
+  shell,
+  textPart,
+  userMessage,
+} from "../performance/timeline-stability/fixture"
 
 test("space activates a focused timeline button instead of scrolling", async ({ page }) => {
   const shellID = "prt_space_button_shell"

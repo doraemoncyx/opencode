@@ -17,6 +17,9 @@ import { createStore } from "solid-js/store"
 import { Collapsible } from "@opencode/ui/collapsible"
 import type { IconProps } from "@opencode/ui/icon"
 import { TextShimmer } from "@opencode/ui/text-shimmer"
+import { Markdown } from "./markdown"
+import { BlockDuration } from "./block-duration"
+import type { BlockTime } from "../message/block-time"
 
 export type TriggerTitle = {
   title: string
@@ -37,6 +40,8 @@ const isTriggerTitle = (val: unknown): val is TriggerTitle => {
 export interface BasicToolProps {
   icon: IconProps["name"]
   trigger: TriggerTitle | JSX.Element | ((open: Accessor<boolean>) => JSX.Element)
+  /** Rendered as a right-aligned elapsed label; the trigger keeps it in view while pending. */
+  time?: BlockTime | ((now: number) => BlockTime | undefined)
   children?: JSX.Element
   /** Declare known content without constructing lazy JSX to test its presence. */
   hasContent?: boolean
@@ -270,6 +275,7 @@ export function BasicTool(props: BasicToolProps) {
           </Switch>
         </div>
       </div>
+      <Show when={props.time}>{(time) => <BlockDuration time={time()} live={pending()} />}</Show>
       <Show when={hasChildren() && !props.hideDetails && !props.locked && (!pending() || props.allowOpenWhilePending)}>
         <Collapsible.Arrow />
       </Show>
@@ -370,24 +376,59 @@ function args(input: Record<string, unknown> | undefined) {
     .slice(0, 3)
 }
 
+function hasInput(input: Record<string, unknown> | undefined): input is Record<string, unknown> {
+  return !!input && Object.keys(input).length > 0
+}
+
 export function GenericTool(props: {
   tool: string
   status?: string
   hideDetails?: boolean
   input?: Record<string, unknown>
+  output?: string
+  time?: BlockTime | ((now: number) => BlockTime | undefined)
 }) {
   const i18n = useI18n()
+  const params = createMemo(() => {
+    if (!hasInput(props.input)) return ""
+    return JSON.stringify(props.input, null, 2)
+  })
 
   return (
     <BasicTool
       icon="mcp"
       status={props.status}
+      time={props.time}
       trigger={{
         title: i18n.t("ui.basicTool.called", { tool: props.tool }),
         subtitle: label(props.input),
         args: args(props.input),
       }}
       hideDetails={props.hideDetails}
-    />
+    >
+      <Show when={params()}>
+        <div
+          data-component="tool-input"
+          data-scrollable
+          tabIndex={0}
+          role="region"
+          aria-label={i18n.t("ui.basicTool.parameters")}
+        >
+          <span data-slot="tool-input-label">{i18n.t("ui.basicTool.parameters")}</span>
+          <pre data-slot="tool-input-json">{params()}</pre>
+        </div>
+      </Show>
+      <Show when={props.output}>
+        <div
+          data-component="tool-output"
+          data-scrollable
+          tabIndex={0}
+          role="region"
+          aria-label={i18n.t("ui.scrollView.ariaLabel")}
+        >
+          <Markdown text={props.output!} />
+        </div>
+      </Show>
+    </BasicTool>
   )
 }

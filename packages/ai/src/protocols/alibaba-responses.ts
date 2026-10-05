@@ -1,14 +1,14 @@
 import { Effect, Schema } from "effect"
 import { Protocol } from "../route/protocol.js"
 import { OpenResponses } from "./open-responses.js"
-import { JsonObject, ProviderShared } from "./shared.js"
+import { JsonObject, optionalArray, ProviderShared } from "./shared.js"
 import { OpenResponsesOptions } from "./utils/open-responses-options.js"
 import { ResponsesHostedTools } from "./utils/responses-hosted-tools.js"
 
 const Options = Schema.Struct({
-  reasoningEffort: Schema.optional(OpenResponsesOptions.ReasoningEffort),
+  reasoningEffort: OpenResponsesOptions.Options.fields.reasoningEffort,
   enableThinking: Schema.optional(Schema.Boolean),
-  store: Schema.optional(Schema.Boolean),
+  store: OpenResponsesOptions.Options.fields.store,
   previousResponseId: Schema.optional(Schema.String),
   conversation: Schema.optional(Schema.String),
 })
@@ -25,6 +25,8 @@ const WebExtractorItem = Schema.StructWithRest(
 )
 const Body = Schema.Struct({
   ...OpenResponses.coreFields,
+  input: Schema.Array(Schema.Union([OpenResponses.InputItem, WebExtractorItem])),
+  tools: optionalArray(Schema.Union([OpenResponses.Tool, NativeTool])),
   enable_thinking: Options.fields.enableThinking,
   previous_response_id: Options.fields.previousResponseId,
   conversation: Options.fields.conversation,
@@ -50,7 +52,7 @@ export const protocol = Protocol.make({
       const opts = yield* ProviderShared.validateWith(Schema.decodeUnknownEffect(Options))(req.providerOptions ?? {})
       const body = yield* OpenResponses.fromRequestWithAdapter(req, adapter)
       const choice = body.tool_choice
-      return {
+      return yield* ProviderShared.validateWith(Schema.decodeUnknownEffect(Body))({
         ...body,
         enable_thinking: opts.enableThinking,
         previous_response_id: opts.previousResponseId,
@@ -60,7 +62,7 @@ export const protocol = Protocol.make({
           typeof choice === "object" && choice.type === "function"
             ? { type: "allowed_tools" as const, mode: "required" as const, tools: [choice] }
             : choice,
-      }
+      })
     }),
   },
   stream: {

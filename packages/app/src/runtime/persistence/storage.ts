@@ -3,14 +3,13 @@ import { messageSync, type AsyncStorage, type SyncStorage } from "@solid-primiti
 import { checksum } from "@opencode/util/encode"
 import { createResource, onCleanup, type Accessor } from "solid-js"
 import { createStore, type SetStoreFunction, type Store } from "solid-js/store"
-import { Option, Predicate, Schema } from "effect"
+import { Option, Schema } from "effect"
 import { pathKey } from "@/workspaces/path-key"
 import { ScopedKey, ServerScope } from "@/runtime/server/scope"
 import { persistStore } from "./persist"
 import { Persistence } from "./schema"
 
 type InitType = Promise<string | null> | string | null
-
 type PersistedWithReady<T> = [
   Store<T>,
   SetStoreFunction<T>,
@@ -25,42 +24,23 @@ type PersistTarget = {
   scope?: "window"
   workspaceStorageAliases?: string[]
   previousKey?: string
-  /**
-   * Imports an older key once, from this storage (or `storage` when given) or else the default storage
-   * (e.g. `settings.v3`). With pick, only that part is copied and the source stays. The first source that holds a
-   * value wins.
-   */
-  copyFrom?: readonly CopyFrom[]
   key: string
 }
 
-// SAFETY: an older stored value is JSON with no schema of its own; the store decodes what a pick returns.
-// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns -- see SAFETY above
-type PickPart = (value: unknown) => unknown
-
-type CopyFrom = { key: string; storage?: string; pick?: PickPart }
-
 const GLOBAL_STORAGE = "opencode.global.dat"
-
 const WINDOW_STORAGE = "opencode.window"
-
 const LOCAL_PREFIX = "opencode."
-
 const fallback = new Map<string, boolean>()
 
 const CACHE_MAX_ENTRIES = 500
-
 const CACHE_MAX_BYTES = 8 * 1024 * 1024
 
 type CacheEntry = { value: string; bytes: number }
-
 const cache = new Map<string, CacheEntry>()
-
 const cacheTotal = { bytes: 0 }
 
 function cacheDelete(key: string) {
   const entry = cache.get(key)
-
   if (!entry) return
   cacheTotal.bytes -= entry.bytes
   cache.delete(key)
@@ -69,24 +49,20 @@ function cacheDelete(key: string) {
 function cachePrune() {
   for (;;) {
     if (cache.size <= CACHE_MAX_ENTRIES && cacheTotal.bytes <= CACHE_MAX_BYTES) return
-    const oldest = cache.keys().next()
-
-    if (oldest.done || !oldest.value) return
-    cacheDelete(oldest.value)
+    const oldest = cache.keys().next().value as string | undefined
+    if (!oldest) return
+    cacheDelete(oldest)
   }
 }
 
 function cacheSet(key: string, value: string) {
   const bytes = value.length * 2
-
   if (bytes > CACHE_MAX_BYTES) {
     cacheDelete(key)
-
     return
   }
 
   const entry = cache.get(key)
-
   if (entry) cacheTotal.bytes -= entry.bytes
   cache.delete(key)
   cache.set(key, { value, bytes })
@@ -96,11 +72,9 @@ function cacheSet(key: string, value: string) {
 
 function cacheGet(key: string) {
   const entry = cache.get(key)
-
   if (!entry) return
   cache.delete(key)
   cache.set(key, entry)
-
   return entry.value
 }
 
@@ -112,35 +86,27 @@ function fallbackSet(scope: string) {
   fallback.set(scope, true)
 }
 
-// SAFETY: a thrown storage error has no schema; only `name`, `code` and `message` are read, each behind a guard.
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- see SAFETY above
 function quota(error: unknown) {
   if (error instanceof DOMException) {
     if (error.name === "QuotaExceededError") return true
-
     if (error.name === "NS_ERROR_DOM_QUOTA_REACHED") return true
-
     if (error.name === "QUOTA_EXCEEDED_ERR") return true
-
     if (error.code === 22 || error.code === 1014) return true
-
     return false
   }
 
-  const name = Predicate.hasProperty(error, "name") && Predicate.isString(error.name) ? error.name : undefined
-
+  if (!error || typeof error !== "object") return false
+  const name = (error as { name?: string }).name
   if (name === "QuotaExceededError" || name === "NS_ERROR_DOM_QUOTA_REACHED") return true
-
   if (name && /quota/i.test(name)) return true
 
-  const code = Predicate.hasProperty(error, "code") ? error.code : undefined
-
+  const code = (error as { code?: number }).code
   if (code === 22 || code === 1014) return true
 
-  const message =
-    Predicate.hasProperty(error, "message") && Predicate.isString(error.message) ? error.message : undefined
-
-  return !!message && /quota/i.test(message)
+  const message = (error as { message?: string }).message
+  if (typeof message !== "string") return false
+  if (/quota/i.test(message)) return true
+  return false
 }
 
 type Evict = { key: string; size: number }
@@ -152,11 +118,8 @@ function evict(storage: Storage, keep: string, value: string) {
 
   for (const index of indexes) {
     const name = storage.key(index)
-
     if (!name) continue
-
     if (!name.startsWith(LOCAL_PREFIX)) continue
-
     if (name === keep) continue
     const stored = storage.getItem(name)
     items.push({ key: name, size: stored?.length ?? 0 })
@@ -171,7 +134,6 @@ function evict(storage: Storage, keep: string, value: string) {
     try {
       storage.setItem(keep, value)
       cacheSet(keep, value)
-
       return true
     } catch (error) {
       if (!quota(error)) throw error
@@ -185,7 +147,6 @@ function write(storage: Storage, key: string, value: string) {
   try {
     storage.setItem(key, value)
     cacheSet(key, value)
-
     return true
   } catch (error) {
     if (!quota(error)) throw error
@@ -196,77 +157,48 @@ function write(storage: Storage, key: string, value: string) {
     cacheDelete(key)
     storage.setItem(key, value)
     cacheSet(key, value)
-
     return true
   } catch (error) {
     if (!quota(error)) throw error
   }
 
   const ok = evict(storage, key, value)
-
   return ok
 }
 
 function readCurrent(input: { storage: SyncStorage; key: string; normalize: (raw: string) => string | undefined }) {
   const raw = input.storage.getItem(input.key)
-
   if (raw === null) return
   const next = input.normalize(raw)
-
   if (next === undefined) {
     input.storage.removeItem(input.key)
-
     return null
   }
-
   if (raw !== next) input.storage.setItem(input.key, next)
-
   return next
-}
-
-type RelocationSource<S> = { storage: S; key?: string; pick?: PickPart }
-
-const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
-
-/** Applies a source's pick to its raw JSON; the picked part is re-encoded for the target schema. */
-function pickRaw(raw: string | null, pick: PickPart | undefined) {
-  if (raw === null || !pick) return raw
-  const value = decodeJson(raw)
-
-  if (Option.isNone(value)) return null
-  const picked = pick(value.value)
-
-  return picked === undefined ? null : JSON.stringify(picked)
 }
 
 function relocateStoredValue(input: {
   current: SyncStorage
-  sources: RelocationSource<SyncStorage>[]
+  sources: { storage: SyncStorage; key?: string }[]
   key: string
   normalize: (raw: string) => string | undefined
 }) {
   for (const source of input.sources) {
     const key = source.key ?? input.key
-    const raw = pickRaw(source.storage.getItem(key), source.pick)
-
+    const raw = source.storage.getItem(key)
     if (raw === null) continue
 
     const next = input.normalize(raw)
-
     if (next === undefined) {
-      if (!source.pick) source.storage.removeItem(key)
+      source.storage.removeItem(key)
       continue
     }
-
     input.current.setItem(input.key, next)
-
     if (input.current.getItem(input.key) !== next) return null
-
-    if (!source.pick) source.storage.removeItem(key)
-
+    source.storage.removeItem(key)
     return next
   }
-
   return null
 }
 
@@ -276,18 +208,13 @@ async function readCurrentAsync(input: {
   normalize: (raw: string) => string | undefined
 }) {
   const raw = await input.storage.getItem(input.key)
-
   if (raw === null) return
   const next = input.normalize(raw)
-
   if (next === undefined) {
     await input.storage.removeItem(input.key).catch(() => undefined)
-
     return null
   }
-
   if (raw !== next) await input.storage.setItem(input.key, next)
-
   return next
 }
 
@@ -307,50 +234,41 @@ function toAsyncStorage(storage: SyncStorage | AsyncStorage): AsyncStorage {
 
 async function relocateStoredValueAsync(input: {
   current: AsyncStorage
-  sources: RelocationSource<AsyncStorage>[]
+  sources: { storage: AsyncStorage; key?: string }[]
   key: string
   normalize: (raw: string) => string | undefined
 }) {
   for (const source of input.sources) {
     const key = source.key ?? input.key
-    const raw = pickRaw(await source.storage.getItem(key), source.pick)
-
+    const raw = await source.storage.getItem(key)
     if (raw === null) continue
 
     const next = input.normalize(raw)
-
     if (next === undefined) {
-      if (!source.pick) await removeAsync(source.storage, key)
+      await removeAsync(source.storage, key)
       continue
     }
-
     await input.current.setItem(input.key, next)
-
-    if (!source.pick) await source.storage.removeItem(key)
-
+    await source.storage.removeItem(key)
     return next
   }
-
   return null
 }
 
 function workspaceStorage(dir: string) {
   const head = (dir.slice(0, 12) || "workspace").replace(/[^a-zA-Z0-9._-]/g, "-")
   const sum = checksum(dir) ?? "0"
-
   return `opencode.workspace.${head}.${sum}.dat`
 }
 
 function draftStorage(draftID: string) {
   const head = (draftID.slice(0, 12) || "draft").replace(/[^a-zA-Z0-9._-]/g, "-")
   const sum = checksum(draftID) ?? "0"
-
   return `opencode.draft.${head}.${sum}.dat`
 }
 
 function windowStorage(windowID: string) {
   const safe = (windowID || "browser").replace(/[^a-zA-Z0-9._-]/g, "-")
-
   return `${WINDOW_STORAGE}.${safe}.dat`
 }
 
@@ -358,26 +276,21 @@ function workspaceStorageAliases(dir: string) {
   const storage = workspaceStorage(pathKey(dir))
   const result = new Set<string>()
   const raw = workspaceStorage(dir)
-
   if (raw !== storage) result.add(raw)
 
   const key = pathKey(dir)
   const drive = key.length >= 3 && key[1] === ":" && key[2] === "/"
-
   if (drive) {
     const backslash = workspaceStorage(key.replaceAll("/", "\\"))
-
     if (backslash !== storage) result.add(backslash)
   }
 
   if (result.size === 0) return
-
   return [...result]
 }
 
 function serverWorkspaceTarget(scope: ServerScope, dir: string, key: string): PersistTarget {
   if (scope !== ServerScope.local) return { storage: workspaceStorage(ScopedKey.from(scope, pathKey(dir))), key }
-
   return { storage: workspaceStorage(pathKey(dir)), workspaceStorageAliases: workspaceStorageAliases(dir), key }
 }
 
@@ -385,12 +298,10 @@ function localStorageWithPrefix(prefix: string): SyncStorage {
   const base = `${prefix}:`
   const scope = `prefix:${prefix}`
   const item = (key: string) => base + key
-
   return {
     getItem: (key) => {
       const name = item(key)
       const cached = cacheGet(name)
-
       if (fallbackDisabled(scope)) return cached ?? null
 
       const stored = (() => {
@@ -398,37 +309,28 @@ function localStorageWithPrefix(prefix: string): SyncStorage {
           return localStorage.getItem(name)
         } catch {
           fallbackSet(scope)
-
           return null
         }
       })()
-
       if (stored === null) return cached ?? null
       cacheSet(name, stored)
-
       return stored
     },
     setItem: (key, value) => {
       const name = item(key)
-
       if (fallbackDisabled(scope)) return
-
       try {
         if (write(localStorage, name, value)) return
       } catch {
         fallbackSet(scope)
-
         return
       }
-
       fallbackSet(scope)
     },
     removeItem: (key) => {
       const name = item(key)
       cacheDelete(name)
-
       if (fallbackDisabled(scope)) return
-
       try {
         localStorage.removeItem(name)
       } catch {
@@ -440,11 +342,9 @@ function localStorageWithPrefix(prefix: string): SyncStorage {
 
 function localStorageDirect(): SyncStorage {
   const scope = "direct"
-
   return {
     getItem: (key) => {
       const cached = cacheGet(key)
-
       if (fallbackDisabled(scope)) return cached ?? null
 
       const stored = (() => {
@@ -452,34 +352,26 @@ function localStorageDirect(): SyncStorage {
           return localStorage.getItem(key)
         } catch {
           fallbackSet(scope)
-
           return null
         }
       })()
-
       if (stored === null) return cached ?? null
       cacheSet(key, stored)
-
       return stored
     },
     setItem: (key, value) => {
       if (fallbackDisabled(scope)) return
-
       try {
         if (write(localStorage, key, value)) return
       } catch {
         fallbackSet(scope)
-
         return
       }
-
       fallbackSet(scope)
     },
     removeItem: (key) => {
       cacheDelete(key)
-
       if (fallbackDisabled(scope)) return
-
       try {
         localStorage.removeItem(key)
       } catch {
@@ -495,6 +387,14 @@ export function draftPersistedKeys() {
   return DRAFT_PERSISTED_KEYS
 }
 
+export const PersistTesting = {
+  localStorageDirect,
+  localStorageWithPrefix,
+  resolveTarget,
+  windowStorage,
+  workspaceStorage,
+}
+
 export const Persist = {
   global(key: string): PersistTarget {
     return { storage: GLOBAL_STORAGE, key }
@@ -507,7 +407,6 @@ export const Persist = {
   },
   serverGlobal(scope: ServerScope, key: string): PersistTarget {
     if (scope === ServerScope.local) return Persist.global(key)
-
     return { storage: GLOBAL_STORAGE, key: ScopedKey.from(scope, key) }
   },
   workspace(dir: string, key: string): PersistTarget {
@@ -524,12 +423,10 @@ export const Persist = {
   },
   scoped(dir: string, session: string | undefined, key: string): PersistTarget {
     if (session) return Persist.session(dir, session, key)
-
     return Persist.workspace(dir, key)
   },
   serverScoped(scope: ServerScope, dir: string, session: string | undefined, key: string) {
     if (session) return Persist.serverSession(scope, dir, session, key)
-
     return Persist.serverWorkspace(scope, dir, key)
   },
   prompt(target: PersistTarget): PersistTarget {
@@ -540,47 +437,39 @@ export const Persist = {
 function resolveTarget(target: PersistTarget, platform: Platform): PersistTarget {
   if (target.scope !== "window") return target
   const windowID = platform.platform === "desktop" ? platform.windowID : "browser"
-
   if (!windowID) throw new Error("Desktop window ID is required for window-scoped storage")
-
   return {
     ...target,
     storage: windowStorage(windowID),
   }
 }
 
-/**
- * Deletes a stored value, so the next read gets the initial value. The older keys `copyFrom` names never import
- * again: a whole-value source is deleted from every storage the import reads, and a picked source, which other owners
- * share, stays while the value becomes `null`, which every store schema reads as its initial value without importing.
- */
 export function removePersisted(
-  target: Pick<PersistTarget, "draft" | "storage" | "workspaceStorageAliases" | "copyFrom" | "key">,
+  target: { draft?: boolean; storage?: string; workspaceStorageAliases?: string[]; key: string },
   platform?: Platform,
 ) {
   if (target.draft && platform?.draftStore) {
     void platform.draftStore.removeItem(`${target.storage ?? "default"}:${target.key}`)
   }
+  const isDesktop = platform?.platform === "desktop" && !!platform.storage
 
-  const desktop = platform?.platform === "desktop" ? platform.storage : undefined
-
-  const open = (name: string | undefined): SyncStorage | AsyncStorage | undefined => {
-    if (desktop) return desktop(name)
-
-    return name ? localStorageWithPrefix(name) : localStorageDirect()
+  if (isDesktop) {
+    void platform.storage?.(target.storage)?.removeItem(target.key)
+    for (const storage of target.workspaceStorageAliases ?? []) {
+      void platform.storage?.(storage)?.removeItem(target.key)
+    }
+    return
   }
 
-  const copies = target.copyFrom ?? []
+  if (!target.storage) {
+    localStorageDirect().removeItem(target.key)
+    return
+  }
 
-  if (copies.some((copy) => copy.pick)) void open(target.storage)?.setItem(target.key, "null")
-  else void open(target.storage)?.removeItem(target.key)
-  target.workspaceStorageAliases?.forEach((name) => void open(name)?.removeItem(target.key))
-  copies.forEach((copy) => {
-    if (copy.pick) return
-    void open(copy.storage ?? target.storage)?.removeItem(copy.key)
-
-    if (target.storage) void open(undefined)?.removeItem(copy.key)
-  })
+  localStorageWithPrefix(target.storage).removeItem(target.key)
+  for (const storage of target.workspaceStorageAliases ?? []) {
+    localStorageWithPrefix(storage).removeItem(target.key)
+  }
 }
 
 export function persisted<S extends Schema.ConstraintCodec<object, unknown>>(
@@ -590,20 +479,17 @@ export function persisted<S extends Schema.ConstraintCodec<object, unknown>>(
   platformOverride?: Platform,
 ): PersistedWithReady<S["Type"]> {
   const platform = platformOverride ?? usePlatform()
-  const config = resolveTarget(Predicate.isString(target) ? { key: target } : target, platform)
+  const config = resolveTarget(typeof target === "string" ? { key: target } : target, platform)
 
   const initialized = Persistence.withInitial(schema, initial)
   const json = Schema.fromJsonString(initialized)
   const decode = Schema.decodeUnknownOption(json)
   const encode = Schema.encodeSync(initialized)
   const serialize = Schema.encodeSync(json)
-
   const normalize = (raw: string) => {
     const value = decode(raw)
-
     if (Option.isSome(value)) return serialize(value.value)
   }
-
   const store = createStore<S["Type"]>(Schema.decodeUnknownSync(Schema.toType(initialized))(initial))
   const isDesktop = platform.platform === "desktop" && !!platform.storage
   const draft = config.draft ? platform.draftStore : undefined
@@ -619,11 +505,8 @@ export function persisted<S extends Schema.ConstraintCodec<object, unknown>>(
         removeItem: (key: string) => draft.removeItem(prefix + key),
       } satisfies AsyncStorage
     }
-
     if (isDesktop) return platform.storage?.(config.storage)
-
     if (!config.storage) return localStorageDirect()
-
     return localStorageWithPrefix(config.storage)
   })()
 
@@ -631,24 +514,16 @@ export function persisted<S extends Schema.ConstraintCodec<object, unknown>>(
 
   const storage = (() => {
     if (!isDesktop && !draft) {
-      // SAFETY: without desktop storage or a draft store, `currentStorage` is one of the synchronous localStorage views.
       const current = currentStorage as SyncStorage
-
-      const sources: RelocationSource<SyncStorage>[] = [
+      const sources = [
         ...workspaceAliases.map((storage) => ({ storage: localStorageWithPrefix(storage) })),
         ...(config.previousKey ? [{ storage: localStorageDirect(), key: config.previousKey }] : []),
-        ...(config.copyFrom ?? []).flatMap((copy) => [
-          { storage: copy.storage ? localStorageWithPrefix(copy.storage) : current, key: copy.key, pick: copy.pick },
-          ...(config.storage ? [{ storage: localStorageDirect(), key: copy.key, pick: copy.pick }] : []),
-        ]),
       ]
 
       const api: SyncStorage = {
         getItem: (key) => {
           const value = readCurrent({ storage: current, key, normalize })
-
           if (value !== undefined) return value
-
           return relocateStoredValue({
             current,
             sources,
@@ -667,9 +542,7 @@ export function persisted<S extends Schema.ConstraintCodec<object, unknown>>(
       return api
     }
 
-    // SAFETY: with desktop storage or a draft store, `currentStorage` is that asynchronous storage.
     const current = currentStorage as AsyncStorage
-
     const previousDraftStorage = draft
       ? isDesktop
         ? platform.storage?.(config.storage)
@@ -677,54 +550,32 @@ export function persisted<S extends Schema.ConstraintCodec<object, unknown>>(
           ? localStorageWithPrefix(config.storage)
           : localStorageDirect()
       : undefined
-
     const previousStorage = config.previousKey ? (isDesktop ? platform.storage?.() : localStorageDirect()) : undefined
-
     const relocationSources = [
       previousDraftStorage ? { storage: previousDraftStorage } : undefined,
       ...workspaceAliases.map((name) => ({
         storage: isDesktop ? platform.storage?.(name) : localStorageWithPrefix(name),
       })),
       previousStorage && config.previousKey ? { storage: previousStorage, key: config.previousKey } : undefined,
-      ...(config.copyFrom ?? []).flatMap((copy) => [
-        {
-          storage: copy.storage
-            ? isDesktop
-              ? platform.storage?.(copy.storage)
-              : localStorageWithPrefix(copy.storage)
-            : current,
-          key: copy.key,
-          pick: copy.pick,
-        },
-        config.storage
-          ? { storage: isDesktop ? platform.storage?.() : localStorageDirect(), key: copy.key, pick: copy.pick }
-          : undefined,
-      ]),
-    ].flatMap((source): RelocationSource<AsyncStorage>[] =>
-      source?.storage ? [{ ...source, storage: toAsyncStorage(source.storage) }] : [],
-    )
+    ]
+      .filter((source): source is { storage: SyncStorage | AsyncStorage; key?: string } => !!source?.storage)
+      .map((source) => ({ ...source, storage: toAsyncStorage(source.storage) }))
 
     const api: AsyncStorage = {
       getItem: async (key) => {
         const value = await readCurrentAsync({ storage: current, key, normalize })
-
         if (value !== undefined) return value
-
         const relocated = await relocateStoredValueAsync({
           current,
           sources: relocationSources,
           key,
           normalize,
         })
-
         if (draftLatest === undefined) {
           if (draft && relocated !== null) return (await current.getItem(key)) ?? relocated
-
           return relocated
         }
-
         await current.setItem(key, draftLatest)
-
         return draftLatest
       },
       setItem: async (key, value) => {
@@ -743,7 +594,6 @@ export function persisted<S extends Schema.ConstraintCodec<object, unknown>>(
     config.sync && typeof BroadcastChannel !== "undefined"
       ? new BroadcastChannel(`opencode.persist:${config.storage ?? "default"}:${config.key}`)
       : undefined
-
   if (channel) onCleanup(() => channel.close())
 
   const persist = persistStore({
@@ -762,22 +612,19 @@ export function persisted<S extends Schema.ConstraintCodec<object, unknown>>(
           // A failed chunk upload is retried by the next save; see drafts.ts.
           void draft
             .setDocument(prefix + config.key, encode(value))
-            .catch((error) => console.error(`[persistence] draft write failed for ${config.key}`, error))
+            .catch((error: unknown) => console.error(`[persistence] draft write failed for ${config.key}`, error))
         }
       : undefined,
   })
-
   const state = store[0]
   const setState = persist.setStore
   const init = persist.init
 
   const isAsync = init instanceof Promise
-
   const [ready] = createResource(
     () => init,
     async (initValue) => {
       if (initValue instanceof Promise) await initValue
-
       return true
     },
     { initialValue: !isAsync },

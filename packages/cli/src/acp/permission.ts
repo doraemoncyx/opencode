@@ -1,39 +1,13 @@
-import type { PermissionOption } from "@agentclientprotocol/sdk"
-import type { OpenCodeClient, OpenCodeEvent } from "@opencode/client/effect"
-import { FileDiff } from "@opencode/schema/file-diff"
-import type { Permission } from "@opencode/schema/permission"
-import type { Session } from "@opencode/schema/session"
+import type { AgentSideConnection, PermissionOption, ToolCallContent, ToolCallLocation } from "@agentclientprotocol/sdk"
+import type { EventSubscribeOutput, OpenCodeClient } from "@opencode/client/promise"
 import { Patch } from "@opencode/util/patch"
-import { applyPatch } from "diff"
-import { Effect, Option, Schema } from "effect"
-import { ACPChild } from "./child"
-import { ACPClient } from "./client"
-import type { ACPConnection } from "./connection"
-import {
-  absolutePath,
-  canonicalName,
-  filePath,
-  patchHunks,
-  pendingToolCall,
-  stringValue,
-  toLocations,
-  type ToolInput,
-} from "./tool"
+import { Result } from "effect"
+import { isAbsolute, resolve } from "node:path"
+import { pendingToolCall, stringValue, toLocations, toToolKind, type ToolInput } from "./tool"
 
-type PermissionEvent = Extract<OpenCodeEvent, { type: "permission.asked" }>
-type Tool = { readonly id: string; readonly name: string; readonly input: ToolInput }
-type Preview = ReturnType<typeof diff>
-
-type Input = {
-  readonly client: OpenCodeClient
-  readonly connection: ACPConnection.Interface
-  readonly event: PermissionEvent
-  readonly sessionID: Session.ID
-  readonly clientSessionID: string
-  readonly cwd: string
-  readonly tool?: Tool
-  readonly child?: ACPChild.Session
-}
+type PermissionEvent = Extract<EventSubscribeOutput, { type: "permission.asked" }>
+type Connection = Pick<AgentSideConnection, "requestPermission"> & Partial<Pick<AgentSideConnection, "writeTextFile">>
+type Tool = { readonly name: string; readonly input: ToolInput }
 
 const options: PermissionOption[] = [
   { optionId: "once", kind: "allow_once", name: "Allow once" },
@@ -41,92 +15,134 @@ const options: PermissionOption[] = [
   { optionId: "reject", kind: "reject_once", name: "Reject" },
 ]
 
-const decodeFiles = Schema.decodeUnknownOption(Schema.Array(FileDiff.Info))
-
-export const ask = Effect.fnUntraced(function* (input: Input) {
+export async function replyPermission(input: {
+  readonly client: OpenCodeClient
+  readonly connection: Connection
+  readonly event: PermissionEvent
+  readonly sessionID: string
+  readonly clientSessionID?: string
+  readonly cwd: string
+  readonly tool?: Tool
+  readonly toolCallPrefix?: string
+  readonly titlePrefix?: string
+}) {
   const toolName = input.tool?.name ?? input.event.data.action
-  const toolInput = input.tool?.input ?? input.event.data.metadata ?? {}
-  const previews = yield* permissionPreviews(toolName, toolInput, input.event.data.metadata, input.cwd).pipe(
-    Effect.orElseSucceed((): Preview[] => []),
-  )
+  const toolInput = { ...input.event.data.metadata, ...input.tool?.input }
+  const previews = await permissionPreviews(toolName, toolInput, input.cwd)
+  const toolCallID = input.event.data.source?.id ?? input.event.data.id
   const title = permissionTitle(toolName, toolInput, previews)
-  const toolCall = pendingToolCall({
-    toolCallId: ACPChild.toolCallID(input.child, input.tool?.id ?? input.event.data.id),
-    toolName,
-    state: { input: toolInput, title: title ? ACPChild.prefixTitle(input.child, title) : input.child?.title },
-    cwd: input.cwd,
+  const result = await input.connection
+    .requestPermission({
+      sessionId: input.clientSessionID ?? input.sessionID,
+      toolCall: {
+        ...pendingToolCall({
+          toolCallId: input.toolCallPrefix ? `${input.toolCallPrefix}:${toolCallID}` : toolCallID,
+          toolName,
+          state: {
+            input: toolInput,
+            title: prefixedTitle(input.titlePrefix, title),
+          },
+          cwd: input.cwd,
+        }),
+        locations: permissionLocations(toolName, toolInput, input.event.data.resources, input.cwd, previews),
+        ...(previews.length > 0 ? { content: previews } : {}),
+      },
+      options,
+    })
+    .catch(() => undefined)
+  const selected = result?.outcome.outcome === "selected" ? result.outcome.optionId : undefined
+  const reply = selected === "once" || selected === "always" ? selected : "reject"
+  await input.client.permission.reply({
+    sessionID: input.sessionID,
+    requestID: input.event.data.id,
+    reply,
   })
-  const result = yield* input.connection.requestPermission({
-    sessionId: input.clientSessionID,
-    toolCall: {
-      ...toolCall,
-      rawInput: input.tool ? toolCall.rawInput : undefined,
-      locations: permissionLocations(toolName, toolInput, input.event.data, input.cwd),
-      ...(previews.length > 0 ? { content: previews } : {}),
-      ...(input.child ? { _meta: ACPChild.meta(input.child) } : {}),
-    },
-    options,
-  })
-  const selected = result.outcome.outcome === "selected" ? result.outcome.optionId : undefined
-  return selected === "once" || selected === "always" ? selected : "reject"
-})
+}
 
-export function respond(input: Input, decision: Permission.Reply) {
-  return input.client.permission.reply({ sessionID: input.sessionID, requestID: input.event.data.id, decision }).pipe(
-    Effect.catchTag("PermissionNotFoundError", () => Effect.void),
-    Effect.catch(ACPClient.classify),
+function prefixedTitle(prefix: string | undefined, title: string | undefined) {
+  if (!prefix) return title
+  if (!title) return prefix
+  return `${prefix}: ${title}`
+}
+
+export async function syncEditedFiles(input: {
+  readonly connection: Partial<Pick<AgentSideConnection, "writeTextFile">>
+  readonly writeTextFile: boolean
+  readonly sessionID: string
+  readonly cwd: string
+  readonly toolName: string
+  readonly toolInput: ToolInput
+  readonly metadata: Readonly<Record<string, unknown>>
+}) {
+  if (!input.writeTextFile || !input.connection.writeTextFile || toToolKind(input.toolName) !== "edit") return
+  const files = Array.isArray(input.metadata.files)
+    ? input.metadata.files.flatMap((file): string[] => {
+        if (!file || typeof file !== "object") return []
+        const path = "file" in file ? file.file : undefined
+        return typeof path === "string" ? [path] : []
+      })
+    : []
+  const path = filePath(input.toolInput)
+  const paths = [...new Set([...files, ...(path ? [path] : [])])]
+  await Promise.all(
+    paths.map(async (path) => {
+      const target = resolvePath(path, input.cwd)
+      const file = Bun.file(target)
+      if (!(await file.exists())) return
+      await input.connection.writeTextFile?.({ sessionId: input.sessionID, path: target, content: await file.text() })
+    }),
   )
 }
 
-// Core trims the patch tool's diffs for display, which breaks `applyPatch`, so its previews come from its own hunks.
-const permissionPreviews = Effect.fnUntraced(function* (
-  toolName: string,
-  input: ToolInput,
-  metadata: ToolInput | undefined,
-  cwd: string,
-) {
-  if (canonicalName(toolName) === "patch") return yield* patchPreviews(input, cwd)
-  const files = Option.getOrElse(decodeFiles(metadata?.files), () => [])
-  const previews = yield* Effect.forEach(
-    files,
-    (file) =>
-      Effect.gen(function* () {
-        const path = absolutePath(file.file, cwd)
-        const oldText = file.status === "added" ? null : yield* Effect.tryPromise(() => Bun.file(path).text())
-        const newText = yield* Effect.try(() => applyPatch(oldText ?? "", file.patch))
-        return newText === false ? [] : [diff(path, oldText, newText)]
-      }),
-    { concurrency: "unbounded" },
-  )
-  return previews.flat()
-})
+async function permissionPreviews(toolName: string, input: ToolInput, cwd: string): Promise<ToolCallContent[]> {
+  const tool = toolName.toLocaleLowerCase()
+  if (tool === "patch" || tool === "apply_patch") return patchPreviews(input, cwd)
+  const path = filePath(input)
+  if (!path) return []
+  const oldText = await readText(path, cwd)
+  if (tool === "write") {
+    const content = stringValue(input.content)
+    return content === undefined ? [] : [{ type: "diff", path, oldText, newText: content }]
+  }
+  if (tool !== "edit") return []
+  const oldString = stringValue(input.oldString)
+  const newString = stringValue(input.newString)
+  if (oldString === undefined || newString === undefined) return []
+  const newText =
+    input.replaceAll === true ? oldText.replaceAll(oldString, newString) : oldText.replace(oldString, newString)
+  return [{ type: "diff", path, oldText, newText }]
+}
 
-function patchPreviews(input: ToolInput, cwd: string) {
-  return Effect.forEach(
-    patchHunks(input),
-    (hunk) =>
-      Effect.gen(function* () {
-        const path = absolutePath(hunk.path, cwd)
+async function patchPreviews(input: ToolInput, cwd: string): Promise<ToolCallContent[]> {
+  const patchText = stringValue(input.patchText)
+  if (!patchText) return []
+  try {
+    const parsed = Patch.parse(patchText)
+    if (Result.isFailure(parsed)) return []
+    return await Promise.all(
+      parsed.success.map(async (hunk): Promise<ToolCallContent> => {
+        const oldText = hunk.type === "add" ? "" : await readText(hunk.path, cwd)
         if (hunk.type === "add") {
           const newText = hunk.contents.endsWith("\n") || hunk.contents === "" ? hunk.contents : `${hunk.contents}\n`
-          return diff(path, null, newText)
+          return { type: "diff", path: hunk.path, oldText, newText }
         }
-        const oldText = yield* Effect.tryPromise(() => Bun.file(path).text())
-        if (hunk.type === "delete") return diff(path, oldText, "")
-        const derived = yield* Effect.try(() => Patch.derive(hunk.path, hunk.chunks, oldText))
-        return diff(hunk.movePath ? absolutePath(hunk.movePath, cwd) : path, oldText, derived.content)
+        if (hunk.type === "delete") return { type: "diff", path: hunk.path, oldText, newText: "" }
+        return {
+          type: "diff",
+          path: hunk.movePath ?? hunk.path,
+          oldText,
+          newText: Patch.derive(hunk.path, hunk.chunks, oldText).content,
+        }
       }),
-    { concurrency: "unbounded" },
-  )
+    )
+  } catch {
+    return []
+  }
 }
 
-function diff(path: string, oldText: string | null, newText: string) {
-  return { type: "diff" as const, path, oldText, newText }
-}
-
-function permissionTitle(toolName: string, input: ToolInput, previews: ReadonlyArray<Preview>) {
+function permissionTitle(toolName: string, input: ToolInput, previews: ReadonlyArray<ToolCallContent>) {
   if (previews.length > 1) return `${previews.length} files`
-  switch (canonicalName(toolName)) {
+  switch (toolName.toLocaleLowerCase()) {
     case "external_directory":
       return stringValue(input.description) ?? stringValue(input.command) ?? stringValue(input.parentDir)
     case "webfetch":
@@ -140,22 +156,39 @@ function permissionTitle(toolName: string, input: ToolInput, previews: ReadonlyA
     case "edit":
     case "write":
     case "patch":
-      return filePath(input) ?? previews[0]?.path
+    case "apply_patch":
+      return filePath(input) ?? (previews[0]?.type === "diff" ? previews[0].path : undefined)
     default:
       return undefined
   }
 }
 
-function permissionLocations(toolName: string, input: ToolInput, ask: PermissionEvent["data"], cwd: string) {
+function permissionLocations(
+  toolName: string,
+  input: ToolInput,
+  resources: ReadonlyArray<string>,
+  cwd: string,
+  previews: ReadonlyArray<ToolCallContent>,
+): ToolCallLocation[] {
+  const paths = previews.flatMap((preview) => (preview.type === "diff" ? [preview.path] : []))
+  if (paths.length > 0) return [...new Set(paths)].map((path) => ({ path }))
   const locations = toLocations(toolName, input, cwd)
-  if (locations.length > 0 || !PathActions.has(ask.action)) return locations
-  const paths = ask.resources.flatMap((resource) => {
-    const path = resource.endsWith("/*") ? resource.slice(0, -2) : resource
-    return path && !/[*?]/.test(path) ? [absolutePath(path, cwd)] : []
-  })
-  return Array.from(new Set(paths), (path) => ({ path }))
+  if (locations.length > 0) return locations
+  return resources.filter((resource) => resource !== "*").map((path) => ({ path }))
 }
 
-const PathActions = new Set(["read", "edit", "external_directory"])
+function readText(path: string, cwd: string) {
+  return Bun.file(resolvePath(path, cwd))
+    .text()
+    .catch(() => "")
+}
+
+function filePath(input: ToolInput) {
+  return stringValue(input.path) ?? stringValue(input.filePath) ?? stringValue(input.filepath)
+}
+
+function resolvePath(path: string, cwd: string) {
+  return isAbsolute(path) ? path : resolve(cwd, path)
+}
 
 export * as ACPPermission from "./permission"

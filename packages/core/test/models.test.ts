@@ -49,7 +49,7 @@ const fixtureSnapshot = [
       id: Provider.ID.make("acme"),
       name: "Acme",
       activation: "auto",
-      package: "@opencode/ai/providers/openai-compatible",
+      package: Provider.aisdk("@ai-sdk/openai-compatible"),
     },
     models: [
       {
@@ -60,7 +60,7 @@ const fixtureSnapshot = [
         compatibility: { reasoningField: "vendor_reasoning" },
         family: undefined,
         package: undefined,
-        settings: { provider: "acme" },
+        settings: undefined,
         capabilities: { tools: true, input: [], output: [] },
         variants: [],
         time: { released: Date.parse("2026-01-01") },
@@ -112,7 +112,7 @@ const fixture2Snapshot = [
       id: Provider.ID.make("beta"),
       name: "Beta",
       activation: "auto",
-      package: "@opencode/ai/providers/openai-compatible",
+      package: Provider.aisdk("@ai-sdk/openai-compatible"),
     },
     models: [
       {
@@ -122,7 +122,7 @@ const fixture2Snapshot = [
         name: "Beta One",
         family: undefined,
         package: undefined,
-        settings: { provider: "beta" },
+        settings: undefined,
         capabilities: { tools: false, input: [], output: [] },
         variants: [],
         time: { released: Date.parse("2026-02-01") },
@@ -234,7 +234,7 @@ describe("ModelsDev Service", () => {
     }),
   )
 
-  it.live("maps models.dev npm packages onto native packages", () =>
+  it.live("normalizes provider and model AI SDK packages from models.dev", () =>
     Effect.gen(function* () {
       const cache = makeCache()
       writeCache(cache, {
@@ -247,14 +247,6 @@ describe("ModelsDev Service", () => {
             },
           },
         },
-        "cloudflare-workers-ai": {
-          id: "cloudflare-workers-ai",
-          name: "Cloudflare Workers AI",
-          env: ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_KEY"],
-          npm: "@ai-sdk/openai-compatible",
-          api: "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
-          models: {},
-        },
       })
       const state = yield* Ref.make(initialState)
       const result = yield* provided(
@@ -262,10 +254,8 @@ describe("ModelsDev Service", () => {
         cache,
         ModelsDev.Service.use((service) => service.get()),
       )
-      expect(result[0]?.info.package).toBe("@opencode/ai/providers/openai-compatible")
-      expect(result[0]?.models[0]?.package).toBe("@opencode/ai/providers/openai")
-      expect(result[1]?.info.package).toBe("@opencode/ai/providers/cloudflare-workers-ai")
-      expect(result[1]?.info.settings).toBeUndefined()
+      expect(result[0]?.info.package).toBe(Provider.aisdk("@ai-sdk/openai-compatible"))
+      expect(result[0]?.models[0]?.package).toBe(Provider.aisdk("@ai-sdk/openai"))
     }),
   )
 

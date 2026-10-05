@@ -1,6 +1,7 @@
-import { expect, sourceURL, story } from "../../storybook/playwright/story"
+import { fileURLToPath } from "node:url"
+import { expect, story } from "../../storybook/playwright/story"
 
-const fixture = sourceURL(new URL("./basic-tool.fixture.tsx", import.meta.url))
+const fixture = `/@fs/${fileURLToPath(new URL("./basic-tool.fixture.tsx", import.meta.url)).replaceAll("\\", "/")}`
 
 story("does not render completed reasoning until it is opened", async ({ mount, page }) => {
   const root = await mount("current-session-timeline-rows--conversation", {

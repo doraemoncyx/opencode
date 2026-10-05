@@ -86,7 +86,8 @@ export const Plugin = {
               })
               const result = yield* fileMutation.writeTextPreservingBom({ target, content: input.content })
               const bom = (yield* FileMutation.readText(environment.files, target.absolute)).bom
-              if (yield* formatter.file(target.absolute)) {
+              // GBK files never reach the formatter: it reads as UTF-8 and would corrupt the encoding.
+              if (current?.encoding !== "gbk" && (yield* formatter.file(target.absolute))) {
                 yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
               }
               return result

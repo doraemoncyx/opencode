@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test"
+import { expect, type Page } from "@playwright/test"
 
 export function trackPageErrors(page: Page) {
   const errors: string[] = []
@@ -10,4 +10,12 @@ export function trackPageErrors(page: Page) {
     if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`)
   })
   return errors
+}
+
+export function expectNoSmokeErrors(consoleErrors: string[], toastErrors: string[], forbiddenText: string[]) {
+  expect({ consoleErrors, toastErrors, forbiddenText }).toEqual({
+    consoleErrors: [],
+    toastErrors: [],
+    forbiddenText: [],
+  })
 }

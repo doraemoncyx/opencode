@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createDraftStore, draftTextChunk, draftTextThreshold, resolveBlobUrl } from "./drafts"
+import { createDraftStore, draftTextChunk, draftTextThreshold } from "./drafts"
 
 function memoryDriver() {
   const documents = new Map<string, string>()
@@ -58,8 +58,6 @@ describe("draft store text externalization", () => {
       stored.prompt[0].content.blob.ids.map((id: string) => memory.blobs.get(id)!.text()),
     )
     expect(chunks.join("")).toBe(paste)
-    await store.setItem("serialized", JSON.stringify({ prompt: [{ type: "text", content: large }] }))
-    expect(JSON.parse(memory.documents.get("serialized")!).prompt[0].content.blob.ids).toHaveLength(1)
   })
 
   test("appending to a large string re-uploads only the final chunk", async () => {
@@ -224,6 +222,13 @@ describe("draft store text externalization", () => {
     const fresh = createDraftStore(memory.driver)
     expect(JSON.parse((await fresh.getItem("doc"))!).prompt[0].content).toBe(`${paste}!`)
   })
+
+  test("setItem still accepts a serialized document", async () => {
+    const memory = memoryDriver()
+    const store = createDraftStore(memory.driver)
+    await store.setItem("doc", JSON.stringify({ prompt: [{ type: "text", content: large }] }))
+    expect(JSON.parse(memory.documents.get("doc")!).prompt[0].content.blob.ids).toHaveLength(1)
+  })
 })
 
 describe("draft store image retention", () => {
@@ -282,34 +287,15 @@ describe("draft store image retention", () => {
     expect(await released(store, 5, shared.url)).toBe(true)
   })
 
-  test("loading a document pins the images it references without fetching their bytes", async () => {
+  test("loading a document pins the images it references", async () => {
     const { memory, store } = fresh()
-    const reads: string[] = []
-    const getBlob = memory.driver.getBlob
-    memory.driver.getBlob = (id) => {
-      reads.push(id)
-      return getBlob(id)
-    }
     const id = await memory.driver.putBlob(image(6))
     memory.documents.set("loaded", JSON.stringify({ prompt: [{ type: "image", blob: { id } }] }))
-    const loaded = JSON.parse((await store.getItem("loaded"))!).prompt[0].blob
-    expect(loaded).toEqual({ id })
-    expect(reads).toEqual([])
-    // The first consumer that shows or sends the image loads it; the pin from the load keeps it.
-    const url = (await resolveBlobUrl(loaded))!
-    expect(url.startsWith("blob:")).toBe(true)
-    expect(reads).toEqual([id])
-    expect(await resolveBlobUrl(loaded)).toBe(url)
-    expect(reads).toEqual([id])
+    const url = JSON.parse((await store.getItem("loaded"))!).prompt[0].blob.url
     await tick()
     expect(await released(store, 6, url)).toBe(false)
     await store.removeItem("loaded")
     await tick()
     expect(await released(store, 6, url)).toBe(true)
-  })
-
-  test("a reference to bytes the store no longer holds resolves to nothing", async () => {
-    fresh()
-    expect(await resolveBlobUrl({ id: "gone" })).toBeUndefined()
   })
 })

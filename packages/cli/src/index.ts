@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
-import { Cause, Effect } from "effect"
-import { getErrorReported } from "effect/Runtime"
+import { Effect } from "effect"
 import { Commands } from "./commands/commands"
 import { Runtime } from "./framework/runtime"
 import { Observability } from "@opencode/util/observability"
@@ -13,7 +12,6 @@ import { Global } from "@opencode/util/global"
 import { AppProcess } from "@opencode/util/process"
 import { Config } from "./config"
 import { Npm } from "@opencode/util/npm"
-import { EffectFlock } from "@opencode/util/effect-flock"
 import { Heap } from "./heap"
 import { CpuProfile } from "./cpu-profile"
 
@@ -32,8 +30,6 @@ const Handlers = Runtime.handlers(Commands, {
     list: () => import("./commands/handlers/auth/list"),
     login: () => import("./commands/handlers/auth/login"),
     logout: () => import("./commands/handlers/auth/logout"),
-    export: () => import("./commands/handlers/auth/export"),
-    import: () => import("./commands/handlers/auth/import"),
     switch: () => import("./commands/handlers/auth/switch"),
   },
   debug: {
@@ -59,7 +55,6 @@ const Handlers = Runtime.handlers(Commands, {
   mini: () => import("./commands/handlers/mini"),
   run: () => import("./commands/handlers/run"),
   pair: () => import("./commands/handlers/pair"),
-  reload: () => import("./commands/handlers/reload"),
   session: {
     list: () => import("./commands/handlers/session/list"),
     delete: () => import("./commands/handlers/session/delete"),
@@ -114,7 +109,7 @@ Effect.gen(function* () {
   Effect.provide(Config.layer),
   Effect.provide(Updater.layer),
   Effect.provide(
-    LayerNode.compile(LayerNode.group([Global.node, AppProcess.node, Npm.node, EffectFlock.node]), {
+    LayerNode.compile(LayerNode.group([Global.node, AppProcess.node, Npm.node]), {
       replacements: [
         Global.node.replace(
           Global.layerWith(process.env.OPENCODE_CONFIG_DIR ? { config: process.env.OPENCODE_CONFIG_DIR } : {}),
@@ -134,15 +129,5 @@ Effect.gen(function* () {
   Effect.provide(NodeServices.layer),
   Effect.scoped,
   Effect.tap(() => Effect.sync(() => process.exit(process.exitCode ?? 0))),
-  // runMain's default reporter logs the fatal cause to stdout. Write it to stderr instead: the
-  // desktop and `Service.ensure` only capture stderr from `serve --service`, so this is the only
-  // channel through which a startup failure's reason reaches the user.
-  Effect.tapCause((cause) =>
-    Effect.sync(() => {
-      if (Cause.hasInterruptsOnly(cause)) return
-      if (!getErrorReported(Cause.squash(cause))) return
-      process.stderr.write(Cause.pretty(cause) + "\n")
-    }),
-  ),
-  NodeRuntime.runMain({ disableErrorReporting: true }),
+  NodeRuntime.runMain,
 )

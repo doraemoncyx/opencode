@@ -17,7 +17,6 @@ export function spawnServiceContender(
 ): ServiceContender {
   const child = spawn(command, args, {
     detached: true,
-    windowsHide: true,
     stdio: ["ignore", "ignore", "pipe"],
     env: { ...process.env, ...env },
   })

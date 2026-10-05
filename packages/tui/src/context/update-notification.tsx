@@ -17,10 +17,9 @@ export type UpdateState =
 
 export type UpdateSource = {
   readonly remote: boolean
-  readonly subscribe: (notify: (notice: ClientNotice) => void) => () => void
+  readonly subscribe: (notify: (notice: ClientNotice) => void, signal: AbortSignal) => Promise<void>
   readonly check: (
     signal: AbortSignal,
-    onInstall: (version: string) => void,
   ) => Promise<ClientNotice | { readonly type: "unavailable"; readonly message: string } | undefined>
   readonly apply: (version: string) => Promise<void>
 }
@@ -75,13 +74,7 @@ export const { use: useUpdateNotification, provider: UpdateNotificationProvider 
     const check = async (signal: AbortSignal) => {
       const updater = props.updater
       if (!updater || state()?.type === "installing") return
-      const result = await updater
-        .check(signal, (version) => {
-          if (!signal.aborted) setState({ type: "installing", version })
-        })
-        .finally(() => {
-          if (state()?.type === "installing") setState(undefined)
-        })
+      const result = await updater.check(signal)
       if (signal.aborted) return
       if (result?.type === "unavailable") return result.message
       setState(result)
@@ -115,8 +108,15 @@ export const { use: useUpdateNotification, provider: UpdateNotificationProvider 
     }
 
     onMount(() => {
-      if (!props.updater) return
-      onCleanup(props.updater.subscribe((notice) => notify({ ...notice, source: "client" })))
+      const updater = props.updater
+      if (!updater) return
+      const controller = new AbortController()
+      onCleanup(() => controller.abort())
+      void updater
+        .subscribe((notice) => notify({ ...notice, source: "client" }), controller.signal)
+        .catch((error) => {
+          if (!controller.signal.aborted) log.error("update check failed", { error })
+        })
     })
 
     onCleanup(

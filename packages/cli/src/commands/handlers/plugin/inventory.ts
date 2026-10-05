@@ -1,10 +1,10 @@
 import { EOL } from "node:os"
 import { Cause, Effect, Exit } from "effect"
-import { OpenCode } from "@opencode/client"
+import { OpenCode, type PluginInfo } from "@opencode/client"
 import { Service } from "@opencode/client/effect/service"
 import { Npm } from "@opencode/util/npm"
 import { Config } from "../../../config"
-import { ServerConnection } from "../../../services/server-connection"
+import { ServiceConfig } from "../../../services/service-config"
 
 export interface Item {
   readonly runtime: "Server" | "TUI"
@@ -16,7 +16,7 @@ export interface Item {
 }
 
 export const inspect = Effect.fn("cli.plugin.inspect")(function* (selected?: string) {
-  const { endpoint } = yield* ServerConnection.resolve()
+  const endpoint = yield* Service.ensure(yield* ServiceConfig.options())
   const client = OpenCode.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
   const location = { directory: process.cwd() }
   const listed = yield* Effect.promise(() => client.plugin.list({ location }))

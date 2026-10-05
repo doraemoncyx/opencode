@@ -173,7 +173,7 @@ describe("run interactive runtime", () => {
     let lifecycle!: LifecycleInput
     const settled: Array<{ sessionID: string; formID: string }> = []
     stubCatalogLists(sdk)
-    const reply = spyOn(sdk.session.form, "reply").mockImplementation(() => ok(undefined))
+    const reply = spyOn(sdk.form, "reply").mockImplementation(() => ok(undefined))
 
     const task = runInteractiveDeferredMode(
       {
@@ -192,6 +192,7 @@ describe("run interactive runtime", () => {
         model: { providerID: "test", modelID: "model" },
         variant: undefined,
         files: [],
+        thinking: false,
       },
       {
         createRuntimeLifecycle: async (input) => {
@@ -287,6 +288,7 @@ describe("run interactive runtime", () => {
         model: { providerID: "openai", modelID: "gpt-5" },
         variant: undefined,
         files: [],
+        thinking: false,
       },
       {
         createRuntimeLifecycle: async () => {
@@ -373,6 +375,7 @@ describe("run interactive runtime", () => {
         model: undefined,
         variant: undefined,
         files: [],
+        thinking: false,
       },
       {
         createRuntimeLifecycle: async () => {
@@ -455,6 +458,7 @@ describe("run interactive runtime", () => {
         model: undefined,
         variant: undefined,
         files: [],
+        thinking: false,
       },
       {
         createRuntimeLifecycle: async () => ({
@@ -586,6 +590,7 @@ describe("run interactive runtime", () => {
     expect(catalogs.agent).toHaveBeenCalledWith(query, { signal: expect.any(AbortSignal) })
     expect(catalogs.reference).toHaveBeenCalledWith(query, { signal: expect.any(AbortSignal) })
     expect(catalogs.command).toHaveBeenCalledWith(query, { signal: expect.any(AbortSignal) })
+    expect(catalogs.skill).toHaveBeenCalledWith(query, { signal: expect.any(AbortSignal) })
     expect(fileFind).toHaveBeenCalledWith({ query: "index", type: "file", ...query })
   })
 })

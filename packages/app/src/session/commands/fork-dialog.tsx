@@ -9,7 +9,7 @@ import { showToast } from "@/shell/notifications/toast"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useServerSDK } from "@/runtime/server/client"
 import { base64Encode } from "@opencode/util/encode"
-import { extractPromptContext, extractPromptFromMessage } from "@/composer/prompt"
+import { extractPromptComments, extractPromptFromMessage } from "@/composer/prompt"
 import { useWorkspaceLocation } from "@/workspaces/location"
 import { useServer } from "@/runtime/server/current"
 import { sessionHref } from "@/shell/routes/session"
@@ -37,7 +37,6 @@ export const DialogFork: Component = () => {
 
   const messages = createMemo((): ForkableMessage[] => {
     const sessionID = params.id
-
     if (!sessionID) return []
 
     const msgs = data.session.message.list(sessionID)
@@ -60,32 +59,36 @@ export const DialogFork: Component = () => {
     if (!item) return
 
     const sessionID = params.id
-
     if (!sessionID) return
     const message = data.session.message.get(sessionID, item.id)
-
     if (message?.type !== "user") return
-
     const restored = extractPromptFromMessage(message, {
       directory: location().directory,
       attachmentName: language.t("common.attachment"),
     })
-
-    const context = extractPromptContext(message, { directory: location().directory })
     const dir = base64Encode(location().directory)
 
     serverSDK.api.session
-      .fork({ sessionID, before: item.id })
+      .fork({ sessionID, boundary: { type: "before", messageID: item.id } })
       .then((forked) => {
         data.session.remember(forked)
         dialog.close()
         const target = prompt.capture({ dir, id: forked.id })
         target.set(restored)
-        target.context.replace([...context.comments, ...context.files])
+        target.context.replaceComments(
+          extractPromptComments(message).map((comment) => ({
+            type: "file",
+            path: comment.path,
+            selection: comment.selection,
+            comment: comment.comment,
+            preview: comment.preview,
+            commentOrigin: comment.origin,
+          })),
+        )
         navigate(sessionHref(server.key, forked.id))
       })
-      .catch((cause: unknown) => {
-        const message = cause instanceof Error ? cause.message : String(cause)
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err)
         showToast({ title: language.t("common.requestFailed"), description: message })
       })
   }

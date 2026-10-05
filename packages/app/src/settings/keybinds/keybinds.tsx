@@ -1,22 +1,17 @@
-import { For, Show, createMemo, onCleanup } from "solid-js"
+import { For, Show, createEffect, createMemo, lazy, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { Button } from "@opencode/ui/button"
+import { IconButton } from "@opencode/ui/icon-button"
+import { TextInput } from "@opencode/ui/text-input"
 import { showToast } from "@/shell/notifications/toast"
 import fuzzysort from "fuzzysort"
-import {
-  DEFAULT_PALETTE_KEYBIND,
-  formatKeybind,
-  keyFromKeyboardEvent,
-  parseKeybind,
-  useCommand,
-  type CommandSection,
-} from "@/shell/commands/command"
+import { DEFAULT_PALETTE_KEYBIND, formatKeybind, parseKeybind, useCommand } from "@/shell/commands/command"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useSettings } from "@/settings/model"
 import { SettingsList } from "@/settings/list"
-import { SettingsSearchEmpty } from "@/settings/search-empty"
-import { SettingsSearchField } from "@/settings/search-field"
+
+const Icon = lazy(() => import("@opencode/ui/icon").then((module) => ({ default: module.Icon })))
 
 const IS_MAC = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(navigator.platform)
 const PALETTE_ID = "command.palette"
@@ -52,18 +47,9 @@ const groupKey: Record<KeybindGroup, GroupKey> = {
   Prompt: "settings.shortcuts.group.prompt",
 }
 
-const sectionGroup: Record<CommandSection, KeybindGroup> = {
-  general: "General",
-  session: "Session",
-  navigation: "Navigation",
-  model: "Model and agent",
-  terminal: "Terminal",
-  prompt: "Prompt",
-}
-
-function groupFor(id: string, section?: CommandSection): KeybindGroup {
-  if (section) return sectionGroup[section]
+function groupFor(id: string): KeybindGroup {
   if (id === PALETTE_ID) return "General"
+  if (id.startsWith("terminal.")) return "Terminal"
   if (id.startsWith("model.") || id.startsWith("agent.") || id.startsWith("mcp.")) return "Model and agent"
   if (id.startsWith("file.") || id.startsWith("fileTree.")) return "Navigation"
   if (id.startsWith("prompt.")) return "Prompt"
@@ -83,6 +69,13 @@ function isModifier(key: string) {
   return key === "Shift" || key === "Control" || key === "Alt" || key === "Meta"
 }
 
+function normalizeKey(key: string) {
+  if (key === ",") return "comma"
+  if (key === "+") return "plus"
+  if (key === " ") return "space"
+  return key.toLowerCase()
+}
+
 function recordKeybind(event: KeyboardEvent) {
   if (isModifier(event.key)) return
 
@@ -96,7 +89,7 @@ function recordKeybind(event: KeyboardEvent) {
   if (event.altKey) parts.push("alt")
   if (event.shiftKey) parts.push("shift")
 
-  const key = keyFromKeyboardEvent(event)
+  const key = normalizeKey(event.key)
   if (!key) return
   parts.push(key)
 
@@ -133,13 +126,13 @@ function listFor(command: Pick<CommandContext, "catalog" | "options">, map: Keyb
   for (const opt of command.catalog) {
     if (opt.id.startsWith("suggested.")) continue
     if (opt.hidden) continue
-    out.set(opt.id, { title: opt.title, group: groupFor(opt.id, opt.section) })
+    out.set(opt.id, { title: opt.title, group: groupFor(opt.id) })
   }
 
   for (const opt of command.options) {
     if (opt.id.startsWith("suggested.")) continue
     if (opt.hidden) continue
-    out.set(opt.id, { title: opt.title, group: groupFor(opt.id, opt.section) })
+    out.set(opt.id, { title: opt.title, group: groupFor(opt.id) })
   }
 
   for (const [id, value] of Object.entries(map)) {
@@ -349,7 +342,7 @@ export function createKeybindSettingsController(
   }
 }
 
-export function SettingsKeybinds(props: { active?: boolean }) {
+export function SettingsKeybinds(props: { active?: boolean; autofocus?: boolean }) {
   const command = useCommand()
   const settings = useSettings()
   const controller = createKeybindSettingsController({
@@ -360,6 +353,7 @@ export function SettingsKeybinds(props: { active?: boolean }) {
   return (
     <SettingsKeybindsView
       visible={props.active}
+      autofocus={props.autofocus}
       groups={controller.catalog.groups}
       filtered={controller.catalog.filtered}
       title={controller.catalog.title}
@@ -374,6 +368,7 @@ export function SettingsKeybinds(props: { active?: boolean }) {
 
 function SettingsKeybindsView(props: {
   visible?: boolean
+  autofocus?: boolean
   groups: KeybindGroup[]
   filtered: (query: string) => Map<KeybindGroup, string[]>
   title: (id: string) => string
@@ -384,6 +379,20 @@ function SettingsKeybindsView(props: {
   onReset: () => void
 }) {
   const language = useLanguage()
+  let search: HTMLInputElement | undefined
+  createEffect(
+    on(
+      () => props.visible ?? true,
+      (visible) => {
+        if (!visible) return
+        const frame = requestAnimationFrame(() => {
+          if (props.visible !== false && props.autofocus !== false && search?.isConnected)
+            search.focus({ preventScroll: true })
+        })
+        onCleanup(() => cancelAnimationFrame(frame))
+      },
+    ),
+  )
   const [store, setStore] = createStore({ filter: "" })
   const filtered = createMemo(() => props.filtered(store.filter))
   const hasResults = createMemo(() => props.groups.some((group) => (filtered().get(group)?.length ?? 0) > 0))
@@ -400,12 +409,31 @@ function SettingsKeybindsView(props: {
             {language.t("settings.shortcuts.reset.button")}
           </Button>
         </div>
-        <SettingsSearchField
-          value={store.filter}
-          active={props.visible ?? true}
-          onInput={(value) => setStore("filter", value)}
-          placeholder={language.t("settings.shortcuts.search.placeholder")}
-        />
+        <div class="settings-tab-search">
+          <TextInput
+            ref={search}
+            type="search"
+            appearance="base"
+            value={store.filter}
+            onInput={(event) => setStore("filter", event.currentTarget.value)}
+            placeholder={language.t("settings.shortcuts.search.placeholder")}
+            spellcheck={false}
+            autocorrect="off"
+            autocomplete="off"
+            autocapitalize="off"
+            aria-label={language.t("settings.shortcuts.search.placeholder")}
+          />
+          <Show when={store.filter}>
+            <IconButton
+              type="button"
+              variant="ghost-muted"
+              size="small"
+              class="settings-tab-search-clear"
+              icon={<Icon name="close" size="large" class="text-v2-icon-icon-muted" />}
+              onClick={() => setStore("filter", "")}
+            />
+          </Show>
+        </div>
       </div>
       <div class="settings-tab-body">
         <div class="settings-shortcuts settings-section-stack">
@@ -416,29 +444,27 @@ function SettingsKeybindsView(props: {
                   <h3 class="settings-section-title">{language.t(groupKey[group])}</h3>
                   <SettingsList>
                     <For each={filtered().get(group) ?? []}>
-                      {(id) => {
-                        const binding = () => props.keybind(id)
-                        return (
-                          <div class="flex items-center justify-between gap-4 py-3 border-b border-border-weak-base last:border-none">
-                            <span>{props.title(id)}</span>
-                            <Button
-                              type="button"
-                              size="small"
-                              variant={binding() ? "ghost" : "ghost-muted"}
-                              data-keybind-id={id}
-                              data-expanded={props.active === id ? "" : undefined}
-                              onClick={() => props.onCapture(id)}
+                      {(id) => (
+                        <div class="flex items-center justify-between gap-4 py-3 border-b border-border-weak-base last:border-none">
+                          <span>{props.title(id)}</span>
+                          <button
+                            type="button"
+                            data-keybind-id={id}
+                            classList={{
+                              "settings-keybind-button": true,
+                              "settings-keybind-button--active": props.active === id,
+                            }}
+                            onClick={() => props.onCapture(id)}
+                          >
+                            <Show
+                              when={props.active === id}
+                              fallback={props.keybind(id) || language.t("settings.shortcuts.unassigned")}
                             >
-                              <Show
-                                when={props.active === id}
-                                fallback={binding() || language.t("settings.shortcuts.unassigned")}
-                              >
-                                {language.t("settings.shortcuts.pressKeys")}
-                              </Show>
-                            </Button>
-                          </div>
-                        )
-                      }}
+                              {language.t("settings.shortcuts.pressKeys")}
+                            </Show>
+                          </button>
+                        </div>
+                      )}
                     </For>
                   </SettingsList>
                 </div>
@@ -446,8 +472,9 @@ function SettingsKeybindsView(props: {
             )}
           </For>
           <Show when={store.filter && !hasResults()}>
-            <div class="settings-tab-search-empty">
-              <SettingsSearchEmpty query={store.filter} />
+            <div class="settings-shortcuts-status">
+              <span>{language.t("settings.shortcuts.search.empty")}</span>
+              <span class="settings-shortcuts-status-filter">&quot;{store.filter}&quot;</span>
             </div>
           </Show>
         </div>

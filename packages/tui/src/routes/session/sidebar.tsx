@@ -10,9 +10,9 @@ import "../../component/title-shimmer"
 import { getScrollAcceleration } from "../../util/scroll"
 import { SESSION_SIDEBAR_WIDTH } from "../../ui/layout"
 
-export function Sidebar(props: { sessionID: string }) {
+export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const data = useData()
-  const theme = useTheme()
+  const theme = useTheme("elevated")
   const config = useConfig().data
   const session = createMemo(() => data.session.get(props.sessionID))
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
@@ -20,24 +20,24 @@ export function Sidebar(props: { sessionID: string }) {
   return (
     <Show when={session()}>
       <box
-        backgroundColor={theme.background.raised.base}
+        backgroundColor={theme.background.default}
         width={SESSION_SIDEBAR_WIDTH}
         height="100%"
         paddingTop={1}
         paddingBottom={1}
         paddingLeft={2}
         paddingRight={2}
-        position="relative"
+        position={props.overlay ? "absolute" : "relative"}
       >
         <box flexShrink={0} paddingRight={2} paddingBottom={1}>
           <title_shimmer
-            fg={theme.text.base}
+            fg={theme.text.default}
             rename={{
               pending: data.session.title.pending(props.sessionID),
               title: withTimestampedFallback(session()),
             }}
             enabled={config.animations ?? true}
-            backdrop={theme.background.raised.base}
+            backdrop={theme.background.default}
             attributes={
               data.session.title.pending(props.sessionID) && config.animations === false
                 ? TextAttributes.DIM
@@ -61,8 +61,8 @@ export function Sidebar(props: { sessionID: string }) {
             width: 1,
             height: "100%",
             trackOptions: {
-              backgroundColor: theme.background.raised.base,
-              foregroundColor: theme.scrollbar.base,
+              backgroundColor: theme.background.default,
+              foregroundColor: theme.scrollbar.default,
             },
           }}
         >

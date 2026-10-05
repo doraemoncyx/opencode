@@ -60,17 +60,14 @@ export const Plugin = define({
       })
 
       const globalSource = Effect.fn("ConfigInstructionPlugin.globalSource")(function* () {
-        if (!discovery.global || !(yield* fs.isFile(globalFile))) return []
+        if (!discovery.global) return []
         const file = yield* read(globalFile)
         return file ? [file] : []
       })
 
       const projectSource = Effect.fn("ConfigInstructionPlugin.projectSource")(function* () {
         if (!project) return []
-        const walked = yield* Effect.forEach(
-          yield* fs.up({ targets: ["AGENTS.md"], start, stop, type: "file" }),
-          fs.resolve,
-        )
+        const walked = yield* Effect.forEach(yield* fs.up({ targets: ["AGENTS.md"], start, stop }), fs.resolve)
         const discovered = new Set(walked.filter((file) => discovery.global || file !== globalFile))
         const files = yield* Effect.forEach(discovered, read, { concurrency: "unbounded" })
         if (files.some((file) => file === undefined)) return Instructions.unavailable
@@ -134,6 +131,13 @@ export const Plugin = define({
 })
 
 function ancestorDirectories(start: string, stop: string): string[] {
-  if (start === stop) return [start]
-  return [start, ...ancestorDirectories(dirname(start), stop)]
+  // Path equality, not string equality: Windows resolves the same directory with
+  // differing drive-letter case, so `start === stop` never matches and the walk
+  // runs past the stop point to the drive root. `contains` compares the way the
+  // platform does.
+  if (FSUtil.contains(start, stop) && FSUtil.contains(stop, start)) return [start]
+  const parent = dirname(start)
+  // Filesystem root: `dirname` is a fixed point. Guard it like `FSUtil.up`.
+  if (parent === start) return [start]
+  return [start, ...ancestorDirectories(parent, stop)]
 }

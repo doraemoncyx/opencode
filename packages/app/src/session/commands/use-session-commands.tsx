@@ -1,22 +1,18 @@
 import { useCommand, type CommandOption } from "@/shell/commands/command"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { previewSelectedLines } from "@opencode/session-ui/pierre/selection-bridge"
-import { useFile, selectionFromLines, type FileSelection } from "@/workspaces/files/model"
+import { useFile, selectionFromLines, type FileSelection, type SelectedLineRange } from "@/workspaces/files/model"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useLayout } from "@/shell/state/layout"
 import { useComposerState } from "@/composer/persistence"
 import { useServerSDK } from "@/runtime/server/client"
-import { useData } from "@/runtime/server/current"
-import { formatServerError } from "@/runtime/server/errors"
 import { useSettings } from "@/settings/model"
+import { useTerminal } from "@/session/terminal/context"
 import { showToast } from "@/shell/notifications/toast"
 import { fetchSessionExport, saveSessionExport, sessionExportFilename } from "@/session/commands/export"
 import { usePlatform } from "@/runtime/platform/platform"
 import type { SessionModel } from "@/session/model"
 import type { SessionRevert } from "@/session/revert"
-import { Command } from "@opencode/gui-extensions/sdk"
-import { useExtensionHost } from "@/runtime/extension/host"
-import type { Region } from "@/runtime/extension/panels"
 
 type SessionCommandSource = {
   identity: SessionModel["identity"]
@@ -24,11 +20,11 @@ type SessionCommandSource = {
   history: Pick<SessionModel["history"], "visibleUserMessages">
   layout: SessionModel["layout"]
   ownership: SessionModel["ownership"]
+  tabs: Pick<SessionModel["tabs"], "activeFileTab" | "closableTab">
 }
 
 export type SessionCommandContext = {
   session: SessionCommandSource
-  region: Region
   background: {
     blocking: () => boolean
     move: () => Promise<void>
@@ -36,8 +32,6 @@ export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
   revert: Pick<SessionRevert, "undo" | "redo">
   focusInput: () => void
-  // The composer's model, which a compaction runs with.
-  model: () => { id: string; providerID: string; variant?: string } | undefined
 }
 
 const withCategory = (category: string) => {
@@ -54,40 +48,25 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const language = useLanguage()
   const prompt = useComposerState()
   const serverSDK = useServerSDK()
-  const data = useData()
   const settings = useSettings()
+  const terminal = useTerminal()
   const platform = usePlatform()
   const layout = useLayout()
-  const host = useExtensionHost()
-
   const openDialog = async <T,>(load: () => Promise<T>, show: (value: T) => void) => {
     const owner = actions.session.ownership.capture()
     const value = await load()
     owner.run(() => show(value))
   }
-
   const shown = settings.visibility.fileTree
 
-  // The file the selected side tab shows; other tabs have no line selection.
-  const activeFile = () => actions.region.selected()?.tab.file
-
-  // Pinned tabs stay open.
-  const closableTab = () => {
-    const entry = actions.region.selected()
-
-    return entry && !entry.tab.pinned ? entry.key : undefined
+  const showAllFiles = () => {
+    if (layout.fileTree.tab() !== "changes") return
+    layout.fileTree.setTab("all")
   }
-
-  // Focus inside an extension command's scope belongs to that extension, which binds its own shortcuts there.
-  const extensionScoped = (target: EventTarget | null) =>
-    target instanceof Element &&
-    host.items(Command).some((item) => !!item.value.scope && !!target.closest(item.value.scope))
 
   const selectionPreview = (path: string, selection: FileSelection) => {
     const content = file.get(path)?.content?.content
-
     if (!content) return undefined
-
     return previewSelectedLines(content, { start: selection.startLine, end: selection.endLine })
   }
 
@@ -97,10 +76,10 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   }
 
   const canAddSelectionContext = () => {
-    const path = activeFile()
-
+    const tab = actions.session.tabs.activeFileTab()
+    if (!tab) return false
+    const path = file.pathFromTab(tab)
     if (!path) return false
-
     return file.selectedLines(path) != null
   }
 
@@ -112,22 +91,19 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const fileCommand = withCategory(language.t("command.category.file"))
   const contextCommand = withCategory(language.t("command.category.context"))
   const viewCommand = withCategory(language.t("command.category.view"))
+  const terminalCommand = withCategory(language.t("command.category.terminal"))
   const mcpCommand = withCategory(language.t("command.category.mcp"))
   const permissionsCommand = withCategory(language.t("command.category.permissions"))
 
   const exportSession = async () => {
     const sessionID = actions.session.identity.params.id
-
     if (!sessionID) return
-
     try {
       const data = await fetchSessionExport({
         sessionID,
         api: serverSDK.api,
       })
-
       const filename = sessionExportFilename(data.info)
-
       if (!(await saveSessionExport(filename, data, platform))) return
       showToast({
         variant: "success",
@@ -146,9 +122,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
 
   const copySessionID = async () => {
     const sessionID = actions.session.identity.params.id
-
     if (!sessionID) return
-
     try {
       await (platform.writeClipboardText?.(sessionID) ?? navigator.clipboard.writeText(sessionID))
       showToast({
@@ -168,9 +142,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
 
   const copyProjectID = async () => {
     const projectID = actions.session.data.info()?.projectID
-
     if (!projectID) return
-
     try {
       await (platform.writeClipboardText?.(projectID) ?? navigator.clipboard.writeText(projectID))
       showToast({
@@ -191,33 +163,47 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const openFile = () => {
     void openDialog(
       () => import("@/shell/commands/dialog"),
-      (x) => dialog.show(() => <x.DialogCommandPalette />),
+      (x) => dialog.show(() => <x.DialogCommandPalette onOpenFile={showAllFiles} />),
     )
   }
 
   const closeTab = () => {
-    const tab = closableTab()
-
-    if (tab) actions.region.close(tab)
+    const tab = actions.session.tabs.closableTab()
+    if (!tab) return
+    actions.session.layout.tabs().close(tab)
   }
 
   const addSelection = () => {
-    const path = activeFile()
+    const tab = actions.session.tabs.activeFileTab()
+    if (!tab) return
 
+    const path = file.pathFromTab(tab)
     if (!path) return
 
-    const range = file.selectedLines(path)
-
+    const range = file.selectedLines(path) as SelectedLineRange | null | undefined
     if (!range) {
       showToast({
         title: language.t("toast.context.noLineSelection.title"),
         description: language.t("toast.context.noLineSelection.description"),
       })
-
       return
     }
 
     addSelectionToContext(path, selectionFromLines(range))
+  }
+
+  const openTerminal = () => {
+    actions.session.layout.view().terminal.open()
+    if (terminal.all().length > 0) terminal.new()
+    if (terminal.all().length === 0) terminal.requestFocus()
+  }
+
+  const closeTerminal = () => {
+    const id = terminal.active()
+    if (!id) return
+    const last = terminal.all().length === 1
+    void terminal.close(id)
+    if (last) actions.session.layout.view().terminal.close()
   }
 
   const chooseMcp = () => {
@@ -245,17 +231,13 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
 
   const compact = async () => {
     const sessionID = actions.session.identity.params.id
-
     if (!sessionID) return
 
-    await data.session.compact({ sessionID, model: actions.model() }).catch((cause: unknown) => {
-      showToast({ title: formatServerError(cause, language.t, language.t("common.requestFailed")) })
-    })
+    await serverSDK.api.session.compact({ sessionID })
   }
 
   const fork = () => {
     const sessionID = actions.session.identity.params.id
-
     if (!sessionID) return
     void openDialog(
       () => import("@/session/commands/fork-dialog"),
@@ -327,8 +309,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   ]
 
   const fileCmds = () => {
-    const tab = closableTab()
-
+    const tab = actions.session.tabs.closableTab()
     return [
       fileCommand({
         id: "file.open",
@@ -343,7 +324,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
           id: "file.close",
           title: language.t("command.tab.close"),
           keybind: settings.keybinds.get("tab.close") ?? "mod+w",
-          when: (event) => !extensionScoped(event.target),
+          when: (event) => !(event.target instanceof Element && event.target.closest('[data-component="terminal"]')),
           onSelect: closeTab,
         }),
     ].filter((v) => !!v)
@@ -371,10 +352,25 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
 
   const viewCmds = () => [
     viewCommand({
+      id: "terminal.toggle",
+      title: language.t("command.terminal.toggle"),
+      keybind: "ctrl+`",
+      slash: "terminal",
+      onSelect: () => {
+        if (actions.session.layout.view().terminal.opened()) {
+          terminal.cancelFocus()
+          actions.session.layout.view().terminal.close()
+          return
+        }
+        actions.session.layout.view().terminal.open()
+        terminal.requestFocus(terminal.active())
+      },
+    }),
+    viewCommand({
       id: "review.toggle",
       title: language.t("command.review.toggle"),
       keybind: "mod+shift+r",
-      onSelect: () => actions.session.layout.view().side.toggle(),
+      onSelect: () => actions.session.layout.view().reviewPanel.toggle(),
     }),
     ...(shown()
       ? [
@@ -391,6 +387,24 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("command.input.focus"),
       keybind: "ctrl+l",
       onSelect: focusInput,
+    }),
+  ]
+
+  const terminalCmds = () => [
+    terminalCommand({
+      id: "terminal.close",
+      title: language.t("terminal.close"),
+      keybind: "mod+w",
+      hidden: true,
+      when: (event) => event.target instanceof Element && !!event.target.closest('[data-component="terminal"]'),
+      onSelect: closeTerminal,
+    }),
+    terminalCommand({
+      id: "terminal.new",
+      title: language.t("command.terminal.new"),
+      description: language.t("command.terminal.new.description"),
+      keybind: "ctrl+alt+t",
+      onSelect: openTerminal,
     }),
   ]
 
@@ -442,6 +456,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     ...fileCmds(),
     ...contextCmds(),
     ...viewCmds(),
+    ...terminalCmds(),
     ...messageCmds(),
     ...mcpCmds(),
     ...permissionsCmds(),

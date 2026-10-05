@@ -1,4 +1,5 @@
 import { EOL } from "node:os"
+import path from "node:path"
 import { readFile, rename, writeFile } from "node:fs/promises"
 import { Effect } from "effect"
 import { applyEdits, modify, parse, type ParseError } from "jsonc-parser"

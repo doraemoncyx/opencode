@@ -1,4 +1,3 @@
-import type { FileSystem } from "@opencode/core/filesystem"
 import { describe, expect } from "bun:test"
 import path from "path"
 import { chmod, mkdir, readdir, rm } from "fs/promises"
@@ -59,7 +58,7 @@ const itWithActiveExecution = testEffect(
                   replacements: [Project.node.replace(globalProjectNode), offlineModels],
                 }),
                 Layer.succeed(SessionRunner.Service, { drain: () => Effect.never }),
-              ) as unknown as Layer.Layer<LocationServices, FileSystem.DirectoryNotFoundError>,
+              ) as unknown as Layer.Layer<LocationServices>,
           ),
         ),
       ),
@@ -69,11 +68,7 @@ const itWithActiveExecution = testEffect(
 const unavailableLocations = Layer.effect(
   LocationServiceMap.Service,
   LayerMap.make(
-    () =>
-      Layer.effectDiscard(Effect.die(new Error("broken location"))) as unknown as Layer.Layer<
-        LocationServices,
-        FileSystem.DirectoryNotFoundError
-      >,
+    () => Layer.effectDiscard(Effect.fail(new Error("broken location"))) as unknown as Layer.Layer<LocationServices>,
   ),
 )
 const itWithUnavailableDestination = testEffect(

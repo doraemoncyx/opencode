@@ -62,7 +62,6 @@ export function createComposerProjectControls(props: { draftId: string; worktree
   return createMemo<PromptProjectControls>(() => ({
     available: projects(),
     directory: location().directory,
-    projectID: location().current?.project.id,
     server: servers.list.length > 1 ? ServerConnection.key(projectServer()) : undefined,
     select: selectProject,
     add: addProject,

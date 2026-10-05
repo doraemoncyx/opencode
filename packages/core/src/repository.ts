@@ -145,9 +145,8 @@ function parts(input: string) {
     .filter(Boolean)
 }
 
-// cachePath makes each `:`-separated host part a directory.
 function safeHost(input: string) {
-  return Boolean(input) && !input.startsWith("-") && input.split(":").every(safeSegment)
+  return Boolean(input) && !input.startsWith("-") && !/[\s/\\]/.test(input)
 }
 
 function safeSegment(input: string) {

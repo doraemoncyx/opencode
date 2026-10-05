@@ -3,7 +3,6 @@ import { SessionStats } from "@opencode/core/session/stats"
 import { SessionTitle } from "@opencode/core/session/title"
 import { SessionTransfer } from "@opencode/core/session/transfer"
 import { InstructionEntry } from "@opencode/core/session/instruction-entry"
-import { Form } from "@opencode/core/form"
 import { DateTime, Effect, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -12,9 +11,6 @@ import {
   ConflictError,
   CommandExecutionError,
   CommandNotFoundError,
-  FormAlreadySettledError,
-  FormInvalidAnswerError,
-  FormNotFoundError,
   InvalidRequestError,
   InvalidCursorError,
   MessageNotFoundError,
@@ -23,25 +19,14 @@ import {
   SkillNotFoundError,
 } from "@opencode/protocol/errors"
 import { AbsolutePath } from "@opencode/core/schema"
-import { locationErrors } from "../location"
 import { failedMessageDecode, failedSnapshot, missingMessage, missingSession } from "./session-error"
 
 const DefaultSessionsLimit = 50
-
-function missingForm(id: Form.ID) {
-  return new FormNotFoundError({ id, message: `Form not found: ${id}` })
-}
 
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
     const transfer = yield* SessionTransfer.Service
-    const requireOwnedForm = Effect.fnUntraced(function* (sessionID: Form.Info["sessionID"], formID: Form.ID) {
-      const form = yield* Form.Service
-      const info = yield* form.get(formID).pipe(Effect.catchTag("Form.NotFoundError", () => missingForm(formID)))
-      if (info.sessionID !== sessionID) return yield* missingForm(formID)
-      return { form, info }
-    })
     const busySession = (error: Session.BusyError) =>
       new SessionBusyError({
         sessionID: error.sessionID,
@@ -134,11 +119,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 model: ctx.payload.model,
                 metadata: ctx.payload.metadata,
                 permissions: ctx.payload.permissions,
-                ...(ctx.payload.parentID === undefined
-                  ? { location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) } }
-                  : { parentID: ctx.payload.parentID }),
+                location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
               })
-              .pipe(Effect.catchTag("Session.NotFoundError", missingSession)),
+              .pipe(Effect.orDie),
           }
         }),
       )
@@ -201,7 +184,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.view",
         Effect.fn(function* (ctx) {
           yield* session
-            .view({ sessionID: ctx.params.sessionID, idle: DateTime.toEpochMillis(ctx.payload.idle) })
+            .view({ sessionID: ctx.params.sessionID, idle: ctx.payload.idle })
             .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
           return HttpApiSchema.NoContent.make()
         }),
@@ -226,7 +209,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.fork",
         Effect.fn(function* (ctx) {
           return {
-            data: yield* session.fork({ sessionID: ctx.params.sessionID, before: ctx.payload.before }).pipe(
+            data: yield* session.fork({ sessionID: ctx.params.sessionID, boundary: ctx.payload.boundary }).pipe(
               Effect.catchTag("Session.NotFoundError", missingSession),
               Effect.catchTag("Session.MessageNotFoundError", missingMessage),
               Effect.catchTag(
@@ -256,27 +239,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
-        "session.update",
+        "session.rename",
         Effect.fn(function* (ctx) {
-          yield* session.get(ctx.params.sessionID).pipe(Effect.catchTag("Session.NotFoundError", missingSession))
-          if (ctx.payload.title !== undefined) {
-            if (ctx.payload.title) {
-              yield* session
-                .rename({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
-                .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
-            } else {
-              const title = yield* SessionTitle.Service
-              yield* title.generate(ctx.params.sessionID)
-            }
+          if (ctx.payload.title) {
+            yield* session
+              .rename({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
+              .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
+            return HttpApiSchema.NoContent.make()
           }
-          if (ctx.payload.metadata !== undefined)
-            yield* session
-              .setMetadata({ sessionID: ctx.params.sessionID, metadata: ctx.payload.metadata })
-              .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
-          if (ctx.payload.permissions !== undefined)
-            yield* session
-              .setPermissions({ sessionID: ctx.params.sessionID, permissions: ctx.payload.permissions })
-              .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
+          const title = yield* SessionTitle.Service
+          yield* title.generate(ctx.params.sessionID)
           return HttpApiSchema.NoContent.make()
         }),
       )
@@ -336,7 +308,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 Effect.catchTag("Session.SkillNotFoundError", (error) =>
                   Effect.fail(new InvalidRequestError({ message: `Skill not found: ${error.skill}`, field: "skills" })),
                 ),
-                locationErrors,
               ),
           }
         }),
@@ -347,7 +318,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           yield* session
             .command({
               sessionID: ctx.params.sessionID,
-              command: ctx.payload.name,
+              command: ctx.payload.command,
               text: ctx.payload.text,
               files: ctx.payload.files,
               agents: ctx.payload.agents,
@@ -372,7 +343,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   }),
                 ),
               ),
-              locationErrors,
             )
           return HttpApiSchema.NoContent.make()
         }),
@@ -383,7 +353,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           yield* session
             .skill({
               sessionID: ctx.params.sessionID,
-              skill: ctx.payload.id,
+              id: ctx.payload.id,
+              skill: ctx.payload.skill,
               resume: ctx.payload.resume,
             })
             .pipe(
@@ -391,7 +362,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               Effect.catchTag("Session.SkillNotFoundError", (error) =>
                 Effect.fail(new SkillNotFoundError({ skill: error.skill, message: `Skill not found: ${error.skill}` })),
               ),
-              locationErrors,
             )
           return HttpApiSchema.NoContent.make()
         }),
@@ -475,7 +445,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 Effect.catchTag("Session.MessageNotFoundError", missingMessage),
                 Effect.catchTag("Session.BusyError", busySession),
                 Effect.catchTag("Snapshot.Error", failedSnapshot("stage session revert", ctx.params.sessionID)),
-                locationErrors,
               ),
           }
         }),
@@ -490,7 +459,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               Effect.catchTag("Session.NotFoundError", missingSession),
               Effect.catchTag("Session.BusyError", busySession),
               Effect.catchTag("Snapshot.Error", failedSnapshot("clear session revert", ctx.params.sessionID)),
-              locationErrors,
             )
           return HttpApiSchema.NoContent.make()
         }),
@@ -533,7 +501,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 (error) => new InvalidRequestError({ message: error.message, field: error.field }),
               ),
               Effect.catchTag("Snapshot.Error", failedSnapshot("diff session turn", ctx.params.sessionID)),
-              locationErrors,
             ),
           }
         }),
@@ -551,21 +518,27 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.inbox.cancel",
         Effect.fn(function* (ctx) {
-          yield* session.cancelInbox({ sessionID: ctx.params.sessionID, inboxID: ctx.params.inboxID }).pipe(
-            Effect.catchTag("Session.NotFoundError", missingSession),
-            Effect.catchTag("Session.InboxConflictError", () => Effect.void),
+          return yield* pendingMutation(
+            session.cancelInbox({ sessionID: ctx.params.sessionID, inboxID: ctx.params.inboxID }),
+            "Pending input can no longer be cancelled",
           )
-          return HttpApiSchema.NoContent.make()
         }),
       )
       .handle(
-        "session.inbox.update",
+        "session.inbox.steer",
         Effect.fn(function* (ctx) {
           return yield* pendingMutation(
-            ctx.payload.delivery === "steer"
-              ? session.steerInbox({ sessionID: ctx.params.sessionID, inboxID: ctx.params.inboxID })
-              : session.queueInbox({ sessionID: ctx.params.sessionID, inboxID: ctx.params.inboxID }),
-            `Pending input cannot change to ${ctx.payload.delivery}`,
+            session.steerInbox({ sessionID: ctx.params.sessionID, inboxID: ctx.params.inboxID }),
+            "Pending input is no longer queued",
+          )
+        }),
+      )
+      .handle(
+        "session.inbox.queue",
+        Effect.fn(function* (ctx) {
+          return yield* pendingMutation(
+            session.queueInbox({ sessionID: ctx.params.sessionID, inboxID: ctx.params.inboxID }),
+            "Pending input is no longer a steer",
           )
         }),
       )
@@ -619,7 +592,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.interrupt",
         Effect.fn(function* (ctx) {
-          return { interrupted: yield* session.interrupt(ctx.params.sessionID, { resume: ctx.query.resume }) }
+          return { interrupted: yield* session.interrupt(ctx.params.sessionID, { continue: ctx.query.continue }) }
         }),
       )
       .handle(
@@ -640,75 +613,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             messageID: ctx.params.messageID,
             message: `Message not found: ${ctx.params.messageID}`,
           })
-        }),
-      )
-      .handle(
-        "session.form.list",
-        Effect.fn(function* (ctx) {
-          const form = yield* Form.Service
-          return { data: yield* form.list({ sessionID: ctx.params.sessionID }) }
-        }),
-      )
-      .handle(
-        "session.form.create",
-        Effect.fn(function* (ctx) {
-          const form = yield* Form.Service
-          const created = yield* form
-            .create({
-              id: ctx.payload.id,
-              sessionID: ctx.params.sessionID,
-              title: ctx.payload.title,
-              metadata: ctx.payload.metadata,
-              fields: ctx.payload.fields,
-            })
-            .pipe(
-              Effect.catchTags({
-                "Form.AlreadyExistsError": (error) => new ConflictError({ resource: error.id, message: error.message }),
-                "Form.InvalidFormError": (error) =>
-                  new InvalidRequestError({ message: error.message, field: "fields" }),
-              }),
-            )
-          return { data: created }
-        }),
-      )
-      .handle(
-        "session.form.get",
-        Effect.fn(function* (ctx) {
-          const owned = yield* requireOwnedForm(ctx.params.sessionID, ctx.params.formID)
-          const state = yield* owned.form
-            .state(ctx.params.formID)
-            .pipe(Effect.catchTag("Form.NotFoundError", () => missingForm(ctx.params.formID)))
-          return { data: { ...owned.info, state } }
-        }),
-      )
-      .handle(
-        "session.form.reply",
-        Effect.fn(function* (ctx) {
-          const owned = yield* requireOwnedForm(ctx.params.sessionID, ctx.params.formID)
-          yield* owned.form.reply({ id: ctx.params.formID, answer: ctx.payload.answer }).pipe(
-            Effect.catchTags({
-              "Form.AlreadySettledError": (error) =>
-                new FormAlreadySettledError({ id: error.id, message: error.message }),
-              "Form.InvalidAnswerError": (error) =>
-                new FormInvalidAnswerError({ id: error.id, message: error.message }),
-              "Form.NotFoundError": () => missingForm(ctx.params.formID),
-            }),
-          )
-          return HttpApiSchema.NoContent.make()
-        }),
-      )
-      .handle(
-        "session.form.cancel",
-        Effect.fn(function* (ctx) {
-          const owned = yield* requireOwnedForm(ctx.params.sessionID, ctx.params.formID)
-          yield* owned.form.cancel(ctx.params.formID, { message: ctx.query.message }).pipe(
-            Effect.catchTags({
-              "Form.AlreadySettledError": (error) =>
-                new FormAlreadySettledError({ id: error.id, message: error.message }),
-              "Form.NotFoundError": () => missingForm(ctx.params.formID),
-            }),
-          )
-          return HttpApiSchema.NoContent.make()
         }),
       )
   }),

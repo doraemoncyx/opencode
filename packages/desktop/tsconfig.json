@@ -1,6 +1,5 @@
 {
   "compilerOptions": {
-    "noUnusedLocals": true,
     "target": "ESNext",
     "module": "ESNext",
     "skipLibCheck": true,

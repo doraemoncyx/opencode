@@ -1,5 +1,5 @@
 import { createSimpleContext } from "@opencode/ui/context"
-import { Accessor, batch, createEffect, createMemo, createResource, createRoot, getOwner } from "solid-js"
+import { Accessor, createEffect, createMemo, createResource, createRoot, getOwner } from "solid-js"
 import { createServerProjects, RECENTLY_CLOSED_DISPLAY_LIMIT, ServerConnection, useServers } from "./registry"
 import { pathKey } from "@/workspaces/path-key"
 import { useServerHealth } from "@/runtime/server/health"
@@ -18,8 +18,6 @@ import { showToast } from "@/shell/notifications/toast"
 import { formatServerError } from "./errors"
 import { useSettings } from "@/settings/model"
 import { timelinePreset } from "@opencode/session-ui/timeline/detail"
-import type { SessionInfo } from "@opencode/client/promise"
-import { resolveProjectForSession, resolveSessionDetailsProject } from "@/shell/layout/helpers"
 
 export const { use: useGlobal, provider: GlobalProvider } = createSimpleContext({
   name: "Global",
@@ -50,18 +48,15 @@ export const { use: useGlobal, provider: GlobalProvider } = createSimpleContext(
       return serverCtx
     }
 
-    // A server that rejects our credentials would retry its event stream every second with the same
-    // credentials, so its controller waits until health recovers and then starts with the current ones.
     createMemo(() => {
       for (const conn of server.list) {
-        if (serverHealth[ServerConnection.key(conn)]?.unauthorized) continue
         ensureServerCtx(conn)
       }
     })
 
     createEffect(() => {
       for (const [key] of serverCtxs) {
-        if (serverHealth[key]?.unauthorized || !server.list.find((conn) => ServerConnection.key(conn) === key)) {
+        if (!server.list.find((conn) => ServerConnection.key(conn) === key)) {
           serverCtxDisposers.get(key)?.()
           serverCtxDisposers.delete(key)
           serverCtxs.delete(key)
@@ -78,12 +73,6 @@ export const { use: useGlobal, provider: GlobalProvider } = createSimpleContext(
       ensureServerCtx(conn: ServerConnection.Any) {
         return ensureServerCtx(conn)
       },
-      /** The live controller of a server, or undefined while it is unlisted or rejects our credentials. Reactive. */
-      serverCtx(key: ServerConnection.Key) {
-        const conn = server.list.find((item) => ServerConnection.key(item) === key)
-        if (!conn || serverHealth[key]?.unauthorized) return
-        return ensureServerCtx(conn)
-      },
     }
   },
 })
@@ -94,40 +83,21 @@ function createGlobalModels() {
     recent: [],
     variant: {},
   })
-  // Suspend readers only until persisted state loads. Refetching on every change would put the
-  // session route into its Suspense fallback, detaching the screen and resetting the timeline scroll.
-  const [loaded] = createResource(async () => {
-    await ready.promise
-    return true
-  })
+  const [recent] = createResource(
+    async () => {
+      const value = store.recent
+      await ready.promise
+      return value
+    },
+    (value) => value,
+    { initialValue: [] },
+  )
 
   return {
     store,
     set: setStore,
     ready,
-    recent: () => {
-      loaded()
-      return store.recent
-    },
-    // Marks models visible in the picker regardless of the "latest per family" default.
-    show(models: ReadonlyArray<{ providerID: string; modelID: string }>) {
-      const seen = new Map(store.user.map((item, index) => [`${item.providerID}:${item.modelID}`, index]))
-      batch(() => {
-        for (const model of models) {
-          const index = seen.get(`${model.providerID}:${model.modelID}`)
-          if (index !== undefined) {
-            setStore("user", index, "visibility", "show")
-            continue
-          }
-          seen.set(`${model.providerID}:${model.modelID}`, store.user.length)
-          setStore("user", store.user.length, {
-            providerID: model.providerID,
-            modelID: model.modelID,
-            visibility: "show",
-          })
-        }
-      })
-    },
+    recent: () => recent()!,
   }
 }
 
@@ -169,18 +139,17 @@ function createServerController(
   function enrich(project: { worktree: string; expanded: boolean }) {
     const [childStore] = sync.child(project.worktree, { bootstrap: false })
     const projectID = childStore.project
+    // The tracked directory comes from persisted client state, so it can spell the
+    // project's canonical directory differently by case or separator.
+    const worktreeKey = pathKey(project.worktree)
     const metadata = projectID
       ? sync.data.project.find((x) => x.id === projectID)
-      : sync.data.project.find((x) => x.worktree === project.worktree)
+      : sync.data.project.find((x) => pathKey(x.worktree) === worktreeKey)
 
     // Preserve local icon override from per-workspace localStorage cache (childStore.icon).
     // Without this, different subdirectories of the same git repo would share the same
     // icon from the database instead of using their individual overrides.
-    const base = {
-      ...metadata,
-      ...(!metadata || metadata.id === "global" ? childStore.projectMeta : undefined),
-      ...project,
-    }
+    const base = { ...metadata, ...project }
     if (childStore.icon) {
       return { ...base, icon: { ...base.icon, override: childStore.icon } }
     }
@@ -188,13 +157,6 @@ function createServerController(
   }
 
   const projectsList = createMemo(() => projects.list().map(enrich))
-  const forSession = (session: SessionInfo) => {
-    const project = resolveProjectForSession(session, projectsList(), sync.data.project)
-    if (!project) return
-    return "expanded" in project ? project : { ...project, expanded: false }
-  }
-  const detailsForSession = (session: SessionInfo) =>
-    resolveSessionDetailsProject(session, projectsList(), sync.data.project)
   const recentlyClosedList = createMemo(() => {
     const known = new Set(sync.data.project.map((project) => pathKey(project.worktree)))
     return projects
@@ -215,9 +177,6 @@ function createServerController(
     projects: {
       ...projects,
       list: projectsList,
-      forSession,
-      detailsForSession,
-      resolve: enrich,
       recentlyClosed: recentlyClosedList,
     },
     notification,

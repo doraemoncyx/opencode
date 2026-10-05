@@ -26,8 +26,7 @@ export const Plugin = define({
   id: "opencode.vcs.hg",
   effect: Effect.fn("VcsHgPlugin")(function* (ctx) {
     const location = yield* Location.Service
-    // Markerless locations need this definition to initialize their first repository.
-    if (location.vcs && location.vcs.type !== "hg") return
+    if (location.vcs?.type !== "hg") return
 
     const processes = yield* AppProcess.Service
     const fs = yield* FSUtil.Service
@@ -40,18 +39,6 @@ export const Plugin = define({
       editor.add({
         id: "hg",
         name: "Mercurial",
-        init: (input) =>
-          Effect.gen(function* () {
-            const result = yield* processes.run(
-              ChildProcess.make("hg", ["init"], {
-                cwd: input.worktree,
-                env: { HGPLAIN: "1" },
-                extendEnv: true,
-                stdin: "ignore",
-              }),
-            )
-            if (result.exitCode !== 0) return yield* Effect.fail(new Error("Mercurial initialization failed"))
-          }),
         info: () => adapter.info(),
         branches: (input) => adapter.branches({ search: input.search, limit: input.limit }),
         status: () => adapter.status(),

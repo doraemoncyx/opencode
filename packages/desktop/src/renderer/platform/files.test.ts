@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createDesktopFiles } from "./files"
 
-function fileApi(events: string[]): Parameters<typeof createDesktopFiles>[0] {
+function fileApi(events: string[]) {
   return {
     openDirectoryPicker: async () => null,
     openFilePicker: async () => ({
@@ -21,7 +21,6 @@ function fileApi(events: string[]): Parameters<typeof createDesktopFiles>[0] {
     getPathForFile: () => "fallback",
     saveFile: async () => false,
     openExternal: () => {},
-    openBrowser: async () => true,
     openLocalFile: () => {},
     resolveAppPath: async () => null,
     openPath: async () => undefined,
@@ -34,18 +33,9 @@ function fileApi(events: string[]): Parameters<typeof createDesktopFiles>[0] {
 }
 
 describe("desktop attachment files", () => {
-  test("returns the native browser launch result and forwards clipboard text", async () => {
-    const events: string[] = []
-    const files = createDesktopFiles({ ...fileApi(events), openBrowser: async () => false }, "macos")
-
-    expect(await files.openBrowser("https://opencode.ai/console")).toBe(false)
-    await files.writeClipboardText("ses_123")
-    expect(events).toEqual(["clipboard:ses_123"])
-  })
-
   test("reads selected files sequentially and releases the token", async () => {
     const events: string[] = []
-    const files = createDesktopFiles(fileApi(events), "windows")
+    const files = createDesktopFiles(fileApi(events), "windows", ["txt"])
 
     await files.openAttachmentPickerDialog({}, async (file) => {
       events.push(`file:${file.name}`)
@@ -62,7 +52,7 @@ describe("desktop attachment files", () => {
 
   test("releases the token when a selected file callback fails", async () => {
     const events: string[] = []
-    const files = createDesktopFiles(fileApi(events), "windows")
+    const files = createDesktopFiles(fileApi(events), "windows", ["txt"])
 
     await expect(
       files.openAttachmentPickerDialog({}, async () => {
@@ -70,5 +60,14 @@ describe("desktop attachment files", () => {
       }),
     ).rejects.toThrow("attachment rejected")
     expect(events.at(-1)).toBe("release:selection")
+  })
+
+  test("writes clipboard text through the native desktop API", async () => {
+    const events: string[] = []
+    const files = createDesktopFiles(fileApi(events), "windows", ["txt"])
+
+    await files.writeClipboardText("ses_123")
+
+    expect(events).toEqual(["clipboard:ses_123"])
   })
 })
