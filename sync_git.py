@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""把 fork 的个人分支同步到 upstream 最新（默认 squash + rebase + force-with-lease 推送）。
+"""把 fork 的个人分支同步到 upstream 最新（默认 rebase + force-with-lease 推送）。
 
 Usage:
   python sync_git.py                        # 检查 → 确认 → 同步（检查默认开启，同步需 --yes 或交互 y）
@@ -14,11 +14,8 @@ Usage:
   2. 任何一项 FAIL 都在动手前中止；WARN 提示但不拦（如缺少 upstream remote、--discard 将丢改动）
   3. 检查通过后仍需确认（--yes 或交互 y），非交互环境没有 --yes 一律不动
   4. fetch upstream 与 fork 两个分支：后者给 --force-with-lease 提供新鲜比较基线
-  5. 默认模式：把本地领先的个人提交 squash 成一条再 rebase 到 upstream，最后带 lease
-     推送；--merge 模式则 merge 后普通 push
-
-squash 的原因：本地个人提交越多，rebase 需要重放的提交越多、越慢，压成一条
-后 rebase 只需重放 1 条。
+  5. 默认模式：把本地领先的个人提交逐条 rebase 到 upstream（保留每条提交），最后带
+     lease 推送；--merge 模式则 merge 后普通 push
 
 fork 与 upstream 必须先分清：认错一次就会把 force push 打到上游仓库，上游没有写
 权限，表现为 git push 退出码 128 加 Permission denied——所以推之前必须先探测可写性。
@@ -213,7 +210,7 @@ def confirm() -> bool:
     if not sys.stdin.isatty():
         return False
     try:
-        reply = input("确认执行同步（squash/rebase/force push 到 fork）？[y/N] ")
+        reply = input("确认执行同步（rebase/force push 到 fork）？[y/N] ")
     except (EOFError, KeyboardInterrupt):
         # stdin 是 TTY 但已到 EOF（或被 Ctrl-C），当作「否」
         print(flush=True)
@@ -235,7 +232,7 @@ def push(fork: str, branch: str, lease: str | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="同步 fork 分支到 upstream 最新")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--rebase", action="store_true", help="squash 后 rebase 再推送（默认）")
+    mode.add_argument("--rebase", action="store_true", help="rebase 到 upstream 再推送（默认）")
     mode.add_argument("--merge", action="store_true", help="直接 merge upstream 再普通 push")
     parser.add_argument("--discard", action="store_true", help="允许丢弃已跟踪文件上的未提交修改")
     parser.add_argument("--check", action="store_true", help="只做工作前检查（remote 映射/分支/工作区/可写性）后退出，不改动任何东西")
@@ -272,7 +269,7 @@ def sync(args: argparse.Namespace) -> None:
     if not args.yes and not confirm():
         raise SystemExit("已取消，未做任何改动（加 --yes 或交互确认才会执行同步）")
 
-    # 检查通过才开始动手，顺序：改 remote / 丢修改 / 切分支 / fetch / squash+rebase / push
+    # 检查通过才开始动手，顺序：改 remote / 丢修改 / 切分支 / fetch / rebase / push
     if upstream not in remotes():
         git_checked(["remote", "add", upstream, args.upstream_url])
         log(f"已添加 {upstream} remote", CYAN)
@@ -300,11 +297,6 @@ def sync(args: argparse.Namespace) -> None:
         git_checked(["merge", upstream_ref, "--no-edit"])
         push(fork, args.branch, None)
         return
-
-    if ahead > 1:
-        log(f"正在把本地 {ahead} 条提交压缩成一条 ...", YELLOW)
-        git_checked(["reset", "--soft", upstream_ref])
-        git_checked(["commit", "-m", f"feat({args.branch}): fork 累积改动"])
 
     log(f"正在 rebase 到 {upstream_ref} ...", YELLOW)
     result = git(["rebase", upstream_ref])
