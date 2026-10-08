@@ -29,6 +29,10 @@ target
 .cache
 .direnv/
 
+# Python
+__pycache__/
+*.pyc
+
 # Local dev files
 opencode-dev
 UPCOMING_CHANGELOG.md
