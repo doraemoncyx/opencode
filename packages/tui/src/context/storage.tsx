@@ -44,12 +44,21 @@ function segment(value: string) {
   return value
 }
 
+// A channel can be a branch-based preview name with characters a path segment forbids
+// (e.g. "fork/v2_261008"). Sanitize it the way the service registration file name is
+// sanitized, then re-validate so a channel still cannot escape the storage root.
+function channelSegment(value: string) {
+  const sanitized = value.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/^[^a-zA-Z0-9]+/, "")
+  return segment(sanitized === "" ? "local" : sanitized)
+}
+
 export function createStorage(root: string, channel: string) {
   const entries = new Map<string, { readonly value: Entry<object>; readonly reload: () => void }>()
   const memories = new Map<string, MemoryEntry<object>>()
   const pending = new Set<Promise<void>>()
-  const directory = path.join(root, segment(channel), "tui")
-  const locks = path.join(root, segment(channel), "locks")
+  const channelDirectory = channelSegment(channel)
+  const directory = path.join(root, channelDirectory, "tui")
+  const locks = path.join(root, channelDirectory, "locks")
   mkdirSync(directory, { recursive: true })
 
   const storage: Storage = {

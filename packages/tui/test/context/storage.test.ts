@@ -35,3 +35,16 @@ test("createStorage degrades gracefully when fs.watch throws (e.g. ENOSPC)", asy
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test("createStorage accepts a channel containing path separators", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "storage-test-"))
+  try {
+    const result = createStorage(dir, "fork/v2_261008")
+    const [store] = result.storage.store("kv", { initial: { count: 0 } })
+    expect(store.count).toBe(0)
+    expect(fs.existsSync(path.join(dir, "fork-v2_261008", "tui"))).toBe(true)
+    expect(() => result.close()).not.toThrow()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
