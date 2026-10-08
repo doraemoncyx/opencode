@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""把 fork 的个人分支同步到 upstream 最新（默认 rebase + force-with-lease 推送）。
+"""把 fork 的个人分支同步到 upstream 最新（默认 merge upstream 后普通推送）。
 
 Usage:
   python sync_git.py                        # 检查 → 确认 → 同步（检查默认开启，同步需 --yes 或交互 y）
   python sync_git.py --check                # 只做工作前检查并打印，不改动任何东西
   python sync_git.py --yes                  # 检查通过后不再确认，直接同步
-  python sync_git.py --merge                # 用 merge 代替 rebase
+  python sync_git.py --rebase               # 用 rebase 代替 merge（改写提交、需强推）
   python sync_git.py --discard              # 允许丢弃已跟踪文件上的未提交修改
   python sync_git.py --branch v2 --fork fork --upstream origin
 
@@ -14,8 +14,12 @@ Usage:
   2. 任何一项 FAIL 都在动手前中止；WARN 提示但不拦（如缺少 upstream remote、--discard 将丢改动）
   3. 检查通过后仍需确认（--yes 或交互 y），非交互环境没有 --yes 一律不动
   4. fetch upstream 与 fork 两个分支：后者给 --force-with-lease 提供新鲜比较基线
-  5. 默认模式：把本地领先的个人提交逐条 rebase 到 upstream（保留每条提交），最后带
-     lease 推送；--merge 模式则 merge 后普通 push
+  5. 默认模式：merge upstream 到本地分支再普通 push，代价 ~ 分叉规模、不改写提交；
+     --rebase 模式则逐条 rebase 到 upstream 后带 lease 强推
+
+merge 而非 squash/rebase 的原因：这是持续开发的活 fork，保留每条特性提交才能在
+upstream..fork 里按特性查看与挑选；merge 每次只解一次冲突，代价不随提交数增长，
+且普通 push 不改写 SHA。
 
 fork 与 upstream 必须先分清：认错一次就会把 force push 打到上游仓库，上游没有写
 权限，表现为 git push 退出码 128 加 Permission denied——所以推之前必须先探测可写性。
@@ -28,6 +32,7 @@ import ctypes
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -118,6 +123,16 @@ def rebase_in_progress() -> bool:
     return (path / "rebase-merge").exists() or (path / "rebase-apply").exists()
 
 
+def merge_in_progress() -> bool:
+    git_dir = git_probe(["rev-parse", "--git-dir"])
+    if git_dir is None:
+        return False
+    path = Path(git_dir)
+    if not path.is_absolute():
+        path = ROOT / path
+    return (path / "MERGE_HEAD").exists()
+
+
 def repo_slug(url: str) -> str:
     """把 remote URL 归一成 owner/repo，用来判断某个 remote 是不是上游仓库。
     支持 git@host:owner/repo.git、https://host/owner/repo、ssh://git@host/owner/repo。"""
@@ -180,9 +195,9 @@ def preflight(args: argparse.Namespace) -> tuple[str, str, list[tuple[str, str]]
     if not dirty:
         checks.append(("ok", "工作区（已跟踪文件）干净"))
     elif args.discard:
-        checks.append(("warn", f"{len(dirty)} 处未提交修改，--discard 已允许丢弃"))
+        checks.append(("warn", f"{len(dirty)} 处未提交修改，--discard 将丢弃它们"))
     else:
-        checks.append(("fail", f"{len(dirty)} 处未提交修改，先提交或 stash，或加 --discard：\n" + "\n".join(dirty)))
+        checks.append(("warn", f"{len(dirty)} 处未提交修改，将用 --autostash 暂存、同步后还原"))
 
     ok, detail = writable(fork)
     if ok:
@@ -210,7 +225,7 @@ def confirm() -> bool:
     if not sys.stdin.isatty():
         return False
     try:
-        reply = input("确认执行同步（rebase/force push 到 fork）？[y/N] ")
+        reply = input("确认执行同步并推送到 fork？[y/N] ")
     except (EOFError, KeyboardInterrupt):
         # stdin 是 TTY 但已到 EOF（或被 Ctrl-C），当作「否」
         print(flush=True)
@@ -232,8 +247,8 @@ def push(fork: str, branch: str, lease: str | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="同步 fork 分支到 upstream 最新")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--rebase", action="store_true", help="rebase 到 upstream 再推送（默认）")
-    mode.add_argument("--merge", action="store_true", help="直接 merge upstream 再普通 push")
+    mode.add_argument("--rebase", action="store_true", help="逐条 rebase 到 upstream 后强推（改写提交，默认关）")
+    mode.add_argument("--merge", action="store_true", help="merge upstream 后普通 push（默认）")
     parser.add_argument("--discard", action="store_true", help="允许丢弃已跟踪文件上的未提交修改")
     parser.add_argument("--check", action="store_true", help="只做工作前检查（remote 映射/分支/工作区/可写性）后退出，不改动任何东西")
     parser.add_argument("--yes", "-y", action="store_true", help="检查通过后不再确认，直接执行同步")
@@ -269,11 +284,11 @@ def sync(args: argparse.Namespace) -> None:
     if not args.yes and not confirm():
         raise SystemExit("已取消，未做任何改动（加 --yes 或交互确认才会执行同步）")
 
-    # 检查通过才开始动手，顺序：改 remote / 丢修改 / 切分支 / fetch / rebase / push
+    # 检查通过才开始动手，顺序：改 remote / 丢修改 / 切分支 / fetch / merge(或 rebase) / push
     if upstream not in remotes():
         git_checked(["remote", "add", upstream, args.upstream_url])
         log(f"已添加 {upstream} remote", CYAN)
-    if git_probe(["status", "--porcelain", "--untracked-files=no"]):
+    if args.discard and git_probe(["status", "--porcelain", "--untracked-files=no"]):
         git_checked(["reset", "--hard"])
         log("已丢弃未提交修改", CYAN)
     if git_probe(["branch", "--show-current"]) != args.branch:
@@ -292,29 +307,46 @@ def sync(args: argparse.Namespace) -> None:
         log("本地没有独有提交，已直接对齐 upstream，无需推送", CYAN)
         return
 
-    if args.merge:
+    if args.rebase:
+        # rebase 会改写提交，先留一个本地备份 ref 兜底（只在本仓库，不会被推送）
+        backup = f"refs/backup/sync/{time.strftime('%Y%m%d-%H%M%S')}"
+        git_checked(["update-ref", backup, "HEAD"])
+        log(f"已创建备份 ref {backup}", CYAN)
+        log(f"正在 rebase 到 {upstream_ref}（保留每条提交）...", YELLOW)
+        result = git(["rebase", "--autostash", upstream_ref])
+        if result.returncode != 0:
+            # 冲突时 rebase 会暂停在中间，交由用户手动解决，绝不继续推送
+            if rebase_in_progress():
+                log(
+                    "Rebase 因冲突暂停：请手动解决冲突后运行 'git rebase --continue'，"
+                    "或运行 'git rebase --abort' 放弃本次同步。",
+                    RED,
+                )
+                raise SystemExit(1)
+            raise SystemExit(f"git rebase 失败（退出码 {result.returncode}）")
+        # rebase 没报错不代表结果正确，确认 HEAD 真的在 upstream 之上再推
+        if git(["merge-base", "--is-ancestor", upstream_ref, "HEAD"]).returncode != 0:
+            raise SystemExit(f"rebase 后 HEAD 不包含 {upstream_ref}，已中止推送")
+    else:
         log(f"正在 merge {upstream_ref} ...", YELLOW)
-        git_checked(["merge", upstream_ref, "--no-edit"])
-        push(fork, args.branch, None)
+        result = git(["merge", "--autostash", upstream_ref, "--no-edit"])
+        if result.returncode != 0:
+            # 冲突时 merge 会暂停在中间，交由用户手动解决，绝不继续推送
+            if merge_in_progress():
+                log(
+                    "Merge 因冲突暂停：请手动解决冲突后运行 'git commit' 完成合并，"
+                    "或运行 'git merge --abort' 放弃本次同步。",
+                    RED,
+                )
+                raise SystemExit(1)
+            raise SystemExit(f"git merge 失败（退出码 {result.returncode}）")
+
+    # 本地与 fork 分支已一致时没有可推的内容，避免无谓推送
+    if lease is not None and git_probe(["rev-parse", "HEAD"]) == lease:
+        log(f"{fork}/{args.branch} 已是最新，无需推送", CYAN)
         return
-
-    log(f"正在 rebase 到 {upstream_ref} ...", YELLOW)
-    result = git(["rebase", upstream_ref])
-    if result.returncode != 0:
-        # 冲突时 rebase 会暂停在中间，交由用户手动解决，绝不继续推送
-        if rebase_in_progress():
-            log(
-                "Rebase 因冲突暂停：请手动解决冲突后运行 'git rebase --continue'，"
-                "或运行 'git rebase --abort' 放弃本次同步。",
-                RED,
-            )
-            raise SystemExit(1)
-        raise SystemExit(f"git rebase 失败（退出码 {result.returncode}）")
-    # rebase 没报错不代表结果正确，确认 HEAD 真的在 upstream 之上再推
-    if git(["merge-base", "--is-ancestor", upstream_ref, "HEAD"]).returncode != 0:
-        raise SystemExit(f"rebase 后 HEAD 不包含 {upstream_ref}，已中止推送")
-
-    push(fork, args.branch, lease)
+    # rebase 改写了历史，必须带 lease 强推；merge 只在旧提交之上追加，普通 push 即可
+    push(fork, args.branch, lease if args.rebase else None)
     log(f"完成：{fork}/{args.branch} 已同步到 {upstream_ref}", CYAN)
 
 
