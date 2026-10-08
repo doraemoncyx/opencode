@@ -131,6 +131,9 @@ describe("CodeModeInstructions.render", () => {
     expect(partial).toContain("- orders (1 tool, none shown)")
     expect(partial).toContain("They cannot be called directly, and neither can `search`.")
     expect(partial).toContain(
+      "`search` is a global function, not a `tools.*` entry: call `search({ ... })`, never `tools.search(...)`.",
+    )
+    expect(partial).toContain(
       "The catalog is partial. Inside `execute`, use `search(...)` to find a tool, then call it by the `path` in the result. `search` is synchronous. Call it without `await`; it does not return a Promise.",
     )
     expect(partial).toContain("- search({")

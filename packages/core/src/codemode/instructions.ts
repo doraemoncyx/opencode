@@ -12,7 +12,9 @@ Use the \`execute\` tool to call the tools listed below. They cannot be called d
 
 ${hasMoreTools ? `The catalog is partial. Inside \`execute\`, use \`search(...)\` to find a tool, then call it by the \`path\` in the result. \`search\` is synchronous. Call it without \`await\`; it does not return a Promise. Do not guess tool names.
 
-- ${searchSignature}` : "The catalog is complete. Do not guess tool names."}
+- ${searchSignature}
+
+\`search\` is a global function, not a \`tools.*\` entry: call \`search({ ... })\`, never \`tools.search(...)\`.` : "The catalog is complete. Do not guess tool names."}
 
 ## Available tools`
 

@@ -24,7 +24,7 @@ test("execute describes invariant Code Mode behavior", () => {
     [
       "Run JavaScript in a confined Code Mode runtime to script tool calls and HTTP requests and compose their results.",
       "`fetch` is available for HTTP requests. Imports, direct filesystem access, and timers are unavailable; all other external access goes through `tools`.",
-      "Within `{ code }`, the only callable tools are those explicitly listed in the Code Mode catalog instructions or returned by the `search` function. Inside `{ code }`, ignore tools shown outside the Code Mode catalog. They are not available in the Code Mode runtime.",
+      "Within `{ code }`, the only callable tools are those listed in the Code Mode catalog instructions or returned by `search`. Other tools in your tool list, including direct tools such as `read`, `shell`, and `webfetch`, are not available inside `execute`: call those directly instead.",
       'Call tools through `tools` using only exact paths and signatures from the catalog. Do not infer or normalize tool names; preserve bracket notation such as `tools.<namespace>["tool-name"](input)`.',
       "Prefer an explicit `return`; if omitted, the final top-level expression becomes the result.",
       "Await every call whose completion matters; pending calls are interrupted when execution ends. Run independent calls concurrently with `Promise.allSettled`.",
@@ -145,3 +145,59 @@ test("execute supports callable namespace tools", async () => {
   })
   expect(result.content).toEqual([{ type: "text", text: '[\n  "admin",\n  "created"\n]' }])
 })
+
+const createCodeModeWithDirect = (direct: ReadonlySet<string>) =>
+  CodeModeTool.create({ tools: new Map(), direct }, (_, tool, input, context) => execute(tool, input, context))
+
+test("an unknown tool that the model calls directly elsewhere names the real remedy", async () => {
+  const result = await Effect.runPromise(
+    createCodeModeWithDirect(new Set(["webfetch"])).execute(
+      { code: "return await tools.webfetch({ url: 'https://example.com' })" },
+      context,
+    ),
+  )
+
+  expect(result.metadata).toEqual({ toolCalls: [], error: true })
+  expect(result.content).toEqual([
+    {
+      type: "text",
+      text: [
+        "Unknown tool 'webfetch'.",
+        "`webfetch` is not a Code Mode tool. Call it directly, outside `execute`.",
+      ].join("\n"),
+    },
+  ])
+})
+
+test("an unknown tool outside the direct list keeps the search hint", async () => {
+  const result = await Effect.runPromise(
+    createCodeModeWithDirect(new Set(["webfetch"])).execute({ code: "return await tools.missing({})" }, context),
+  )
+
+  expect(result.content).toEqual([
+    {
+      type: "text",
+      text: ["Unknown tool 'missing'.", "Use search to find available tools."].join("\n"),
+    },
+  ])
+})
+
+test("an unknown child path resolves against its first segment", async () => {
+  const result = await Effect.runPromise(
+    createCodeModeWithDirect(new Set(["webfetch"])).execute({ code: "return await tools.webfetch.extra({})" }, context),
+  )
+
+  expect(result.content).toEqual([
+    {
+      type: "text",
+      text: [
+        "Unknown tool 'webfetch.extra'.",
+        "`webfetch` is not a Code Mode tool. Call it directly, outside `execute`.",
+      ].join("\n"),
+    },
+  ])
+})
+
+// The Code Mode runtime already honors `tools.search(...)` for the bare `search` global, and emits
+// its own "Use search to find available tools." suggestion, so those cases are covered upstream and
+// are not re-tested here.

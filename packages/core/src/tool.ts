@@ -234,7 +234,7 @@ const layer = Layer.effect(
           const direct = new Map(Array.from(active).filter(([, tool]) => tool.options?.codemode === false))
           const codeModeTools = new Map(Array.from(active).filter(([, tool]) => tool.options?.codemode !== false))
           const namespaces = data.namespaces
-          const codeModeInventory = { tools: codeModeTools, namespaces }
+          const codeModeInventory = { tools: codeModeTools, namespaces, direct: new Set(direct.keys()) }
           const codeModeEnabled = !whollyDisabled("execute", rules)
           const codeModeTool = codeModeEnabled
             ? CodeModeTool.create(codeModeInventory, (name, tool, input, context) =>
@@ -274,12 +274,37 @@ const layer = Layer.effect(
               if (!requested && input.definitions && (direct.has(event.tool) || codeModeTool?.name === event.tool))
                 return yield* new Tool.Error({ message: `Tool is not available for this request: ${event.tool}` })
               const name = requested?.name ?? event.tool
+              // Reaching for the wrong tool usually shows up as an input shaped for a different one.
+              const withInputHint = (failure: Tool.Error) => {
+                const candidates =
+                  input.definitions === undefined
+                    ? Array.from(active.values(), (item) => definition(item))
+                    : Array.from(input.definitions.values())
+                const match = mismatchedInput(name, event.input, candidates)
+                if (match === undefined) return failure
+                return new Tool.Error({
+                  message: `${failure.message}\n\nThe arguments look like input for the \`${match.name}\` tool. Call \`${match.name}\` with \`{ ${match.required.join(", ")} }\` instead.`,
+                  ...(failure.error === undefined ? {} : { error: failure.error }),
+                  ...(failure.metadata === undefined ? {} : { metadata: failure.metadata }),
+                })
+              }
               if (name === "execute" && codeModeTool)
-                return yield* executeTool(codeModeTool, name, event.input, context)
+                return yield* executeTool(codeModeTool, name, event.input, context).pipe(
+                  Effect.catchTag("Tool.Error", (failure) => Effect.fail(withInputHint(failure))),
+                )
               const tool = direct.get(name)
-              if (tool) return yield* executeTool(tool, name, event.input, context)
+              if (tool)
+                return yield* executeTool(tool, name, event.input, context).pipe(
+                  Effect.catchTag("Tool.Error", (failure) => Effect.fail(withInputHint(failure))),
+                )
+              const suggestion = nearestToolName(
+                name,
+                input.definitions === undefined ? direct.keys() : input.definitions.keys(),
+              )
               return yield* new Tool.Error({
-                message: `No tool named "${name}" is currently available. Please use a tool from the available tool list.`,
+                message: suggestion
+                  ? `No tool named "${name}" is currently available. Did you mean "${suggestion}"? Please use a tool from the available tool list.`
+                  : `No tool named "${name}" is currently available. Please use a tool from the available tool list.`,
               })
             }),
           }
@@ -292,6 +317,52 @@ const layer = Layer.effect(
 const whollyDisabled = (action: string, rules: Permission.Ruleset) => {
   const rule = rules.findLast((rule) => Wildcard.match(action, rule.action))
   return rule?.resource === "*" && rule.effect === "deny"
+}
+
+// V1 tool names that V2 renamed, so a model calling one from memory still gets a useful hint.
+const RENAMED_TOOL_NAMES: Record<string, string> = { bash: "shell", task: "subagent" }
+
+const comparableToolName = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+
+/** The advertised name closest to `name`, or undefined when nothing is close enough to suggest. */
+function nearestToolName(name: string, available: Iterable<string>) {
+  const names = Array.from(available)
+  const renamed = RENAMED_TOOL_NAMES[name]
+  if (renamed !== undefined && names.includes(renamed)) return renamed
+  const key = comparableToolName(name)
+  return names
+    .filter((candidate) => {
+      const comparable = comparableToolName(candidate)
+      return comparable === key || comparable.endsWith(`_${key}`)
+    })
+    .toSorted((left, right) => left.length - right.length)[0]
+}
+
+const requiredKeys = (schema: ToolDefinition["inputSchema"]): ReadonlyArray<string> | undefined =>
+  schema.type === "object" && Array.isArray(schema.required) ? schema.required : undefined
+
+/**
+ * A model that reaches for the wrong tool usually supplies a valid input for a different one. When
+ * the failing tool's own required fields are absent and exactly one other advertised tool accepts
+ * the supplied keys, that tool is the likely intent. A normal bad call keeps its own required
+ * fields present, so a genuine validation mistake on the right tool stays silent.
+ */
+function mismatchedInput(name: string, value: unknown, candidates: ReadonlyArray<ToolDefinition>) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return
+  const keys = new Set(Object.keys(value))
+  const own = requiredKeys(candidates.find((candidate) => candidate.name === name)?.inputSchema ?? {})
+  if (own === undefined || own.every((key) => keys.has(key))) return
+  const matches = candidates.flatMap((candidate) => {
+    if (candidate.name === name) return []
+    const required = requiredKeys(candidate.inputSchema)
+    if (required === undefined || required.length === 0 || !required.every((key) => keys.has(key))) return []
+    return [{ name: candidate.name, required }]
+  })
+  return matches.length === 1 ? matches[0] : undefined
 }
 
 const formatSchemaIssue = SchemaIssue.makeFormatterDefault()
