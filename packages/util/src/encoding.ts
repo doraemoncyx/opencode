@@ -1,6 +1,6 @@
 import iconv from "iconv-lite"
 
-export type FileEncoding = "utf-8" | "gbk"
+export type FileEncoding = "utf-8" | "gb18030"
 
 export function detectEncoding(bytes: Uint8Array): FileEncoding {
   let utf8Ok = true
@@ -9,26 +9,38 @@ export function detectEncoding(bytes: Uint8Array): FileEncoding {
   } catch {
     utf8Ok = false
   }
-  if (!utf8Ok) return "gbk"
+  if (!utf8Ok) return "gb18030"
   // EF BB BF 前缀按惯例视为 UTF-8 BOM（GB18030 恰好也能把它解码成两个汉字并回环）
   if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8"
   if (bytes.length === 0 || !bytes.some((byte) => byte >= 0x80)) return "utf-8"
 
-  // 字节同时是合法 UTF-8 与合法 GBK 时（约 8% 的 GBK 汉字恰好构成合法 UTF-8），
-  // 先做 GBK 回环确保两种解释都成立，再做可行性对比：真正的 UTF-8 文本（含 CJK、
-  // 拉丁、西里尔等）按 UTF-8 解码是有意义的字符，不能仅因 GBK 也能解码出 CJK 就改判；
-  // 只有 UTF-8 解码出现控制/不可打印字符、而 GBK 解码给出可读文本时（例如回环样例
-  // 0xC2 0x80：UTF-8 为 U+0080 控制符，GBK 为「聙」），才判 GBK。
-  const gbkText = gbkTextDecoder().decode(bytes)
-  if (!iconv.encode(gbkText, "gbk").equals(Buffer.from(bytes))) return "utf-8"
+  // 字节同时是合法 UTF-8 与合法 GB18030 时（约 8% 的 GB18030 汉字恰好构成合法 UTF-8），
+  // 先做 GB18030 回环确保两种解释都成立，再做可行性对比：真正的 UTF-8 文本（含 CJK、
+  // 拉丁、西里尔等）按 UTF-8 解码是有意义的字符，不能仅因 GB18030 也能解码出 CJK 就改判；
+  // 只有 UTF-8 解码出现控制/不可打印字符、而 GB18030 解码给出可读文本时（例如回环样例
+  // 0xC2 0x80：UTF-8 为 U+0080 控制符，GB18030 为「聙」），才判 GB18030。
+  const gbText = gb18030TextDecoder().decode(bytes)
+  if (!iconv.encode(gbText, "gb18030").equals(Buffer.from(bytes))) return "utf-8"
   const utf8Text = new TextDecoder("utf-8").decode(bytes)
   if (countCjk(utf8Text) > 0) return "utf-8"
-  if (countCjk(gbkText) === 0) return "utf-8"
+  if (countCjk(gbText) === 0) return "utf-8"
   // 真正的 UTF-8 文本解码后是连贯可读文本（ASCII/拉丁/希腊/西里尔/常用符号）；
-  // GBK 回环样例按 UTF-8 解码则常出现控制符或生僻字符。仅后者判 GBK，
-  // 避免把 café、Привет 这类合法 UTF-8 误判成 GBK。
+  // GB18030 回环样例按 UTF-8 解码则常出现控制符或生僻字符。仅后者判 GB18030，
+  // 避免把 café、Привет 这类合法 UTF-8 误判成 GB18030。
   if (isCoherentText(utf8Text)) return "utf-8"
-  return "gbk"
+  return "gb18030"
+}
+
+// 文件内容的编码判定，比 shell 输出保守：只有严格 UTF-8 解码失败才判 GB18030。
+// 文件工具会按此结果重新编码写回，误判会把合法 UTF-8 文件（emoji、假名等触发的
+// 回环样例）写坏，所以这里不做回环启发式，宁可漏判也不误判。
+export function detectFileEncoding(bytes: Uint8Array): FileEncoding {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+    return "utf-8"
+  } catch {
+    return "gb18030"
+  }
 }
 
 // 文本是否为连贯可读文本：仅含空白、ASCII 可见字符、常见拉丁/希腊/西里尔字母与常用符号
@@ -48,20 +60,27 @@ function isCoherentText(text: string): boolean {
 
 export function decodeText(bytes: Uint8Array, encoding: FileEncoding): string {
   if (encoding === "utf-8") return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
-  return gbkTextDecoder().decode(bytes)
+  return gb18030TextDecoder().decode(bytes)
 }
 
-// Bun 全局 Encoding 类型只收录了部分标签，"gbk" 是合法 WHATWG 标签但类型未收录
-export const gbkTextDecoder = () => new TextDecoder("gbk" as never)
+// GB18030 是 GBK 的超集，解码即沿用 gb18030 标签（WHATWG 里 gbk 的解码器本就是 gb18030 解码器）。
+// Bun 全局 Encoding 类型只收录了部分标签，"gb18030" 是合法 WHATWG 标签但类型未收录。
+export const gb18030TextDecoder = () => new TextDecoder("gb18030" as never)
 
 export function encodeText(text: string, encoding: FileEncoding): Uint8Array {
   if (encoding === "utf-8") return new TextEncoder().encode(text)
-  return iconv.encode(text, "gbk")
+  return iconv.encode(text, "gb18030")
+}
+
+// 文本能否被目标编码无损表示。编码器会把不支持的字符替换成 '?' 或改写成别的码位，
+// 写回前用它拦截，避免静默丢数据。
+export function isEncodable(text: string, encoding: FileEncoding): boolean {
+  return decodeText(encodeText(text, encoding), encoding) === text
 }
 
 // 一段输出可能同时含两种编码：现代工具（python/node/git）写 UTF-8，Windows 原生工具（cmd、svn、
-// PowerShell 自己的报错信息）写 GBK。0x0a 在两种编码里都是单字节，不会出现在多字节字符内部，所以
-// 按行切分是安全的：每行各自判定编码，整流只用一个编码解会让少数派那些行整片乱码。
+// PowerShell 自己的报错信息）写 GB18030（GBK 超集）。0x0a 在两种编码里都是单字节，不会出现在多字节
+// 字符内部，所以按行切分是安全的：每行各自判定编码，整流只用一个编码解会让少数派那些行整片乱码。
 //
 // `skip` 是窗口开头已被调用方交付过的字节数，对应字符会被丢弃；`consumed` 是本窗口被解码的字节数，
 // 供调用方推进字节游标。
@@ -93,7 +112,7 @@ export function decodeShellOutput(bytes: Uint8Array, skip = 0): { text: string; 
   }
 }
 
-// 页可能从字符中间开始读，而 GBK 不是自同步编码：从多字节字符内部偏移解码会错位其后所有字符。
+// 页可能从字符中间开始读，而 GB18030 不是自同步编码：从多字节字符内部偏移解码会错位其后所有字符。
 // 所以按字节步长推进，页边界要么落在完整字符上，要么就把尾巴留给下一页。
 const characterSize = (bytes: Uint8Array, encoding: FileEncoding, offset: number) => {
   const byte = bytes[offset]!
@@ -103,11 +122,16 @@ const characterSize = (bytes: Uint8Array, encoding: FileEncoding, offset: number
     if (byte < 0xf0) return 3
     return 4
   }
-  // 0x80 既不是 GBK 首字节也不是单字节字符；按 1 字节算以保持偏移对齐。
-  return byte < 0x81 ? 1 : 2
+  // GB18030 由首字节 0x81-0xFE 起首：第二字节落在 0x30-0x39 时是四字节序列，否则是两字节。
+  // 0x80 既不是首字节也不是单字节字符，按 1 字节算以保持偏移对齐。
+  if (byte < 0x81) return 1
+  const second = bytes[offset + 1]
+  return second !== undefined && second >= 0x30 && second <= 0x39 ? 4 : 2
 }
 
-const completeBytes = (bytes: Uint8Array, encoding: FileEncoding) => {
+// 完整字符前缀的字节长度：末尾若落在字符中间则裁掉残字节。分块读取用它先裁再判定，
+// 否则被页边界截断的合法 UTF-8 大文件会被尾部残字节误判成 GB18030。
+export const completeBytes = (bytes: Uint8Array, encoding: FileEncoding) => {
   let offset = 0
   while (offset < bytes.length) {
     const size = characterSize(bytes, encoding, offset)

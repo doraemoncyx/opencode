@@ -399,4 +399,46 @@ describe("WriteTool", () => {
         ),
     ),
   )
+
+  it.live("overwrites an existing GB18030 file in GB18030", () =>
+    withTempDir((tmp) => {
+      const fixture = makeWriteFixture()
+      const target = path.join(tmp.path, "gbk.txt")
+      // “中文” in GB18030
+      return Effect.promise(() => fs.writeFile(target, Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))).pipe(
+        Effect.andThen(
+          withTool(tmp.path, fixture, (registry) => executeTool(registry, call({ path: "gbk.txt", content: "中文!" }))),
+        ),
+        Effect.andThen((settled) =>
+          Effect.gen(function* () {
+            expect(settled.status).toBe("completed")
+            // “中文!” stays GB18030, not UTF-8
+            expect(yield* Effect.promise(() => fs.readFile(target))).toEqual(
+              Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0x21]),
+            )
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.live("rejects GB18030 write content that cannot be encoded", () =>
+    withTempDir((tmp) => {
+      const fixture = makeWriteFixture()
+      const target = path.join(tmp.path, "gbk.txt")
+      return Effect.promise(() => fs.writeFile(target, Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))).pipe(
+        Effect.andThen(
+          withTool(tmp.path, fixture, (registry) =>
+            Effect.gen(function* () {
+              // U+E5E5 是 iconv 的 GB18030 编码器不能无损回环的少数码位之一
+              const settled = yield* executeTool(registry, call({ path: "gbk.txt", content: "中文\uE5E5" }))
+              expect(settled).toMatchObject({ status: "error", error: { type: "tool.execution" } })
+              // the original file is untouched
+              expect(yield* Effect.promise(() => fs.readFile(target))).toEqual(Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))
+            }),
+          ),
+        ),
+      )
+    }),
+  )
 })

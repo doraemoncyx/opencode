@@ -22,7 +22,7 @@ function provide(directory: string, transformFiles: EnvironmentFilesTransform = 
     Location.Service.of(location({ directory: AbsolutePath.make(directory) })),
   )
   return Effect.provide(
-    AppNodeBuilder.build(LayerNode.group([FileAccess.node, FileMutation.node]), [
+    AppNodeBuilder.build(LayerNode.group([FileAccess.node, FileMutation.node, Environment.node]), [
       Location.node.replace(activeLocation),
       Permission.node.replace(permissionLayer()),
       Environment.node.replace(transformEnvironmentFiles(transformFiles)),
@@ -237,6 +237,49 @@ describe("FileMutation", () => {
           yield* Fiber.join(second)
         }).pipe(provide(directory, filesystem))
       }),
+    ),
+  )
+  it.live("writes GB18030 bytes when given an encoding", () =>
+    withTempDir(({ path: directory }) =>
+      Effect.gen(function* () {
+        const access = yield* FileAccess.Service
+        const target = yield* access.resolve({ path: "gbk.txt" })
+        const files = yield* FileMutation.Service
+
+        yield* files.write({ target, content: "中文", encoding: "gb18030" })
+
+        expect(yield* Effect.promise(() => fs.readFile(target.absolute))).toEqual(Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))
+      }).pipe(provide(directory)),
+    ),
+  )
+
+  it.live("reads GB18030 bytes as gb18030 text without a BOM", () =>
+    withTempDir(({ path: directory }) =>
+      Effect.gen(function* () {
+        const targetPath = path.join(directory, "gbk-read.txt")
+        yield* Effect.promise(() => fs.writeFile(targetPath, Buffer.from([0xd6, 0xd0, 0xce, 0xc4])))
+        const environment = yield* Environment.Service
+
+        expect(yield* FileMutation.readText(environment.files, targetPath)).toEqual({
+          text: "中文",
+          bom: false,
+          encoding: "gb18030",
+        })
+      }).pipe(provide(directory)),
+    ),
+  )
+
+  it.live("writes GB18030 without adding a BOM through writeTextPreservingBom", () =>
+    withTempDir(({ path: directory }) =>
+      Effect.gen(function* () {
+        const access = yield* FileAccess.Service
+        const target = yield* access.resolve({ path: "gbk-bom.txt" })
+        const files = yield* FileMutation.Service
+
+        yield* files.writeTextPreservingBom({ target, content: "\uFEFF中文", encoding: "gb18030" })
+
+        expect(yield* Effect.promise(() => fs.readFile(target.absolute))).toEqual(Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))
+      }).pipe(provide(directory)),
     ),
   )
 })

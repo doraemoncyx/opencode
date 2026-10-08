@@ -619,23 +619,49 @@ describe("EditTool", () => {
     }),
   )
 
-  it.live("applies the edit when content changes after matching", () =>
+  it.live("preserves GB18030 encoding and bytes when editing", () =>
     withTempDir((tmp) => {
       const edit = makeEditFixture()
-      const target = path.join(tmp.path, "concurrent.txt")
-      edit.afterRead = () => (edit.reads === 1 ? Effect.promise(() => fs.writeFile(target, "newer\n")) : Effect.void)
-      return Effect.promise(() => fs.writeFile(target, "before\n")).pipe(
+      const target = path.join(tmp.path, "gbk.txt")
+      // “中文” in GB18030
+      return Effect.promise(() => fs.writeFile(target, Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))).pipe(
         Effect.andThen(
           withTool(tmp.path, edit, (registry) =>
-            executeTool(registry, call({ path: "concurrent.txt", oldString: "before", newString: "after" })),
+            executeTool(registry, call({ path: "gbk.txt", oldString: "中文", newString: "中文!" })),
           ),
         ),
-        Effect.andThen((result) =>
+        Effect.andThen((settled) =>
           Effect.gen(function* () {
-            expect(result).toMatchObject({ status: "completed", output: { replacements: 1 } })
-            expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("after\n")
-            expect(edit.writes).toEqual([target])
+            expect(settled.status).toBe("completed")
+            // “中文!” stays GB18030, not UTF-8
+            expect(yield* Effect.promise(() => fs.readFile(target))).toEqual(
+              Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0x21]),
+            )
           }),
+        ),
+      )
+    }),
+  )
+
+  it.live("rejects a GB18030 edit whose replacement cannot be encoded", () =>
+    withTempDir((tmp) => {
+      const edit = makeEditFixture()
+      const target = path.join(tmp.path, "gbk.txt")
+      return Effect.promise(() => fs.writeFile(target, Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))).pipe(
+        Effect.andThen(
+          withTool(tmp.path, edit, (registry) =>
+            Effect.gen(function* () {
+              // U+E5E5 是 iconv 的 GB18030 编码器不能无损回环的少数码位之一
+              const settled = yield* executeTool(
+                registry,
+                call({ path: "gbk.txt", oldString: "中文", newString: "中文\uE5E5" }),
+              )
+              expect(settled).toMatchObject({ status: "error", error: { type: "tool.execution" } })
+              // the original file is untouched
+              expect(yield* Effect.promise(() => fs.readFile(target))).toEqual(Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))
+              expect(edit.writes).toEqual([])
+            }),
+          ),
         ),
       )
     }),

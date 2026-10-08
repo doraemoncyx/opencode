@@ -5,6 +5,7 @@ import { Context, Effect, Layer } from "effect"
 import { KeyedMutex } from "./effect/keyed-mutex.js"
 import { FSUtil } from "@opencode/util/fs-util"
 import { Bom } from "@opencode/util/bom"
+import { decodeText, detectFileEncoding, encodeText, type FileEncoding } from "@opencode/util/encoding"
 import { Environment } from "./environment/index.js"
 import type { Files } from "./environment/index.js"
 import type { FileAccess } from "./file-access.js"
@@ -14,11 +15,15 @@ export type Target = Pick<FileAccess.Target, "absolute" | "resource">
 export interface WriteInput {
   readonly target: Target
   readonly content: string | Uint8Array
+  /** String content is encoded with this encoding; defaults to utf-8. Ignored for Uint8Array content. */
+  readonly encoding?: FileEncoding
 }
 
 export interface TextWriteInput {
   readonly target: Target
   readonly content: string
+  /** Encoding for the written bytes; defaults to utf-8. */
+  readonly encoding?: FileEncoding
 }
 
 export interface WriteResult {
@@ -43,7 +48,11 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@opencode/FileMutation") {}
 
 export const readText = Effect.fn("FileMutation.readText")(function* (files: Files, target: string) {
-  return Bom.decodeBytes((yield* files.read(target)).bytes)
+  const bytes = (yield* files.read(target)).bytes
+  const encoding = detectFileEncoding(bytes)
+  // GB18030 文件按 gb18030 解码且没有 BOM 概念；UTF-8 仍走 Bom 以保留原有的去 BOM 行为。
+  if (encoding === "gb18030") return { text: decodeText(bytes, "gb18030"), bom: false, encoding }
+  return { ...Bom.decodeBytes(bytes), encoding }
 })
 
 export const syncTextBom = Effect.fn("FileMutation.syncTextBom")(function* (
@@ -51,7 +60,11 @@ export const syncTextBom = Effect.fn("FileMutation.syncTextBom")(function* (
   target: string,
   bom: boolean,
 ) {
-  const synced = Bom.syncBytes((yield* files.read(target)).bytes, bom)
+  const bytes = (yield* files.read(target)).bytes
+  // 重新探测而非沿用调用方的编码：格式化器可能已按自己的编码重写文件。
+  // GB18030 无 BOM，直接解码返回，绝不按 UTF-8 重新编码。
+  if (detectFileEncoding(bytes) === "gb18030") return decodeText(bytes, "gb18030")
+  const synced = Bom.syncBytes(bytes, bom)
   if (synced.bytes) yield* files.write(target, synced.bytes)
   return synced.text
 })
@@ -93,7 +106,7 @@ const layer = Layer.effect(
           )
           yield* environment.files.write(
             input.target.absolute,
-            typeof input.content === "string" ? new TextEncoder().encode(input.content) : input.content,
+            typeof input.content === "string" ? encodeText(input.content, input.encoding ?? "utf-8") : input.content,
           )
           return writeResult(input.target, existed)
         }),
@@ -103,14 +116,20 @@ const layer = Layer.effect(
     const writeTextPreservingBom = Effect.fn("FileMutation.writeTextPreservingBom")((input: TextWriteInput) =>
       withTargetLock(input.target)(
         Effect.gen(function* () {
-          const next = Bom.split(input.content)
+          const encoding = input.encoding ?? "utf-8"
           const current = yield* environment.files.read(input.target.absolute, { offset: 0, length: 3 }).pipe(
             Effect.map((result) => result.bytes),
             Effect.catchTag("Environment.NotFound", () => Effect.undefined),
           )
+          // GB18030 没有 BOM：先剥掉模型可能传入的前导 \uFEFF，再按 gb18030 写，否则会被编码成 '?'。
+          if (encoding === "gb18030") {
+            yield* environment.files.write(input.target.absolute, encodeText(Bom.split(input.content).text, "gb18030"))
+            return writeResult(input.target, current !== undefined)
+          }
+          const next = Bom.split(input.content)
           yield* environment.files.write(
             input.target.absolute,
-            new TextEncoder().encode(Bom.join(next.text, Boolean(current && Bom.has(current)) || next.bom)),
+            encodeText(Bom.join(next.text, Boolean(current && Bom.has(current)) || next.bom), "utf-8"),
           )
           return writeResult(input.target, current !== undefined)
         }),

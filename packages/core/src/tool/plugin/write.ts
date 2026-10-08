@@ -10,6 +10,7 @@ import type { Context } from "@opencode/plugin/effect/plugin"
 import { ToolFailure } from "@opencode/ai"
 import { Effect, Schema } from "effect"
 import { Bom } from "@opencode/util/bom"
+import { isEncodable } from "@opencode/util/encoding"
 import { Environment } from "../../environment/index.js"
 import { FileMutation } from "../../file-mutation.js"
 import { Formatter } from "../../formatter.js"
@@ -73,6 +74,8 @@ export const Plugin = {
               const current = yield* FileMutation.readText(environment.files, target.absolute).pipe(
                 Effect.catchTag("Environment.NotFound", () => Effect.undefined),
               )
+              // 覆盖已有文件时保留其编码；新文件默认 UTF-8。
+              const encoding = current?.encoding ?? "utf-8"
               const next = Bom.split(input.content)
               const preview = fileDiff(target.resource, current?.text ?? "", next.text, current ? "modified" : "added")
               yield* permission.assert({
@@ -84,7 +87,13 @@ export const Plugin = {
                 agent: context.agent,
                 source,
               })
-              const result = yield* fileMutation.writeTextPreservingBom({ target, content: input.content })
+              // GB18030 无法表示内容里的某些字符时拒绝写入，避免编码器静默改写数据。
+              // 用去掉 BOM 后的文本判定，与 writeTextPreservingBom 实际写入的内容一致。
+              if (encoding === "gb18030" && !isEncodable(next.text, encoding))
+                return yield* new ToolFailure({
+                  message: `Cannot write ${input.path} as ${encoding}: the content contains characters ${encoding} cannot represent.`,
+                })
+              const result = yield* fileMutation.writeTextPreservingBom({ target, content: input.content, encoding })
               const bom = (yield* FileMutation.readText(environment.files, target.absolute)).bom
               if (yield* formatter.file(target.absolute)) {
                 yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)

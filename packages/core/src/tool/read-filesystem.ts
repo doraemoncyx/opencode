@@ -5,6 +5,7 @@ import { pathToFileURL } from "url"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { Context, Effect, Layer, Schema } from "effect"
 import { lookup } from "mime-types"
+import { completeBytes, detectFileEncoding, gb18030TextDecoder, type FileEncoding } from "@opencode/util/encoding"
 import { Environment } from "../environment/index.js"
 import type { Files } from "../environment/index.js"
 import { FileSystem } from "../filesystem.js"
@@ -113,6 +114,16 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Re
 
 const mimeType = (value: string) => lookup(value) || "application/octet-stream"
 
+// 文件编码：先在完整字符边界上按严格 UTF-8 判定，再按判定结果解码。
+// 用完整前缀判定，避免分块被页边界截断时把合法 UTF-8 大文件误判成 GB18030。
+const fileEncoding = (bytes: Uint8Array): FileEncoding =>
+  detectFileEncoding(bytes.subarray(0, completeBytes(bytes, "utf-8")))
+
+// UTF-8 用默认解码器（去除单个 BOM，与旧行为一致），GB18030 用 gb18030 解码器。
+// 两者都非严格解码，分页时尾部的残字符会被替换，其所在行随后被丢弃。
+const decodeBytes = (bytes: Uint8Array, encoding: FileEncoding) =>
+  encoding === "utf-8" ? new TextDecoder().decode(bytes) : gb18030TextDecoder().decode(bytes)
+
 export const read = Effect.fn("ReadTool.read")(function* (
   files: Files,
   input: AbsolutePath,
@@ -148,6 +159,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
     }
   }
 
+  const encoding = fileEncoding(first.bytes)
   const paged = first.info.size > MAX_READ_BYTES || page.offset !== undefined || page.limit !== undefined
   if (!paged) {
     if (first.bytes.includes(0)) return yield* new BinaryFileError({ resource })
@@ -155,14 +167,14 @@ export const read = Effect.fn("ReadTool.read")(function* (
       type: "file" as const,
       uri: pathToFileURL(input).href,
       name: path.basename(input),
-      content: new TextDecoder().decode(first.bytes).split("\n").map(clampLine).join("\n"),
-      encoding: "utf8" as const,
+      content: decodeBytes(first.bytes, encoding).split("\n").map(clampLine).join("\n"),
+      encoding: encoding === "gb18030" ? ("gb18030" as const) : ("utf8" as const),
       mime: mimeType(input),
     }
   }
 
   if (first.bytes.length >= first.info.size) {
-    const result = textPage(first.bytes, true, page)
+    const result = textPage(first.bytes, true, page, encoding)
     if (result === undefined) return yield* Effect.die("Read page did not settle for a complete first chunk")
     return yield* makeTextPage(
       input,
@@ -193,7 +205,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
           return [leaf.bytes.subarray(Math.max(0, start - leafStart))]
         }),
       )
-      const result = textPage(selected, eof, { limit })
+      const result = textPage(selected, eof, { limit }, encoding)
       if (result !== undefined) {
         const translated = {
           ...result,
@@ -288,10 +300,10 @@ const list = (items: ReadonlyArray<Environment.DirEntry>, page: PageInput) => {
   })
 }
 
-const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput) => {
+const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput, encoding: FileEncoding) => {
   const offset = page.offset || 1
   const limit = Math.min(page.limit || MAX_READ_LINES, MAX_READ_LINES)
-  const decoded = new TextDecoder().decode(bytes)
+  const decoded = decodeBytes(bytes, encoding)
   const split = decoded.split("\n")
   const complete = eof ? (split.at(-1) === "" ? split.slice(0, -1) : split) : split.slice(0, -1)
   const available = complete.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line))

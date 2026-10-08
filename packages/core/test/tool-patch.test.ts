@@ -1240,6 +1240,25 @@ describe("PatchTool", () => {
     ),
   )
 
+  it.live("preserves GB18030 encoding when updating a file", () =>
+    withTempTool((directory, registry) =>
+      Effect.gen(function* () {
+        const target = path.join(directory, "gbk.txt")
+        // “中文\n” in GB18030
+        yield* Effect.promise(() => fs.writeFile(target, Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0x0a])))
+        const settled = yield* executeTool(
+          registry,
+          call("*** Begin Patch\n*** Update File: gbk.txt\n@@\n-中文\n+中文!\n*** End Patch"),
+        )
+        expect(settled.status).toBe("completed")
+        // “中文!\n” stays GB18030, not UTF-8
+        expect(yield* Effect.promise(() => fs.readFile(target))).toEqual(
+          Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0x21, 0x0a]),
+        )
+      }),
+    ),
+  )
+
   it.live("preserves a later commit defect after earlier sequential applications", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

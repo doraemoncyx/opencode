@@ -141,20 +141,71 @@ describe("ReadToolFileSystem", () => {
     }),
   )
 
-  it.effect("reads malformed UTF-8 lossily and still rejects null-byte binary content", () =>
+  it.effect("reads non-UTF-8 bytes as GB18030 and still rejects null-byte binary content", () =>
     Effect.gen(function* () {
       const { environment, files, directory } = yield* fixture
       const binary = path.join(directory, "archive.dat")
-      const malformed = path.join(directory, "malformed.txt")
+      const gbk = path.join(directory, "gbk.txt")
       yield* files.writeFile(binary, Uint8Array.of(0, 1, 2, 3))
-      yield* files.writeFile(malformed, Uint8Array.of(0x68, 0x69, 0x80))
+      // "hi" 后跟一个非法 UTF-8 字节：判定为 GB18030，解码 0x80 为欧元符号
+      yield* files.writeFile(gbk, Uint8Array.of(0x68, 0x69, 0x80))
 
       const binaryError = yield* ReadToolFileSystem.read(environment, absolute(binary), "archive.dat").pipe(Effect.flip)
-      const malformedResult = yield* ReadToolFileSystem.read(environment, absolute(malformed), "malformed.txt")
+      const gbkResult = yield* ReadToolFileSystem.read(environment, absolute(gbk), "gbk.txt")
 
       expect(binaryError).toBeInstanceOf(ReadToolFileSystem.BinaryFileError)
       expect(binaryError.message).toBe("Cannot read binary file: archive.dat")
-      expect(malformedResult).toMatchObject({ type: "file", content: "hi\uFFFD", encoding: "utf8" })
+      expect(gbkResult).toMatchObject({ type: "file", content: "hi€", encoding: "gb18030" })
+    }),
+  )
+
+  it.effect("reads GB18030 Chinese text and reports the gb18030 encoding", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "gbk.txt")
+      // “中文” in GB18030
+      yield* files.writeFile(file, Uint8Array.of(0xd6, 0xd0, 0xce, 0xc4))
+
+      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "gbk.txt")
+
+      expect(result).toMatchObject({ type: "file", content: "中文", encoding: "gb18030" })
+    }),
+  )
+
+  it.effect("keeps a valid UTF-8 file with emoji as utf8", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "emoji.txt")
+      yield* files.writeFile(file, new TextEncoder().encode("hi 😀"))
+
+      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "emoji.txt")
+
+      expect(result).toMatchObject({ type: "file", content: "hi 😀", encoding: "utf8" })
+    }),
+  )
+
+  it.effect("pages GB18030 text with one-based line offsets", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "gbk-lines.txt")
+      // “一\n二\n三” in GB18030
+      yield* files.writeFile(
+        file,
+        Buffer.concat([
+          Buffer.from([0xd2, 0xbb]),
+          Buffer.from("\n"),
+          Buffer.from([0xb6, 0xfe]),
+          Buffer.from("\n"),
+          Buffer.from([0xc8, 0xfd]),
+        ]),
+      )
+
+      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "gbk-lines.txt", {
+        offset: 2,
+        limit: 1,
+      })
+
+      expect(result).toMatchObject({ type: "text-page", content: "二", offset: 2, truncated: true, next: 3 })
     }),
   )
 

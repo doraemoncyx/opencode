@@ -6,6 +6,7 @@ import { ToolFailure } from "@opencode/ai"
 import { FileDiff } from "@opencode/schema/file-diff"
 import { Effect, Result, Schema } from "effect"
 import { Bom } from "@opencode/util/bom"
+import { encodeText, isEncodable, type FileEncoding } from "@opencode/util/encoding"
 import { Environment } from "../../environment/index.js"
 import { Formatter } from "../../formatter.js"
 import { FileMutation } from "../../file-mutation.js"
@@ -50,11 +51,13 @@ type Prepared =
       readonly content: string
       readonly before: string
       readonly after: string
+      readonly encoding: FileEncoding
     })
   | (Extract<Patch.Hunk, { readonly type: "delete" }> & {
       readonly target: FileAccess.Target
       readonly before: string
       readonly after: string
+      readonly encoding: FileEncoding
     })
   | (Extract<Patch.Hunk, { readonly type: "update" }> & {
       readonly target: FileAccess.Target
@@ -62,6 +65,7 @@ type Prepared =
       readonly before: string
       readonly after: string
       readonly moveTarget?: FileAccess.Target
+      readonly encoding: FileEncoding
     })
 
 export const Plugin = {
@@ -114,6 +118,7 @@ export const Plugin = {
               }
               const prepared: Prepared[] = []
               const updates = new Map<string, string>()
+              const encodings = new Map<string, FileEncoding>()
               const resolveTarget = Effect.fnUntraced(function* (value: string) {
                 const target = yield* access.resolve({ path: value, kind: "file" })
                 if (!target.externalDirectory) return target
@@ -135,6 +140,8 @@ export const Plugin = {
                       content,
                       before: "",
                       after: Bom.split(content).text,
+                      // 新增文件默认 UTF-8。
+                      encoding: "utf-8",
                     })
                     return
                   }
@@ -147,7 +154,7 @@ export const Plugin = {
                           }),
                       ),
                     )
-                    prepared.push({ ...hunk, target, before: content.text, after: "" })
+                    prepared.push({ ...hunk, target, before: content.text, after: "", encoding: content.encoding })
                     return
                   }
                   const previous = updates.get(target.absolute)
@@ -162,23 +169,32 @@ export const Plugin = {
                             }),
                         ),
                       )
+                      encodings.set(target.absolute, content.encoding)
                       return Bom.join(content.text, content.bom)
                     }))
+                  const encoding = encodings.get(target.absolute) ?? "utf-8"
                   const before = Bom.split(original).text
                   const update = yield* Effect.try({
                     try: () => Patch.derive(hunk.path, hunk.chunks, original),
                     catch: (error) => new ToolFailure({ message: `patch verification failed: ${errorMessage(error)}` }),
                   })
                   const moveTarget = hunk.movePath ? yield* resolveTarget(hunk.movePath) : undefined
+                  const updated = Patch.joinBom(update.content, update.bom)
+                  // GB18030 无法表示新增文本里的某些字符时拒绝，避免编码器静默改写数据。
+                  if (encoding === "gb18030" && !isEncodable(updated, encoding))
+                    return yield* new ToolFailure({
+                      message: `Cannot patch ${target.resource} as ${encoding}: the result contains characters ${encoding} cannot represent.`,
+                    })
                   prepared.push({
                     ...hunk,
                     target,
-                    content: Patch.joinBom(update.content, update.bom),
+                    content: updated,
                     before,
                     after: update.content,
                     moveTarget,
+                    encoding,
                   })
-                  if (!moveTarget) updates.set(target.absolute, Patch.joinBom(update.content, update.bom))
+                  if (!moveTarget) updates.set(target.absolute, updated)
                 }).pipe(
                   Effect.mapError((error) =>
                     error instanceof ToolFailure
@@ -225,7 +241,7 @@ export const Plugin = {
                     if (change.type === "update" && change.moveTarget) {
                       const moveTarget = change.moveTarget
                       yield* environment.files
-                        .write(moveTarget.absolute, new TextEncoder().encode(change.content))
+                        .write(moveTarget.absolute, encodeText(change.content, change.encoding))
                         .pipe(Effect.mapError((error) => fail(`Failed to write ${moveTarget.resource}`, error)))
                       yield* environment.files
                         .remove(change.target.absolute)
@@ -242,7 +258,7 @@ export const Plugin = {
                       return
                     }
                     yield* environment.files
-                      .write(change.target.absolute, new TextEncoder().encode(change.content))
+                      .write(change.target.absolute, encodeText(change.content, change.encoding))
                       .pipe(Effect.mapError((error) => fail(`Failed to write ${change.target.resource}`, error)))
                     applied.push({
                       type: change.type,
