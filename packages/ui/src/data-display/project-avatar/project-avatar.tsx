@@ -31,6 +31,22 @@ export type ProjectAvatarVariant = (typeof PROJECT_AVATAR_VARIANTS)[number]
 // "outline" is a neutral, muted style (e.g. recently closed projects) and is not part of the color rotation.
 export type ProjectAvatarStyle = ProjectAvatarVariant | "outline"
 
+// Colors a project without an explicit icon color can fall back to. Gray is excluded: it
+// is the "unset" look, so leaving it out keeps colliding names visibly apart.
+const PROJECT_AVATAR_FALLBACKS = PROJECT_AVATAR_VARIANTS.filter((variant) => variant !== "gray")
+
+// FNV-1a. Stable for a given worktree string, so a project keeps its color across
+// sessions, reloads, and platforms.
+function hashPath(value: string) {
+  let result = 2166136261
+
+  for (let index = 0; index < value.length; index++) {
+    result = Math.imul(result ^ value.charCodeAt(index), 16777619)
+  }
+
+  return result >>> 0
+}
+
 const OPENCODE_PROJECT_ID = "4b0ea68d7af9a6031a7ffda7ad66e0cb83315750"
 
 export function getProjectAvatarSource(id?: string, icon?: { color?: string; url?: string; override?: string }) {
@@ -43,7 +59,13 @@ export function getProjectAvatarSource(id?: string, icon?: { color?: string; url
   return icon?.url
 }
 
-export function getProjectAvatarVariant(key?: string): ProjectAvatarVariant {
+/**
+ * The avatar color for a project. An explicit `key` (the stored icon color) wins. When
+ * `key` is unset, a provided `path` (the project worktree) picks a stable color, so two
+ * projects that share a folder name still read apart. With neither, the neutral `gray`
+ * applies — which also keeps `key === undefined` mapping to `gray` for color pickers.
+ */
+export function getProjectAvatarVariant(key?: string, path?: string): ProjectAvatarVariant {
   if (key === "mint") return "cyan"
 
   if (key === "lime") return "green"
@@ -60,6 +82,8 @@ export function getProjectAvatarVariant(key?: string): ProjectAvatarVariant {
     key === "gray"
   )
     return key
+
+  if (path) return PROJECT_AVATAR_FALLBACKS[hashPath(path) % PROJECT_AVATAR_FALLBACKS.length] ?? "gray"
 
   return "gray"
 }

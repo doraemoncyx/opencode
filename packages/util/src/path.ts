@@ -12,6 +12,15 @@ export function getDirectory(path: string | undefined) {
   return parts.slice(0, parts.length - 1).join("/") + "/"
 }
 
+/**
+ * The immediate parent folder name of a path, or `""` when it has no parent (a bare
+ * name or a filesystem/UNC root). Used to tell apart projects whose folder name is the
+ * same but that live in different parents.
+ */
+export function getParentFolderName(path: string | undefined) {
+  return getFilename(getDirectory(path))
+}
+
 export function getFilenameTruncated(path: string | undefined, maxLength = 20) {
   const filename = getFilename(path)
   if (filename.length <= maxLength) return filename

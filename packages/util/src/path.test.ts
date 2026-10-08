@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { encodeFilePath, getDirectory, getFilename, getFilenameTruncated, truncateMiddle } from "./path.js"
+import {
+  encodeFilePath,
+  getDirectory,
+  getFilename,
+  getFilenameTruncated,
+  getParentFolderName,
+  truncateMiddle,
+} from "./path.js"
 
 describe("client paths", () => {
   test("reads POSIX and Windows paths with the same rules", () => {
@@ -16,6 +23,17 @@ describe("client paths", () => {
     expect(getDirectory("file")).toBe("/")
     expect(getFilename(undefined)).toBe("")
     expect(getDirectory("")).toBe("")
+  })
+
+  test("reads the parent folder name, or nothing when there is no parent", () => {
+    expect(getParentFolderName("C:\\proj\\windows_utils")).toBe("proj")
+    expect(getParentFolderName("/repo/windows_utils")).toBe("repo")
+    expect(getParentFolderName("/repo/nested/windows_utils/")).toBe("nested")
+    expect(getParentFolderName("\\\\server\\share\\windows_utils")).toBe("share")
+    expect(getParentFolderName("windows_utils")).toBe("")
+    expect(getParentFolderName("C:\\")).toBe("")
+    expect(getParentFolderName("/")).toBe("")
+    expect(getParentFolderName(undefined)).toBe("")
   })
 
   test.each([

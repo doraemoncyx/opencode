@@ -7,6 +7,7 @@ import { AutoScroller, Feedback, PointerActivationConstraints } from "@dnd-kit/d
 import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers"
 import { RestrictToElement } from "@dnd-kit/dom/modifiers"
 import { ScrollView } from "@opencode/ui/scroll-view"
+import { getParentFolderName } from "@opencode/util/path"
 import {
   displayName,
   getProjectAvatarSource,
@@ -503,6 +504,27 @@ type HomeProjectListProps = HomeProjectsViewProps &
 function HomeProjectList(props: HomeProjectListProps) {
   let listRef!: HTMLDivElement
 
+  // Only projects whose folder names collide in this server's list get a parent-folder
+  // hint, so the sidebar stays clean when every name is already unambiguous.
+  const hints = createMemo(() => {
+    const counts = new Map<string, number>()
+
+    for (const project of props.items) {
+      const name = displayName(project).toLowerCase()
+
+      counts.set(name, (counts.get(name) ?? 0) + 1)
+    }
+
+    return new Map(
+      props.items.flatMap((project) => {
+        if ((counts.get(displayName(project).toLowerCase()) ?? 0) < 2) return []
+        const hint = getParentFolderName(project.worktree)
+
+        return hint ? [[project.worktree, hint] as const] : []
+      }),
+    )
+  })
+
   return (
     <DragDropProvider
       sensors={(defaults) => [
@@ -539,7 +561,9 @@ function HomeProjectList(props: HomeProjectListProps) {
             row's sortable unregisters on unmount) and discarding animations.
             String keys keep row elements alive and move them on reorder. */}
         <For each={props.items.map((project) => project.worktree)}>
-          {(worktree, index) => <HomeProjectSlot {...props} worktree={worktree} index={index()} />}
+          {(worktree, index) => (
+            <HomeProjectSlot {...props} worktree={worktree} index={index()} hint={hints().get(worktree)} />
+          )}
         </For>
       </div>
     </DragDropProvider>
@@ -550,6 +574,7 @@ function HomeProjectSlot(
   props: HomeProjectListProps & {
     worktree: string
     index: number
+    hint: string | undefined
   },
 ) {
   const initial = props.items.find((item) => item.worktree === props.worktree)
@@ -650,6 +675,7 @@ function HomeProjectRow(
       serverSelected: boolean
       selected: boolean
       unseen: number
+      hint: string | undefined
     },
 ) {
   const platform = usePlatform()
@@ -673,137 +699,145 @@ function HomeProjectRow(
   })
 
   return (
-    <div
-      ref={sortable.ref}
-      class="group/project relative flex h-7 min-w-0 items-center rounded-[6px]"
-      classList={{ "z-10": sortable.isDragSource() }}
-      data-home-row
-      data-dimmed={serverUnreachable()}
-      data-dragging={sortable.isDragSource()}
-      data-selected={props.selected ? "" : undefined}
-      onContextMenu={(event) => {
-        event.preventDefault()
-        props.onSetContextMenuOpen(contextMenuID(), true)
-      }}
+    <Tooltip
+      placement="right"
+      class="flex h-7 w-full min-w-0"
+      contentClass="max-w-[min(480px,calc(100vw-16px))] whitespace-normal break-all"
+      value={<bdi>{props.project.worktree}</bdi>}
     >
-      <HomeProjectNavButton
-        type="button"
-        data-component="home-project-row"
-        class="disabled:opacity-60"
-        classList={{
-          "bg-v2-background-bg-layer-01 text-v2-text-text-base": sortable.isDragSource(),
-        }}
+      <div
+        ref={sortable.ref}
+        class="group/project relative flex h-7 min-w-0 w-full items-center rounded-[6px]"
+        classList={{ "z-10": sortable.isDragSource() }}
+        data-home-row
+        data-dimmed={serverUnreachable()}
+        data-dragging={sortable.isDragSource()}
         data-selected={props.selected ? "" : undefined}
-        aria-current={props.selected ? "page" : undefined}
-        disabled={serverUnreachable()}
-        onPointerDown={(event) => {
-          // Same-server mouse selection happens on pointerdown (like tabs),
-          // but only ever selects; selectProject toggles, and deselecting here
-          // would fire on every drag before the threshold is met. Cross-server
-          // selection waits for click so reordering a remote server's projects
-          // does not focus that server and load its session index. Touch is
-          // excluded so flick-scrolling the list cannot select rows.
-          pointerDownSelected = undefined
-
-          if (props.dropdown) return
-
-          if (event.button !== 0 || event.pointerType === "touch") return
-
-          if (!props.serverSelected) return
-          pointerDownSelected = props.selected
-
-          if (!props.selected) props.onSelectProject(props.server, props.project.worktree)
-        }}
-        onClick={(event) => {
-          // The drag sensor calls preventDefault on post-drag clicks; never
-          // toggle selection as part of a reorder.
-          if (event.defaultPrevented) return
-
-          // Keyboard activation and touch taps keep the original toggle.
-          if (event.detail === 0 || pointerDownSelected === undefined) {
-            props.onSelectProject(props.server, props.project.worktree)
-
-            return
-          }
-
-          // Mouse: pointerdown already selected unselected rows; a plain click
-          // on an already-selected row toggles it off.
-          if (pointerDownSelected) props.onSelectProject(props.server, props.project.worktree)
-          pointerDownSelected = undefined
+        onContextMenu={(event) => {
+          event.preventDefault()
+          props.onSetContextMenuOpen(contextMenuID(), true)
         }}
       >
-        <HomeProjectAvatar project={props.project} />
-        <span data-slot="home-row-label" class={HOME_PROJECT_NAV_LABEL}>
-          {displayName(props.project)}
-        </span>
-      </HomeProjectNavButton>
-      <div
-        data-slot="home-row-actions"
-        class={`
+        <HomeProjectNavButton
+          type="button"
+          data-component="home-project-row"
+          class="disabled:opacity-60"
+          classList={{
+            "bg-v2-background-bg-layer-01 text-v2-text-text-base": sortable.isDragSource(),
+          }}
+          data-selected={props.selected ? "" : undefined}
+          aria-current={props.selected ? "page" : undefined}
+          disabled={serverUnreachable()}
+          onPointerDown={(event) => {
+            // Same-server mouse selection happens on pointerdown (like tabs),
+            // but only ever selects; selectProject toggles, and deselecting here
+            // would fire on every drag before the threshold is met. Cross-server
+            // selection waits for click so reordering a remote server's projects
+            // does not focus that server and load its session index. Touch is
+            // excluded so flick-scrolling the list cannot select rows.
+            pointerDownSelected = undefined
+
+            if (props.dropdown) return
+
+            if (event.button !== 0 || event.pointerType === "touch") return
+
+            if (!props.serverSelected) return
+            pointerDownSelected = props.selected
+
+            if (!props.selected) props.onSelectProject(props.server, props.project.worktree)
+          }}
+          onClick={(event) => {
+            // The drag sensor calls preventDefault on post-drag clicks; never
+            // toggle selection as part of a reorder.
+            if (event.defaultPrevented) return
+
+            // Keyboard activation and touch taps keep the original toggle.
+            if (event.detail === 0 || pointerDownSelected === undefined) {
+              props.onSelectProject(props.server, props.project.worktree)
+
+              return
+            }
+
+            // Mouse: pointerdown already selected unselected rows; a plain click
+            // on an already-selected row toggles it off.
+            if (pointerDownSelected) props.onSelectProject(props.server, props.project.worktree)
+            pointerDownSelected = undefined
+          }}
+        >
+          <HomeProjectAvatar project={props.project} />
+          <span data-slot="home-row-label" class={HOME_PROJECT_NAV_LABEL}>
+            {displayName(props.project)}
+            <Show when={props.hint}>{(hint) => <span class="ms-2 text-v2-text-text-faint">{hint()}</span>}</Show>
+          </span>
+        </HomeProjectNavButton>
+        <div
+          data-slot="home-row-actions"
+          class={`
           hover-reveal absolute bottom-0 right-1 top-0 flex items-center gap-1 rounded-r-[6px] pl-2
           group-hover/project:opacity-100 focus-within:opacity-100 data-[menu=true]:opacity-100
         `}
-        data-menu={props.contextMenuOpen(contextMenuID())}
-      >
-        <Menu
-          gutter={6}
-          modal={false}
-          placement="bottom-end"
-          open={props.contextMenuOpen(contextMenuID())}
-          onOpenChange={(open) => props.onSetContextMenuOpen(contextMenuID(), open)}
+          data-menu={props.contextMenuOpen(contextMenuID())}
         >
-          <Menu.Trigger
-            as={IconButton}
-            data-action="home-project-menu"
+          <Menu
+            gutter={6}
+            modal={false}
+            placement="bottom-end"
+            open={props.contextMenuOpen(contextMenuID())}
+            onOpenChange={(open) => props.onSetContextMenuOpen(contextMenuID(), open)}
+          >
+            <Menu.Trigger
+              as={IconButton}
+              data-action="home-project-menu"
+              variant="ghost-muted"
+              size="small"
+              icon={<Icon name="outline-dots" />}
+              aria-label={props.language.t("common.moreOptions")}
+            />
+            <Menu.Portal>
+              <Menu.Content>
+                <Menu.Item onSelect={() => props.onOpenProjectNewSession(props.server, props.project.worktree)}>
+                  {props.language.t("command.session.new")}
+                </Menu.Item>
+                <Show when={props.canImportSession}>
+                  <Menu.Item onSelect={() => props.onImportSession(props.server, props.project)}>
+                    {props.language.t("command.session.import")}
+                  </Menu.Item>
+                </Show>
+                <Menu.Item onSelect={() => props.onEditProject(props.server, props.project)}>
+                  {props.language.t("dialog.project.edit.title")}
+                </Menu.Item>
+                <Show when={props.canRevealProject(props.server)}>
+                  <Menu.Item onSelect={() => props.onRevealProject(props.server, props.project)}>
+                    {props.language.t(
+                      fileManagerApp(platform.platform === "desktop" ? (platform.os ?? "unknown") : "unknown")
+                        .actionLabel,
+                    )}
+                  </Menu.Item>
+                </Show>
+                <Menu.Item
+                  disabled={props.unseen === 0}
+                  onSelect={() => props.onClearNotifications(props.server, props.project)}
+                >
+                  {props.language.t("sidebar.project.clearNotifications")}
+                </Menu.Item>
+                <Menu.Separator />
+                <Menu.Item onSelect={() => props.onCloseProject(props.server, props.project.worktree)}>
+                  {props.language.t("common.close")}
+                </Menu.Item>
+              </Menu.Content>
+            </Menu.Portal>
+          </Menu>
+          <IconButton
+            data-action="home-project-new-session"
             variant="ghost-muted"
             size="small"
-            icon={<Icon name="outline-dots" />}
-            aria-label={props.language.t("common.moreOptions")}
+            icon={<Icon name="edit" />}
+            aria-label={props.language.t("command.session.new")}
+            onClick={() => props.onOpenProjectNewSession(props.server, props.project.worktree)}
           />
-          <Menu.Portal>
-            <Menu.Content>
-              <Menu.Item onSelect={() => props.onOpenProjectNewSession(props.server, props.project.worktree)}>
-                {props.language.t("command.session.new")}
-              </Menu.Item>
-              <Show when={props.canImportSession}>
-                <Menu.Item onSelect={() => props.onImportSession(props.server, props.project)}>
-                  {props.language.t("command.session.import")}
-                </Menu.Item>
-              </Show>
-              <Menu.Item onSelect={() => props.onEditProject(props.server, props.project)}>
-                {props.language.t("dialog.project.edit.title")}
-              </Menu.Item>
-              <Show when={props.canRevealProject(props.server)}>
-                <Menu.Item onSelect={() => props.onRevealProject(props.server, props.project)}>
-                  {props.language.t(
-                    fileManagerApp(platform.platform === "desktop" ? (platform.os ?? "unknown") : "unknown")
-                      .actionLabel,
-                  )}
-                </Menu.Item>
-              </Show>
-              <Menu.Item
-                disabled={props.unseen === 0}
-                onSelect={() => props.onClearNotifications(props.server, props.project)}
-              >
-                {props.language.t("sidebar.project.clearNotifications")}
-              </Menu.Item>
-              <Menu.Separator />
-              <Menu.Item onSelect={() => props.onCloseProject(props.server, props.project.worktree)}>
-                {props.language.t("common.close")}
-              </Menu.Item>
-            </Menu.Content>
-          </Menu.Portal>
-        </Menu>
-        <IconButton
-          data-action="home-project-new-session"
-          variant="ghost-muted"
-          size="small"
-          icon={<Icon name="edit" />}
-          aria-label={props.language.t("command.session.new")}
-          onClick={() => props.onOpenProjectNewSession(props.server, props.project.worktree)}
-        />
+        </div>
       </div>
-    </div>
+    </Tooltip>
   )
 }
 
@@ -837,7 +871,7 @@ function HomeProjectAvatar(props: { project: LocalProject; outline?: boolean }) 
     <ProjectAvatar
       fallback={name()}
       src={props.outline ? undefined : getProjectAvatarSource(props.project.id, props.project.icon)}
-      variant={props.outline ? "outline" : getProjectAvatarVariant(props.project.icon?.color)}
+      variant={props.outline ? "outline" : getProjectAvatarVariant(props.project.icon?.color, props.project.worktree)}
     />
   )
 }

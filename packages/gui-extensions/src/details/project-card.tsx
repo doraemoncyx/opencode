@@ -30,7 +30,7 @@ export function ProjectDetailsCard(
         <ProjectAvatar
           fallback={displayName(props.project)}
           src={getProjectAvatarSource(props.project.id, props.project.icon)}
-          variant={getProjectAvatarVariant(props.project.icon?.color)}
+          variant={getProjectAvatarVariant(props.project.icon?.color, props.project.worktree)}
         />
         <span dir="auto" class="session-summary-label">
           {displayName(props.project)}
