@@ -42,10 +42,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-# 上游仓库是 anomalyco/opencode，上游分支仍叫 v2；本地个人分支没有固定名字，
-# 默认同步「当前检出的分支」，绝不替用户切换到别的分支（曾因此误同步废弃分支）。
+# 上游仓库是 anomalyco/opencode，默认分支是 dev（v2 已于 2026-10-10 整体 promote 进 dev
+# 并停止更新，所以跟随 dev）；本地个人分支没有固定名字，默认同步「当前检出的分支」，
+# 绝不替用户切换到别的分支（曾因此误同步废弃分支）。
 UPSTREAM_REPO = "anomalyco/opencode"
-DEFAULT_UPSTREAM_BRANCH = "v2"
+DEFAULT_UPSTREAM_BRANCH = "dev"
 DEFAULT_UPSTREAM_URL = f"git@github.com:{UPSTREAM_REPO}.git"
 
 # 可写性探测用的临时 ref 名，只在 --dry-run 里出现，不会真的落到远端
