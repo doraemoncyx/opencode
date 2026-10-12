@@ -7,15 +7,20 @@ Usage:
   python sync_git.py --yes                  # 检查通过后不再确认，直接同步
   python sync_git.py --rebase               # 用 rebase 代替 merge（改写提交、需强推）
   python sync_git.py --discard              # 允许丢弃已跟踪文件上的未提交修改
-  python sync_git.py --branch v2 --fork fork --upstream origin
+  python sync_git.py --fork fork --upstream origin
+  python sync_git.py --branch other-branch  # 显式指定分支；该分支必须已经是当前检出分支
 
 流程（破坏性动作之前先做完所有检查）：
-  1. 工作前检查（默认执行，--check 可只看结果）：识别 remote、确认分支存在、工作区干净、fork 可写
+  1. 工作前检查（默认执行，--check 可只看结果）：识别 remote、确认要同步的分支就是
+     当前检出分支、工作区干净、fork 可写
   2. 任何一项 FAIL 都在动手前中止；WARN 提示但不拦（如缺少 upstream remote、--discard 将丢改动）
   3. 检查通过后仍需确认（--yes 或交互 y），非交互环境没有 --yes 一律不动
   4. fetch upstream 与 fork 两个分支：后者给 --force-with-lease 提供新鲜比较基线
   5. 默认模式：merge upstream 到本地分支再普通 push，代价 ~ 分叉规模、不改写提交；
      --rebase 模式则逐条 rebase 到 upstream 后带 lease 强推
+
+同步对象默认是「当前检出的分支」，脚本绝不替用户 checkout：曾经因为写死 DEFAULT_BRANCH
+并在动手时自动切分支，把一次同步跑到已废弃的 v2 上，制造出一堆无意义冲突。
 
 merge 而非 squash/rebase 的原因：这是持续开发的活 fork，保留每条特性提交才能在
 upstream..fork 里按特性查看与挑选；merge 每次只解一次冲突，代价不随提交数增长，
@@ -24,7 +29,7 @@ upstream..fork 里按特性查看与挑选；merge 每次只解一次冲突，�
 fork 与 upstream 必须先分清：认错一次就会把 force push 打到上游仓库，上游没有写
 权限，表现为 git push 退出码 128 加 Permission denied——所以推之前必须先探测可写性。
 
-rebase 因冲突暂停时只提示手动处理并退出，绝不继续推送。
+rebase / merge 因冲突暂停时只提示手动处理并退出，绝不继续推送。
 """
 
 import argparse
@@ -37,9 +42,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-# 默认目标：v2 仓库里本地分支叫 v2，上游仓库是 anomalyco/opencode
+# 上游仓库是 anomalyco/opencode，上游分支仍叫 v2；本地个人分支没有固定名字，
+# 默认同步「当前检出的分支」，绝不替用户切换到别的分支（曾因此误同步废弃分支）。
 UPSTREAM_REPO = "anomalyco/opencode"
-DEFAULT_BRANCH = "v2"
+DEFAULT_UPSTREAM_BRANCH = "v2"
 DEFAULT_UPSTREAM_URL = f"git@github.com:{UPSTREAM_REPO}.git"
 
 # 可写性探测用的临时 ref 名，只在 --dry-run 里出现，不会真的落到远端
@@ -111,6 +117,11 @@ def use_utf8_console() -> int | None:
 def restore_console(codepage: int | None) -> None:
     if codepage:
         ctypes.windll.kernel32.SetConsoleOutputCP(codepage)
+
+
+def current_branch() -> str | None:
+    # detached HEAD 时 git 输出为空，用 None 表示「没有分支可同步」
+    return git_probe(["branch", "--show-current"])
 
 
 def rebase_in_progress() -> bool:
@@ -186,10 +197,22 @@ def preflight(args: argparse.Namespace) -> tuple[str, str, list[tuple[str, str]]
     else:
         checks.append(("warn", f"没有指向上游 {UPSTREAM_REPO} 的 remote，检查通过后按 --upstream-url 添加 {upstream}"))
 
-    if git_probe(["rev-parse", "--verify", f"refs/heads/{args.branch}"]) is None:
+    branch = current_branch()
+    if branch is None:
+        checks.append(("fail", "当前处于 detached HEAD，请先切到要同步的分支"))
+    elif branch != args.branch:
+        checks.append(
+            (
+                "fail",
+                f"当前在分支 {branch} 上，--branch 指定的是 {args.branch}；"
+                f"本脚本不会替你切换分支：先 'git checkout {args.branch}'，"
+                f"或去掉 --branch 直接同步当前分支",
+            )
+        )
+    elif git_probe(["rev-parse", "--verify", f"refs/heads/{args.branch}"]) is None:
         checks.append(("fail", f"本地没有分支 {args.branch}，请先创建再同步"))
     else:
-        checks.append(("ok", f"本地分支 {args.branch} 存在"))
+        checks.append(("ok", f"本地分支 {args.branch} 存在，且已检出"))
 
     dirty = (git_probe(["status", "--porcelain", "--untracked-files=no"]) or "").splitlines()
     if not dirty:
@@ -252,13 +275,13 @@ def main() -> None:
     parser.add_argument("--discard", action="store_true", help="允许丢弃已跟踪文件上的未提交修改")
     parser.add_argument("--check", action="store_true", help="只做工作前检查（remote 映射/分支/工作区/可写性）后退出，不改动任何东西")
     parser.add_argument("--yes", "-y", action="store_true", help="检查通过后不再确认，直接执行同步")
-    parser.add_argument("--branch", default=DEFAULT_BRANCH, help=f"要同步的本地/fork 分支（默认 {DEFAULT_BRANCH}）")
+    parser.add_argument("--branch", help="要同步的本地/fork 分支（默认：当前已检出的分支）")
     parser.add_argument("--fork", help="fork remote 名（默认自动识别）")
     parser.add_argument("--upstream", help="upstream remote 名（默认自动识别）")
     parser.add_argument(
         "--upstream-branch",
-        default=DEFAULT_BRANCH,
-        help=f"upstream 上要同步的分支（默认 {DEFAULT_BRANCH}）",
+        default=DEFAULT_UPSTREAM_BRANCH,
+        help=f"upstream 上要同步的分支（默认 {DEFAULT_UPSTREAM_BRANCH}）",
     )
     parser.add_argument("--upstream-url", default=DEFAULT_UPSTREAM_URL, help="缺少 upstream remote 时使用的地址")
     args = parser.parse_args()
@@ -271,6 +294,10 @@ def main() -> None:
 
 
 def sync(args: argparse.Namespace) -> None:
+    # --branch 缺省就是当前分支；解析放在最前，preflight 与后续步骤都只认这个值
+    args.branch = args.branch or current_branch()
+    if args.branch is None:
+        raise SystemExit("当前处于 detached HEAD，无法判断要同步的分支，请用 --branch 指定")
     fork, upstream, checks = preflight(args)
     failures = report(checks)
     if args.check:
@@ -284,15 +311,14 @@ def sync(args: argparse.Namespace) -> None:
     if not args.yes and not confirm():
         raise SystemExit("已取消，未做任何改动（加 --yes 或交互确认才会执行同步）")
 
-    # 检查通过才开始动手，顺序：改 remote / 丢修改 / 切分支 / fetch / merge(或 rebase) / push
+    # 检查通过才开始动手，顺序：改 remote / 丢修改 / fetch / merge(或 rebase) / push
+    # 分支在 preflight 里已确认就是当前检出的分支，这里不做任何 checkout
     if upstream not in remotes():
         git_checked(["remote", "add", upstream, args.upstream_url])
         log(f"已添加 {upstream} remote", CYAN)
     if args.discard and git_probe(["status", "--porcelain", "--untracked-files=no"]):
         git_checked(["reset", "--hard"])
         log("已丢弃未提交修改", CYAN)
-    if git_probe(["branch", "--show-current"]) != args.branch:
-        git_checked(["checkout", args.branch])
 
     upstream_ref = f"{upstream}/{args.upstream_branch}"
     log(f"正在 fetch {upstream_ref} ...", CYAN)
