@@ -12,11 +12,20 @@ invoked with `--single --skip-install`:
                   the `@opencode-ai/client` file: tarball; deps are already installed
                   by `bun install` above.
 
-The build injects OPENCODE_VERSION/OPENCODE_CHANNEL so the compiled binary reports
-the repository's real version. Without this, `Script.version` falls back to
-`0.0.0-<branch>-<build>` for any non-`latest` branch, which is below the Console
-free-tier floor (>= 1.18.0) and makes model requests fail with
+The build injects OPENCODE_VERSION so the compiled binary reports the repository's
+real version. Without this, `Script.version` falls back to `0.0.0-<branch>-<build>`
+for any non-`latest` branch, which is below the Console free-tier floor (>= 1.18.0)
+and makes model requests fail with
 "OpenCode 1.18.0 or newer is required to use the free tier".
+
+OPENCODE_CHANNEL is deliberately NOT set: the Console free-tier gate parses
+`User-Agent: opencode/<channel>/<version>/<name>`, which accepts a single channel
+segment. Passing a git branch such as `fork/v2_261008` yields a five-segment UA
+(`opencode/fork/v2_261008/2.0.29/cli`) that the gate rejects with
+"OpenCode's free tier can only be used from within OpenCode". Letting `Script`
+default the channel to `latest` (its behavior when OPENCODE_VERSION is set and does
+not start with `0.0.0-`) produces `opencode/latest/<version>/cli`, matching official
+builds.
 """
 
 import json
@@ -47,28 +56,17 @@ def run(args: list[str], cwd: Path, env: dict[str, str] | None = None) -> None:
         raise SystemExit(f"command failed (exit code {result.returncode}): {' '.join(args)}")
 
 
-def release_channel() -> str:
-    """Channel compiled into the binary; prefers the current git branch."""
-    result = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-    )
-    branch = result.stdout.strip() if result.returncode == 0 else ""
-    return branch if branch and branch != "HEAD" else "v2"
-
-
 def main() -> None:
     run(["install"], ROOT)
 
-    # `Script` forces channel "latest" for non-`0.0.0-` versions, so set the
-    # channel explicitly to keep the build identified with its branch.
+    # Only set the version. Letting `Script` default the channel to `latest` keeps
+    # the User-Agent at `opencode/latest/<version>/cli`, which the Console free-tier
+    # gate accepts. A branch-derived channel would add a slash and be rejected.
     version = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["version"]
-    env = {**os.environ, "OPENCODE_VERSION": version, "OPENCODE_CHANNEL": release_channel()}
+    env = {**os.environ, "OPENCODE_VERSION": version}
 
     try:
-        print(f"Building: bun run build --single --skip-install (version {version}, channel {env['OPENCODE_CHANNEL']})")
+        print(f"Building: bun run build --single --skip-install (version {version}, channel latest)")
         run(["run", "build", "--", "--single", "--skip-install"], CLI, env)
         print("Build complete. Output in: packages\\cli\\dist\\cli-windows-x64\\bin\\")
     finally:
