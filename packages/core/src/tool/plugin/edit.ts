@@ -10,6 +10,7 @@ import type { Context } from "@opencode/plugin/effect/plugin"
 import { ToolFailure } from "@opencode/ai"
 import { FileDiff } from "@opencode/schema/file-diff"
 import { Bom } from "@opencode/util/bom"
+import { isEncodable } from "@opencode/util/encoding"
 import { Effect, Schema } from "effect"
 import { Environment } from "../../environment/index.js"
 import { FileMutation } from "../../file-mutation.js"
@@ -255,6 +256,7 @@ export const Plugin = {
                 ),
               )
               const source = original.text
+              const encoding = original.encoding
               // Strings that differ only in \r ask to change line endings themselves, so they apply to the exact
               // bytes. Every other edit matches the LF view Read shows the model and keeps the file's endings.
               const endingsOnly = input.oldString.replaceAll("\r", "") === input.newString.replaceAll("\r", "")
@@ -298,12 +300,19 @@ export const Plugin = {
                     : `No changes to apply: the edit leaves ${input.path} unchanged. Line endings follow the file; to change them, write \\r explicitly in oldString or newString.`,
                 })
               }
-              const replacementBom = replaced.startsWith("\uFEFF")
+              // GB18030 无法表示替换文本里的某些字符时拒绝写回，避免编码器静默改写数据。
+              // 用去掉 BOM 后的实际写入内容判定。
+              const bom = encoding === "gb18030" ? false : original.bom || replaced.startsWith("\uFEFF")
+              const content = Bom.join(replaced, bom)
+              if (encoding === "gb18030" && !isEncodable(content, encoding))
+                return yield* new ToolFailure({
+                  message: `Cannot write ${input.path} as ${encoding}: the result contains characters ${encoding} cannot represent. Rewrite the file as UTF-8 or remove them.`,
+                })
               const result = yield* fileMutation.write({
                 target,
-                content: Bom.join(replaced, original.bom || replacementBom),
+                content,
+                encoding,
               })
-              const bom = original.bom || replacementBom
               const formatted = (yield* formatter.file(target.absolute))
                 ? yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
                 : (yield* FileMutation.readText(environment.files, target.absolute)).text
