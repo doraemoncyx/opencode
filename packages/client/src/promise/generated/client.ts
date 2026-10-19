@@ -109,6 +109,8 @@ import type {
   ModelDefaultOutput,
   GenerateTextInput,
   GenerateTextOutput,
+  VoiceSessionInput,
+  VoiceSessionOutput,
   ProviderListInput,
   ProviderListOutput,
   ProviderGetInput,
@@ -168,6 +170,8 @@ import type {
   PermissionRequestListOutput,
   PermissionSavedListInput,
   PermissionSavedListOutput,
+  PermissionSavedUpdateInput,
+  PermissionSavedUpdateOutput,
   PermissionSavedRemoveInput,
   PermissionSavedRemoveOutput,
   PermissionCreateInput,
@@ -1151,6 +1155,20 @@ export function make(options: ClientOptions) {
           requestOptions,
         ).then((value) => value.data),
     },
+    voice: {
+      session: (input: VoiceSessionInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: VoiceSessionOutput }>(
+          {
+            method: "POST",
+            path: `/api/experimental/voice/session`,
+            body: { model: input["model"], session: input["session"], transport: input["transport"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401, 404, 503],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+    },
     provider: {
       list: (input?: ProviderListInput, requestOptions?: RequestOptions) =>
         request<ProviderListOutput>(
@@ -1542,6 +1560,18 @@ export function make(options: ClientOptions) {
               query: { projectID: input?.["projectID"] },
               successStatus: 200,
               declaredStatuses: [400, 401, 404],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        update: (input: PermissionSavedUpdateInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: PermissionSavedUpdateOutput }>(
+            {
+              method: "PATCH",
+              path: `/api/permission/saved/${encodeURIComponent(input.id)}`,
+              body: { action: input["action"], resource: input["resource"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401, 404, 409],
               empty: false,
             },
             requestOptions,
