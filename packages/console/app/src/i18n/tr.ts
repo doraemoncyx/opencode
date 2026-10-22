@@ -205,7 +205,7 @@ export const dict = {
     "Tüm Zen modelleri ABD'de barındırılmaktadır. Sağlayıcılar sıfır saklama politikası izler ve verilerinizi model eğitimi için kullanmaz; şu",
   "zen.privacy.exceptionsLink": "aşağıdaki istisnalar",
 
-  "go.promo.step5": "Step 5 Preview artık Go'da sınırlı bir süre için 4× kullanımla sunuluyor.",
+  "go.promo.minimaxM31FlashFree": "MiniMax M3.1 Flash Free artık Go'da sınırlı bir süre için ücretsiz sunuluyor.",
   "go.title": "OpenCode Go | Herkes için düşük maliyetli kodlama modelleri",
   "go.meta.description":
     "Go ayda 10$'dır; cömert kullanım limitleri ve önde gelen kodlama modellerine güvenilir erişim sunar.",
@@ -303,7 +303,7 @@ export const dict = {
 
   "go.faq.q9": "Ücretsiz modeller ve Go arasındaki fark nedir?",
   "go.faq.a9":
-    "Ücretsiz modeller, günlük 200 istek kotasıyla Big Pickle'ı ve o sırada mevcut olan promosyonel modelleri içerir. Go ise kayan zaman aralıklarında daha yüksek istek kotalarıyla özenle seçilmiş model seçenekleri sunar: aylık kotanın %20'si her 5 saatte, %50'si haftada ve %100'ü ayda kullanılabilir. Modele özgü kullanım hakları farklılık gösterebilir (gerçek istek sayıları modele ve kullanıma göre değişir).",
+    "Ücretsiz modeller, Big Pickle'ı ve o sırada mevcut olan promosyonel modelleri içerir. Go ise kayan zaman aralıklarında daha yüksek istek kotalarıyla özenle seçilmiş model seçenekleri sunar: aylık kotanın %20'si her 5 saatte, %50'si haftada ve %100'ü ayda kullanılabilir. Modele özgü kullanım hakları farklılık gösterebilir (gerçek istek sayıları modele ve kullanıma göre değişir).",
   "go.faq.q10": "Para iadesi alabilir miyim?",
   "go.faq.a10":
     "Ücret son 14 gün içinde tahsil edildiyse ve ilgili faturalandırma döneminde Go kullanım hakkınızı hiç kullanmadıysanız para iadesine hak kazanabilirsiniz. {{contact}} ve para iadesi talep edin.",
@@ -370,6 +370,7 @@ export const dict = {
   "enterprise.form.error.invalidEmailFormat": "Geçersiz e-posta formatı.",
   "enterprise.form.error.invalidInferenceSpend": "Geçerli bir çıkarım harcaması aralığı seçin.",
   "enterprise.form.error.internalServer": "İç sunucu hatası.",
+  "enterprise.form.error.captcha": "Captcha doğrulaması başarısız oldu. Lütfen tekrar deneyin.",
   "enterprise.faq.title": "SSS",
   "enterprise.faq.q1": "OpenCode Enterprise nedir?",
   "enterprise.faq.a1":

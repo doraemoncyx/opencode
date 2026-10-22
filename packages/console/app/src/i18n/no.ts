@@ -204,7 +204,7 @@ export const dict = {
     "Alle Zen-modeller hostes i USA. Leverandører følger en policy om null oppbevaring og bruker ikke dataene dine til modelltrening, med",
   "zen.privacy.exceptionsLink": "følgende unntak",
 
-  "go.promo.step5": "Step 5 Preview er nå tilgjengelig i Go med 4× bruk i en begrenset periode.",
+  "go.promo.minimaxM31FlashFree": "MiniMax M3.1 Flash Free er nå tilgjengelig i Go, gratis i en begrenset periode.",
   "go.title": "OpenCode Go | Rimelige kodemodeller for alle",
   "go.meta.description":
     "Go koster $10/måned, med sjenerøse bruksgrenser og pålitelig tilgang til ledende kodemodeller.",
@@ -301,7 +301,7 @@ export const dict = {
 
   "go.faq.q9": "Hva er forskjellen mellom gratis modeller og Go?",
   "go.faq.a9":
-    "Gratis modeller inkluderer Big Pickle pluss kampanjemodeller som er tilgjengelige på det tidspunktet, med en kvote på 200 forespørsler/dag. Go tilbyr et kuratert modellutvalg med høyere forespørselskvoter i rullerende perioder: 20 % av den månedlige kvoten per 5 timer, 50 % per uke og 100 % per måned. Modellspesifikke kvoter kan variere (faktisk antall forespørsler varierer etter modell og bruk).",
+    "Gratis modeller inkluderer Big Pickle pluss kampanjemodeller som er tilgjengelige på det tidspunktet. Go tilbyr et kuratert modellutvalg med høyere forespørselskvoter i rullerende perioder: 20 % av den månedlige kvoten per 5 timer, 50 % per uke og 100 % per måned. Modellspesifikke kvoter kan variere (faktisk antall forespørsler varierer etter modell og bruk).",
   "go.faq.q10": "Kan jeg få refusjon?",
   "go.faq.a10":
     "Du kan ha rett på refusjon hvis belastningen ble gjort i løpet av de siste 14 dagene og du ikke har brukt noe av Go-kvoten i den faktureringsperioden. {{contact}} for å be om refusjon.",
@@ -367,6 +367,7 @@ export const dict = {
   "enterprise.form.error.invalidEmailFormat": "Ugyldig e-postformat.",
   "enterprise.form.error.invalidInferenceSpend": "Velg et gyldig intervall for inferensforbruk.",
   "enterprise.form.error.internalServer": "Intern serverfeil.",
+  "enterprise.form.error.captcha": "Captcha-verifiseringen mislyktes. Prøv igjen.",
   "enterprise.faq.title": "FAQ",
   "enterprise.faq.q1": "Hva er OpenCode Enterprise?",
   "enterprise.faq.a1":

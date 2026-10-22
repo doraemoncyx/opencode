@@ -200,7 +200,7 @@ export const dict = {
     "모든 Zen 모델은 미국에서 호스팅됩니다. 제공자들은 데이터 보존 금지 정책을 따르며 모델 학습에 데이터를 사용하지 않습니다. 단,",
   "zen.privacy.exceptionsLink": "다음 예외",
 
-  "go.promo.step5": "Step 5 Preview를 Go에서 한정 기간 동안 사용량 4배로 이용할 수 있습니다.",
+  "go.promo.minimaxM31FlashFree": "MiniMax M3.1 Flash Free를 Go에서 한정 기간 동안 무료로 이용할 수 있습니다.",
   "go.title": "OpenCode Go | 모두를 위한 저비용 코딩 모델",
   "go.meta.description": "Go는 월 $10이며, 넉넉한 사용 한도와 주요 코딩 모델에 대한 안정적인 액세스를 제공합니다.",
   "go.hero.title": "모두를 위한 저비용 코딩 모델",
@@ -291,7 +291,7 @@ export const dict = {
 
   "go.faq.q9": "무료 모델과 Go의 차이점은 무엇인가요?",
   "go.faq.a9":
-    "무료 모델에는 Big Pickle과 당시 사용 가능한 프로모션 모델이 포함되며, 하루 200회 요청 할당량이 적용됩니다. Go는 엄선된 모델 라인업을 제공하며, 이동 기간별 요청 한도는 5시간당 월간 한도의 20%, 주간 50%, 월간 100%입니다. 모델별 한도는 다를 수 있습니다(실제 요청 수는 모델 및 사용량에 따라 다름).",
+    "무료 모델에는 Big Pickle과 당시 사용 가능한 프로모션 모델이 포함됩니다. Go는 엄선된 모델 라인업을 제공하며, 이동 기간별 요청 한도는 5시간당 월간 한도의 20%, 주간 50%, 월간 100%입니다. 모델별 한도는 다를 수 있습니다(실제 요청 수는 모델 및 사용량에 따라 다름).",
   "go.faq.q10": "환불받을 수 있나요?",
   "go.faq.a10":
     "결제일로부터 14일 이내이며 해당 결제 기간에 Go 사용 한도를 전혀 사용하지 않은 경우 환불 대상이 될 수 있습니다. 환불을 요청하려면 {{contact}}를 선택해 주세요.",
@@ -357,6 +357,7 @@ export const dict = {
   "enterprise.form.error.invalidEmailFormat": "유효하지 않은 이메일 형식입니다.",
   "enterprise.form.error.invalidInferenceSpend": "유효한 추론 비용 범위를 선택하세요.",
   "enterprise.form.error.internalServer": "내부 서버 오류입니다.",
+  "enterprise.form.error.captcha": "캡차 인증에 실패했습니다. 다시 시도해 주세요.",
   "enterprise.faq.title": "FAQ",
   "enterprise.faq.q1": "OpenCode 엔터프라이즈란 무엇인가요?",
   "enterprise.faq.a1":

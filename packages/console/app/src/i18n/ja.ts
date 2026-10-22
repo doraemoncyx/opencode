@@ -203,7 +203,7 @@ export const dict = {
     "すべてのZenモデルは米国でホストされています。プロバイダーはゼロ保持ポリシーに従い、モデルのトレーニングにデータを使用しません（",
   "zen.privacy.exceptionsLink": "以下の例外",
 
-  "go.promo.step5": "Step 5 Preview を Go で期間限定・利用枠4倍で提供中です。",
+  "go.promo.minimaxM31FlashFree": "MiniMax M3.1 Flash Free を Go で期間限定・無料で提供中です。",
   "go.title": "OpenCode Go | すべての人のための低価格なコーディングモデル",
   "go.meta.description":
     "Goは月額$10で、主要なコーディングモデルへのゆとりある利用上限と安定したアクセスを提供します。",
@@ -297,7 +297,7 @@ export const dict = {
 
   "go.faq.q9": "無料モデルとGoの違いは何ですか？",
   "go.faq.a9":
-    "無料モデルにはBig Pickleと、その時点で利用可能なプロモーションモデルが含まれ、1日200リクエストの制限があります。Goでは厳選されたモデルラインナップを利用でき、ローリングウィンドウで月間利用枠の20%を5時間ごと、50%を週ごと、100%を月ごとの上限として適用します。モデル別の利用枠は異なる場合があります（実際のリクエスト数はモデルと使用状況により異なります）。",
+    "無料モデルにはBig Pickleと、その時点で利用可能なプロモーションモデルが含まれます。Goでは厳選されたモデルラインナップを利用でき、ローリングウィンドウで月間利用枠の20%を5時間ごと、50%を週ごと、100%を月ごとの上限として適用します。モデル別の利用枠は異なる場合があります（実際のリクエスト数はモデルと使用状況により異なります）。",
   "go.faq.q10": "返金を受けられますか？",
   "go.faq.a10":
     "請求から14日以内で、その請求期間中にGoの利用枠を一切使用していない場合、返金の対象となる可能性があります。返金を希望する場合は、{{contact}}ください。",
@@ -364,6 +364,7 @@ export const dict = {
   "enterprise.form.error.invalidEmailFormat": "無効なメール形式です。",
   "enterprise.form.error.invalidInferenceSpend": "有効な推論費用の範囲を選択してください。",
   "enterprise.form.error.internalServer": "内部サーバーエラー。",
+  "enterprise.form.error.captcha": "CAPTCHA認証に失敗しました。もう一度お試しください。",
   "enterprise.faq.title": "FAQ",
   "enterprise.faq.q1": "OpenCode Enterpriseとは？",
   "enterprise.faq.a1":

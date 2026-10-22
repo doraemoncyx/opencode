@@ -193,7 +193,7 @@ export const dict = {
   "zen.privacy.beforeExceptions": "所有 Zen 模型均托管在美国。提供商遵循零留存政策，不使用您的数据进行模型训练，",
   "zen.privacy.exceptionsLink": "以下例外情况除外",
 
-  "go.promo.step5": "Step 5 Preview 现已上线 Go，限时 4 倍用量。",
+  "go.promo.minimaxM31FlashFree": "MiniMax M3.1 Flash Free 现已上线 Go，限时免费。",
   "go.title": "OpenCode Go | 人人可用的低成本编程模型",
   "go.meta.description": "Go 每月 $10，提供充裕的使用限额，并可可靠访问领先的编程模型。",
   "go.hero.title": "人人可用的低成本编程模型",
@@ -282,7 +282,7 @@ export const dict = {
 
   "go.faq.q9": "免费模型和 Go 之间的区别是什么？",
   "go.faq.a9":
-    "免费模型包含 Big Pickle 加上当时可用的促销模型，每天有 200 次请求的配额。Go 提供精选模型阵容，并在滚动窗口内执行更高的请求配额：每 5 小时为月额度的 20%，每周为 50%，每月为 100%。具体额度可能因模型而异（实际请求次数因模型和使用情况而异）。",
+    "免费模型包含 Big Pickle 加上当时可用的促销模型。Go 提供精选模型阵容，并在滚动窗口内执行更高的请求配额：每 5 小时为月额度的 20%，每周为 50%，每月为 100%。具体额度可能因模型而异（实际请求次数因模型和使用情况而异）。",
   "go.faq.q10": "我可以退款吗？",
   "go.faq.a10":
     "如果扣款发生在过去 14 天内，并且您在该计费周期内尚未使用任何 Go 额度，您可能符合退款条件。请{{contact}}申请退款。",
@@ -348,6 +348,7 @@ export const dict = {
   "enterprise.form.error.invalidEmailFormat": "邮箱格式无效。",
   "enterprise.form.error.invalidInferenceSpend": "请选择有效的推理支出范围。",
   "enterprise.form.error.internalServer": "内部服务器错误。",
+  "enterprise.form.error.captcha": "验证码验证失败，请重试。",
   "enterprise.faq.title": "常见问题",
   "enterprise.faq.q1": "什么是 OpenCode 企业版？",
   "enterprise.faq.a1":

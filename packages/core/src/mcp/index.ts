@@ -238,8 +238,7 @@ export const layer = (options?: LayerOptions) =>
           })
           .pipe(Scope.provide(scope))
       })
-      const requireServer = Effect.fnUntraced(function* (server: ServerName | string) {
-        const name = ServerName.make(server)
+      const requireServer = Effect.fnUntraced(function* (name: ServerName) {
         const entry = entries.get(name)
         if (!entry) return yield* new NotFoundError({ server: name })
         return { name, entry }
@@ -755,7 +754,7 @@ export const layer = (options?: LayerOptions) =>
             .toSorted((a, b) => a.server.localeCompare(b.server) || a.name.localeCompare(b.name))
         }),
         callTool: Effect.fn("MCP.callTool")(function* (input) {
-          const target = yield* requireServer(input.server)
+          const target = yield* requireServer(ServerName.make(input.server))
           yield* target.entry.startup.await
           const client = yield* acquireClient(target.name, target.entry)
           if (!client)
@@ -793,7 +792,7 @@ export const layer = (options?: LayerOptions) =>
             .toSorted((a, b) => a.server.localeCompare(b.server) || a.name.localeCompare(b.name))
         }),
         prompt: Effect.fn("MCP.prompt")(function* (input) {
-          const target = yield* requireServer(input.server)
+          const target = yield* requireServer(ServerName.make(input.server))
           yield* target.entry.startup.await
           const client = yield* acquireClient(target.name, target.entry)
           if (!client) return undefined
@@ -824,13 +823,13 @@ export const layer = (options?: LayerOptions) =>
           return mergeCatalogs(catalogs)
         }),
         resources: Effect.fn("MCP.resources")(function* (input) {
-          const target = yield* requireServer(input.server)
+          const target = yield* requireServer(ServerName.make(input.server))
           yield* target.entry.startup.await
           if (!target.entry.client) return ResourceCatalog.make({ resources: [], templates: [] })
           return mergeCatalogs([yield* loadCatalog(target.name, target.entry, target.entry.client)])
         }),
         readResource: Effect.fn("MCP.readResource")(function* (input) {
-          const target = yield* requireServer(input.server)
+          const target = yield* requireServer(ServerName.make(input.server))
           yield* target.entry.startup.await
           const client = yield* acquireClient(target.name, target.entry)
           if (!client) return undefined

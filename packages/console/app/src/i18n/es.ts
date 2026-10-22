@@ -206,7 +206,7 @@ export const dict = {
     "Todos los modelos Zen están alojados en EE. UU. Los proveedores siguen una política de cero retención y no usan tus datos para entrenamiento de modelos, con las",
   "zen.privacy.exceptionsLink": "siguientes excepciones",
 
-  "go.promo.step5": "Step 5 Preview ya está disponible en Go con 4× de uso por tiempo limitado.",
+  "go.promo.minimaxM31FlashFree": "MiniMax M3.1 Flash Free ya está disponible en Go, gratis por tiempo limitado.",
   "go.title": "OpenCode Go | Modelos de programación de bajo coste para todos",
   "go.meta.description":
     "Go cuesta 10 $/mes, con límites de uso generosos y acceso fiable a modelos de programación líderes.",
@@ -303,7 +303,7 @@ export const dict = {
 
   "go.faq.q9": "¿Cuál es la diferencia entre los modelos gratuitos y Go?",
   "go.faq.a9":
-    "Los modelos gratuitos incluyen Big Pickle y los modelos promocionales disponibles en ese momento, con una cuota de 200 solicitudes/día. Go ofrece una selección de modelos con cuotas de solicitudes más altas en ventanas móviles: el 20 % de la cuota mensual cada 5 horas, el 50 % por semana y el 100 % por mes. Las cuotas específicas pueden variar según el modelo (la cantidad real de solicitudes varía según el modelo y el uso).",
+    "Los modelos gratuitos incluyen Big Pickle y los modelos promocionales disponibles en ese momento. Go ofrece una selección de modelos con cuotas de solicitudes más altas en ventanas móviles: el 20 % de la cuota mensual cada 5 horas, el 50 % por semana y el 100 % por mes. Las cuotas específicas pueden variar según el modelo (la cantidad real de solicitudes varía según el modelo y el uso).",
   "go.faq.q10": "¿Puedo obtener un reembolso?",
   "go.faq.a10":
     "Podrías tener derecho a un reembolso si el cargo se realizó en los últimos 14 días y no has utilizado tu cuota de Go durante ese periodo de facturación. {{contact}} para solicitar un reembolso.",
@@ -370,6 +370,7 @@ export const dict = {
   "enterprise.form.error.invalidEmailFormat": "Formato de correo inválido.",
   "enterprise.form.error.invalidInferenceSpend": "Selecciona un rango de gasto en inferencia válido.",
   "enterprise.form.error.internalServer": "Error interno del servidor.",
+  "enterprise.form.error.captcha": "La verificación captcha falló. Inténtalo de nuevo.",
   "enterprise.faq.title": "FAQ",
   "enterprise.faq.q1": "¿Qué es OpenCode Enterprise?",
   "enterprise.faq.a1":

@@ -203,7 +203,7 @@ export const dict = {
     "All Zen models are hosted in the US. Providers follow a zero-retention policy and do not use your data for model training, with the",
   "zen.privacy.exceptionsLink": "following exceptions",
 
-  "go.promo.step5": "Step 5 Preview is now available in Go with 4× usage for a limited time.",
+  "go.promo.minimaxM31FlashFree": "MiniMax M3.1 Flash Free is now available in Go, free for a limited time.",
   "go.title": "OpenCode Go | Low cost coding models for everyone",
   "go.meta.description": "Go costs $10/month, with generous usage limits and reliable access to leading coding models.",
   "go.hero.title": "Low cost coding models for everyone",
@@ -298,7 +298,7 @@ export const dict = {
 
   "go.faq.q9": "What is the difference between free models and Go?",
   "go.faq.a9":
-    "Free models include Big Pickle plus promotional models available at the time, with a quota of 200 requests/day. Go offers a curated model lineup with higher request quotas enforced across rolling windows: 20% of the monthly allowance per 5 hours, 50% per week, and 100% per month. Model-specific allowances may differ (actual request counts vary by model and usage).",
+    "Free models include Big Pickle plus promotional models available at the time. Go offers a curated model lineup with higher request quotas enforced across rolling windows: 20% of the monthly allowance per 5 hours, 50% per week, and 100% per month. Model-specific allowances may differ (actual request counts vary by model and usage).",
   "go.faq.q10": "Can I get a refund?",
   "go.faq.a10":
     "You may qualify for a refund if the charge was made within the last 14 days and you have not used your Go allowance during that billing period. {{contact}} to request a refund.",
@@ -364,6 +364,7 @@ export const dict = {
   "enterprise.form.error.invalidEmailFormat": "Invalid email format.",
   "enterprise.form.error.invalidInferenceSpend": "Select a valid inference spend range.",
   "enterprise.form.error.internalServer": "Internal server error.",
+  "enterprise.form.error.captcha": "Captcha verification failed. Please try again.",
   "enterprise.faq.title": "FAQ",
   "enterprise.faq.q1": "What is OpenCode Enterprise?",
   "enterprise.faq.a1":

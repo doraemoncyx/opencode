@@ -337,7 +337,7 @@ describe("FastfilesearchPlugin permissions", () => {
           directory: "/project",
           title: "test",
           version: "test",
-          agent: "test",
+          agent: Agent.ID.make("test"),
         })
         .onConflictDoNothing()
         .run()

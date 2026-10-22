@@ -205,7 +205,7 @@ export const dict = {
     "Alle Zen-Modelle werden in den USA gehostet. Anbieter folgen einer Zero-Retention-Policy und nutzen deine Daten nicht für Modelltraining, mit den",
   "zen.privacy.exceptionsLink": "folgenden Ausnahmen",
 
-  "go.promo.step5": "Step 5 Preview ist jetzt in Go für begrenzte Zeit mit 4× Nutzung verfügbar.",
+  "go.promo.minimaxM31FlashFree": "MiniMax M3.1 Flash Free ist jetzt in Go für begrenzte Zeit kostenlos verfügbar.",
   "go.title": "OpenCode Go | Kostengünstige Coding-Modelle für alle",
   "go.meta.description":
     "Go kostet $10/Monat, mit großzügigen Nutzungslimits und zuverlässigem Zugang zu führenden Coding-Modellen.",
@@ -302,7 +302,7 @@ export const dict = {
 
   "go.faq.q9": "Was ist der Unterschied zwischen kostenlosen Modellen und Go?",
   "go.faq.a9":
-    "Kostenlose Modelle beinhalten Big Pickle sowie Werbemodelle, die zum jeweiligen Zeitpunkt verfügbar sind, mit einem Kontingent von 200 Anfragen/Tag. Go bietet eine kuratierte Modellauswahl mit höheren Anfragekontingenten in rollierenden Zeitfenstern: 20 % des monatlichen Kontingents pro 5 Stunden, 50 % pro Woche und 100 % pro Monat. Modellspezifische Kontingente können abweichen (tatsächliche Anfragezahlen variieren je nach Modell und Nutzung).",
+    "Kostenlose Modelle beinhalten Big Pickle sowie Werbemodelle, die zum jeweiligen Zeitpunkt verfügbar sind. Go bietet eine kuratierte Modellauswahl mit höheren Anfragekontingenten in rollierenden Zeitfenstern: 20 % des monatlichen Kontingents pro 5 Stunden, 50 % pro Woche und 100 % pro Monat. Modellspezifische Kontingente können abweichen (tatsächliche Anfragezahlen variieren je nach Modell und Nutzung).",
   "go.faq.q10": "Kann ich eine Rückerstattung erhalten?",
   "go.faq.a10":
     "Du hast möglicherweise Anspruch auf eine Rückerstattung, wenn die Zahlung innerhalb der letzten 14 Tage erfolgt ist und du dein Go-Kontingent in diesem Abrechnungszeitraum nicht genutzt hast. {{contact}}, um eine Rückerstattung anzufordern.",
@@ -370,6 +370,7 @@ export const dict = {
   "enterprise.form.error.invalidEmailFormat": "Ungültiges E-Mail-Format.",
   "enterprise.form.error.invalidInferenceSpend": "Wählen Sie einen gültigen Bereich für die Inferenzausgaben.",
   "enterprise.form.error.internalServer": "Interner Serverfehler.",
+  "enterprise.form.error.captcha": "Captcha-Überprüfung fehlgeschlagen. Bitte versuchen Sie es erneut.",
   "enterprise.faq.title": "FAQ",
   "enterprise.faq.q1": "Was ist OpenCode Enterprise?",
   "enterprise.faq.a1":
