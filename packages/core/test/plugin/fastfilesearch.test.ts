@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { ToolFailure } from "@opencode/ai"
+import { ToolFailure } from "@opencode/ai/effect"
 import { Agent } from "@opencode/core/agent"
 import { Bus } from "@opencode/core/bus"
 import { Database } from "@opencode/core/database/database"
@@ -144,7 +144,7 @@ describe("FastfilesearchPlugin registration", () => {
       const command = "C:\\tools\\fff-mcp.exe"
       const result = run({
         env: { OPENCODE_FFF_MCP_BIN: command } as NodeJS.ProcessEnv,
-        servers: { "fastfilesearch": { type: "local", command: ["python", "wrapper.py"] } },
+        servers: { fastfilesearch: { type: "local", command: ["python", "wrapper.py"] } },
         tools: { grep: { description: "grep description" }, glob: { description: "glob description" } },
       })
 
@@ -179,7 +179,7 @@ describe("FastfilesearchPlugin registration", () => {
       const result = run({
         env: { OPENCODE_FFF_MCP_BIN: command } as NodeJS.ProcessEnv,
         servers: {
-          "fastfilesearch": {
+          fastfilesearch: {
             type: "local",
             command: ["python", "wrapper.py"],
             cwd: "tools",
@@ -206,7 +206,7 @@ describe("FastfilesearchPlugin registration", () => {
     Effect.gen(function* () {
       const result = run({
         env: { OPENCODE_FFF_MCP_BIN: "C:\\tools\\fff-mcp.exe" } as NodeJS.ProcessEnv,
-        servers: { "fastfilesearch": { type: "remote", url: "http://127.0.0.1:9000/mcp" } },
+        servers: { fastfilesearch: { type: "remote", url: "http://127.0.0.1:9000/mcp" } },
         tools: { grep: { description: "grep description" }, glob: { description: "glob description" } },
       })
 
@@ -223,8 +223,8 @@ describe("FastfilesearchPlugin registration", () => {
       const command = "C:\\tools\\fff-mcp.exe"
       const result = run({
         env: { OPENCODE_FFF_MCP_BIN: command } as NodeJS.ProcessEnv,
-        servers: { "fastfilesearch": { type: "local", command: [command], disabled: true } },
-        statuses: { "fastfilesearch": { status: "disabled" } },
+        servers: { fastfilesearch: { type: "local", command: [command], disabled: true } },
+        statuses: { fastfilesearch: { status: "disabled" } },
         tools: { grep: { description: "grep description" }, glob: { description: "glob description" } },
       })
 
@@ -241,7 +241,7 @@ describe("FastfilesearchPlugin registration", () => {
       const result = run({
         env: { OPENCODE_FFF_MCP_BIN: command } as NodeJS.ProcessEnv,
         stale: true,
-        servers: { "fastfilesearch": { type: "local", command: [command] } },
+        servers: { fastfilesearch: { type: "local", command: [command] } },
         events: [{ id: ID.create(), type: Event.Updated.type, created: 0, data: {} }],
         tools: { grep: { description: "grep description" }, glob: { description: "glob description" } },
       })

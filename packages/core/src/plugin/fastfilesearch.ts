@@ -1,6 +1,6 @@
 export * as FastfilesearchPlugin from "./fastfilesearch.js"
 
-import { ToolFailure } from "@opencode/ai"
+import { ToolFailure } from "@opencode/ai/effect"
 import { define } from "@opencode/plugin/effect/plugin"
 import { McpEvent } from "@opencode/schema/mcp-event"
 import { Event } from "@opencode/schema/plugin"
@@ -38,14 +38,12 @@ export function make(env: NodeJS.ProcessEnv = process.env) {
       // is refreshed once the batch drains or a server status settles. A disabled server provides
       // nothing, so it keeps the fallback.
       const hasServer = () =>
-        ctx.mcp
-          .list()
-          .pipe(
-            Effect.map((response) =>
-              response.data.some((server) => server.name === SERVER && server.status.status !== "disabled"),
-            ),
-            Effect.orDie,
-          )
+        ctx.mcp.list().pipe(
+          Effect.map((response) =>
+            response.data.some((server) => server.name === SERVER && server.status.status !== "disabled"),
+          ),
+          Effect.orDie,
+        )
       let present = yield* hasServer()
       let warned = false
       const refresh = Effect.gen(function* () {
