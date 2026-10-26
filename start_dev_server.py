@@ -36,7 +36,7 @@ channel / version(踩过的坑):
   源码运行时 OPENCODE_CHANNEL / OPENCODE_VERSION 这两个"编译期常量"不存在, 会退化成 local, 于是
     - 数据库变成 opencode-local.db          -> 原来的 session 全部看不见
     - service 注册/配置变成 service-local.json -> 密码是新生成的, 客户端拿旧密码 401, 提示需要新密码
-  所以这里: 从 state/service*.json 推断通道, 从 `opencode2 --version` 读版本, 用 preload 补到
+  所以这里: 通道固定 latest(需要别的通道用 --channel 覆盖), 从 `opencode2 --version` 读版本, 用 preload 补到
   globalThis 上, 让源码服务的 DB / 注册文件 / 密码 / 版本与编译产物完全一致。
   想换一份数据库(比如拷一份再采)就直接设 OPENCODE_DB 环境变量, 脚本会原样透传。
 
@@ -238,16 +238,15 @@ def listen_root(kind: str) -> Path:
 
 
 def detect_channel() -> str:
-    """从现有 service*.json 推断编译产物用的通道。
+    """编译产物用的通道, 固定 latest。
 
-    共享通道(latest/dev/beta/next/prod)都落在 service.json; 其它分支是 service-<branch>.json。
+    service.json 存在 == 装了 released 版本(latest/beta/next 共用这一个文件), 而 released 版本里
+    latest 是常态; 旧实现把 service.json 一律当成 dev, 于是源码服务落到 dev 通道: 用 opencode-dev.db,
+    密码写进 service-dev.json(客户端拿 service.json 的密码 401), 且 channel != local 时 app-assets
+    直接报 "Web UI assets are missing from the CLI build"(打开 / 是 500)。
+    要跑别的通道(dev / beta / 分支)用 --channel 覆盖。
     """
-    state = listen_root("state")
-    if (state / "service.json").exists():
-        return "dev"
-    for file in sorted(state.glob("service-*.json")):
-        return file.stem.removeprefix("service-")
-    return "local"
+    return "latest"
 
 
 def detect_version() -> str | None:
@@ -480,7 +479,7 @@ def main() -> None:
     parser.add_argument("--no-restart", action="store_true", help="结束后不自动跑 startopencode.py 恢复真服务")
     parser.add_argument(
         "--channel",
-        help="覆盖通道(自动从 service*.json 推断); 决定用哪个数据库 / service 注册文件",
+        help="覆盖通道(默认 latest); 决定用哪个数据库 / service 注册文件",
     )
     parser.add_argument("--version", help="覆盖上报给客户端的版本(默认读 opencode2 --version)")
     args = parser.parse_args()
