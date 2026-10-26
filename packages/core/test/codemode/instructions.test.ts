@@ -48,6 +48,15 @@ describe("CodeModeInstructions", () => {
       const initialized = yield* readInitial(CodeModeInstructions.make({ tools: [echo] }))
       expect(initialized.text).toContain("Use the `execute` tool to call the tools listed below.")
       expect(initialized.text).toContain("The catalog is complete.")
+      expect(initialized.text).toContain("## Inside `execute`")
+      expect(initialized.text).toContain(
+        "A program's globals are exactly `tools`, `search`, `fetch` and `Array`, `Object`, `String`",
+      )
+      expect(initialized.text).toContain("`structuredClone`, `console`.")
+      expect(initialized.text).toContain(
+        "Tools from your native tool list are not globals: call `read`, `shell`, `webfetch`, and the rest directly instead.",
+      )
+      expect(initialized.text).toContain("There are no timers, `AbortSignal`, imports, `process`, `Buffer`, or DOM.")
       expect(initialized.text).toContain("## Available tools")
       expect(initialized.text).toContain(`  - ${echo.signature} // Echo text`)
 

@@ -17,6 +17,8 @@ export type {
 } from "./tool-runtime.js"
 /** Signature-construction helpers for host-owned catalog instructions. */
 export { searchSignature, toolExpression } from "./tool-runtime.js"
+/** Global names bound in every program before extensions apply, for hosts that must describe the sandbox. */
+export { globalNames } from "./interpreter/globals.js"
 
 /** Resource budgets enforced independently during each CodeMode program execution. */
 export type ExecutionLimits = {

@@ -211,6 +211,74 @@ test("an unknown child path resolves against its first segment", async () => {
 // its own "Use search to find available tools." suggestion, so those cases are covered upstream and
 // are not re-tested here.
 
+test("a direct tool called as a global names the direct call and the sandbox alternative", async () => {
+  const result = await Effect.runPromise(
+    createCodeModeWithDirect(new Set(["webfetch", "read"])).execute(
+      { code: "return await webfetch({ url: 'https://example.com' })" },
+      context,
+    ),
+  )
+
+  expect(result.metadata).toEqual({ toolCalls: [], error: true })
+  expect(result.content).toEqual([
+    {
+      type: "text",
+      text: [
+        "ReferenceError: Unknown identifier 'webfetch'. (line 1, col 14)",
+        "`webfetch` is not available inside `execute`. Use `fetch(url, init)` there, or call the tool directly.",
+      ].join("\n"),
+    },
+  ])
+})
+
+test("another direct tool called as a global points back at the direct call", async () => {
+  const result = await Effect.runPromise(
+    createCodeModeWithDirect(new Set(["webfetch", "read"])).execute(
+      { code: "return read({ filePath: '/a' })" },
+      context,
+    ),
+  )
+
+  expect(result.content).toEqual([
+    {
+      type: "text",
+      text: [
+        "ReferenceError: Unknown identifier 'read'. (line 1, col 8)",
+        "`read` is not available inside `execute`. Call it directly, outside `execute`.",
+      ].join("\n"),
+    },
+  ])
+})
+
+test("a host global the sandbox does not bind names what to use instead", async () => {
+  const result = await Effect.runPromise(
+    createCodeModeWithDirect(new Set()).execute(
+      { code: 'return await fetch("https://example.com", { signal: AbortSignal.timeout(1000) })' },
+      context,
+    ),
+  )
+
+  expect(result.content).toEqual([
+    {
+      type: "text",
+      text: [
+        "ReferenceError: Unknown identifier 'AbortSignal'. (line 1, col 53)",
+        "`execute` has no timers or `AbortSignal`; `fetch` there already applies its own timeout.",
+      ].join("\n"),
+    },
+  ])
+})
+
+test("an unremarkable unknown identifier keeps the bare reference error", async () => {
+  const result = await Effect.runPromise(
+    createCodeModeWithDirect(new Set(["webfetch"])).execute({ code: "return missing__name" }, context),
+  )
+
+  expect(result.content).toEqual([
+    { type: "text", text: "ReferenceError: Unknown identifier 'missing__name'. (line 1, col 8)" },
+  ])
+})
+
 test("executions share the prepared runtime of an inventory while keeping per-call state", async () => {
   let conversions = 0
   const echo: Info = {

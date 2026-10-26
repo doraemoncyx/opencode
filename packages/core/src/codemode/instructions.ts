@@ -1,9 +1,42 @@
 export * as CodeModeInstructions from "./instructions.js"
 
-import { searchSignature, toolExpression } from "@opencode/codemode"
+import { CodeMode, searchSignature, toolExpression } from "@opencode/codemode"
 import { Effect, Schema } from "effect"
 import { Instructions } from "../instructions/index.js"
 import { CodeModeCatalog } from "./catalog.js"
+import { CodeModeWeb } from "./web.js"
+
+// The sandbox surface is fixed, so it belongs with the catalog rather than in each tool listing. Names
+// come from the runtime and the installed extensions, so the line cannot promise a global that does not
+// exist; a member that disappears simply stops being advertised.
+const library = [
+  "Array",
+  "Object",
+  "String",
+  "Number",
+  "Math",
+  "JSON",
+  "Date",
+  "RegExp",
+  "Map",
+  "Set",
+  "Promise",
+  "URL",
+  "URLSearchParams",
+  "Headers",
+  "TextEncoder",
+  "TextDecoder",
+  "Uint8Array",
+  "crypto",
+  "atob",
+  "btoa",
+  "structuredClone",
+  "console",
+].filter((name) => CodeMode.globalNames.has(name))
+
+const globals = ["tools", "search", ...Object.keys(CodeModeWeb.extension.globals)]
+
+const code = (name: string) => `\`${name}\``
 
 // prettier-ignore
 const prompt = (hasMoreTools: boolean) => `# Code Mode
@@ -15,6 +48,10 @@ ${hasMoreTools ? `The catalog is partial. Inside \`execute\`, use \`search(...)\
 - ${searchSignature}
 
 \`search\` is a global function, not a \`tools.*\` entry: call \`search({ ... })\`, never \`tools.search(...)\`.` : "The catalog is complete. Do not guess tool names."}
+
+## Inside \`execute\`
+
+A program's globals are exactly ${globals.map(code).join(", ")} and ${library.map(code).join(", ")}. Tools from your native tool list are not globals: call \`read\`, \`shell\`, \`webfetch\`, and the rest directly instead. There are no timers, \`AbortSignal\`, imports, \`process\`, \`Buffer\`, or DOM.
 
 ## Available tools`
 

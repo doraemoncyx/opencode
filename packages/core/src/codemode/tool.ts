@@ -335,7 +335,10 @@ function displayInput(input: unknown): Record<string, typeof Schema.Json.Type> |
 function formatResult(result: CodeMode.Result, direct: ReadonlySet<string> | undefined) {
   const output = result.ok
     ? formatValue(result.value)
-    : [result.error.message, ...failureHints(result.error, direct).filter((hint) => !result.error.message.includes(hint))]
+    : [
+        result.error.message,
+        ...failureHints(result.error, direct).filter((hint) => !result.error.message.includes(hint)),
+      ]
         .join("\n")
         .trim()
   const warnings =
@@ -348,16 +351,51 @@ function formatResult(result: CodeMode.Result, direct: ReadonlySet<string> | und
 
 // An unknown path is usually a direct tool the model mistakenly reached for through `tools`; the
 // runtime's generic hint then points at `search`, which cannot find it. Name the real remedy.
+// A bare `webfetch(...)` fails earlier, while resolving identifiers, so the same rescue has to cover
+// both messages: only the host knows which names belong to its own tool list.
 function failureHints(error: CodeMode.Diagnostic, direct: ReadonlySet<string> | undefined): ReadonlyArray<string> {
-  if (error.kind !== "UnknownTool") return error.suggestions ?? []
-  const fallback = error.suggestions ?? []
-  const name = /^Unknown tool '([^']+)'/.exec(error.message)?.[1]?.split(".")[0]
-  const match =
-    name === undefined || direct === undefined
-      ? undefined
-      : Array.from(direct).find((tool) => tool.toLowerCase() === name.toLowerCase())
-  if (match !== undefined) return [`\`${match}\` is not a Code Mode tool. Call it directly, outside \`execute\`.`]
-  return fallback
+  if (error.kind === "UnknownTool") {
+    const name = /^Unknown tool '([^']+)'/.exec(error.message)?.[1]?.split(".")[0]
+    const match = directTool(name, direct)
+    if (match !== undefined) return [`\`${match}\` is not a Code Mode tool. Call it directly, outside \`execute\`.`]
+    return error.suggestions ?? []
+  }
+  if (error.kind !== "ExecutionFailure") return error.suggestions ?? []
+  const identifier = /Unknown identifier '([^']+)'/.exec(error.message)?.[1]
+  if (identifier === undefined) return error.suggestions ?? []
+  const match = directTool(identifier, direct)
+  if (match !== undefined) return [unavailableDirect(match)]
+  const remedy = unavailableGlobals[identifier]
+  return remedy === undefined ? (error.suggestions ?? []) : [remedy]
+}
+
+function directTool(name: string | undefined, direct: ReadonlySet<string> | undefined) {
+  if (name === undefined || direct === undefined) return undefined
+  return Array.from(direct).find((tool) => tool.toLowerCase() === name.toLowerCase())
+}
+
+const unavailableDirect = (name: string) =>
+  name === "webfetch"
+    ? "`webfetch` is not available inside `execute`. Use `fetch(url, init)` there, or call the tool directly."
+    : `\`${name}\` is not available inside \`execute\`. Call it directly, outside \`execute\`.`
+
+// Globals models reach for because they resemble plain JavaScript. None of them exist in the sandbox.
+const noTimers = "`execute` has no timers or `AbortSignal`; `fetch` there already applies its own timeout."
+const noHost = "`execute` exposes no Node or browser globals; reach the outside through `fetch` and `tools`."
+const unavailableGlobals: Readonly<Record<string, string>> = {
+  AbortSignal: noTimers,
+  setTimeout: noTimers,
+  setInterval: noTimers,
+  setImmediate: noTimers,
+  process: noHost,
+  Buffer: noHost,
+  require: noHost,
+  module: noHost,
+  __dirname: noHost,
+  __filename: noHost,
+  window: noHost,
+  document: noHost,
+  globalThis: noHost,
 }
 
 function formatValue(value: CodeMode.DataValue) {
