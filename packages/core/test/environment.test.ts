@@ -1,4 +1,5 @@
 import fs from "node:fs/promises"
+import path from "node:path"
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
@@ -44,6 +45,18 @@ describe("no execution plane", () => {
       expect(error._tag).toBe("PlatformError")
       expect(error.message).toContain("location has no execution plane")
     }),
+  )
+})
+
+describe("local environment directories", () => {
+  // A Windows drive root rejects recursive mkdir with EPERM even though it already exists, so
+  // creating the root has to be a no-op; otherwise every write beside it fails the same way.
+  it.effect("treats an existing filesystem root as a directory", () =>
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const files = makeFiles(makeLocalDriver(spawner))
+      yield* files.mkdir(path.parse(process.cwd()).root)
+    }).pipe(Effect.provide(LayerNode.compile(CrossSpawnSpawner.node))),
   )
 })
 

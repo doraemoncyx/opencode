@@ -50,7 +50,7 @@ export const makeLocalDriver = (spawner: ChildProcessSpawner["Service"]): Driver
       }),
     write: (value, bytes) =>
       attempt(value, async () => {
-        await fs.mkdir(path.dirname(value), { recursive: true })
+        await ensureDirectory(path.dirname(value))
         await fs.writeFile(value, bytes)
       }),
     remove: (value) => attempt(value, () => fs.rm(value, { recursive: true, force: true })),
@@ -66,10 +66,20 @@ export const makeLocalDriver = (spawner: ChildProcessSpawner["Service"]): Driver
         )
         yield* attempt(from, () => fs.rename(from, destination))
       }),
-    mkdir: (value) => attempt(value, () => fs.mkdir(value, { recursive: true }).then(() => undefined)),
+    mkdir: (value) => attempt(value, () => ensureDirectory(value)),
   }
 
   return { spawner, overrides }
+}
+
+/**
+ * Creates a directory and its parents. A filesystem root already exists and must be left alone:
+ * recursive mkdir reports EPERM for a Windows drive root (`G:\`), which would otherwise fail
+ * every write whose target sits directly under it.
+ */
+export const ensureDirectory = async (value: string) => {
+  if (value === path.parse(value).root) return
+  await fs.mkdir(value, { recursive: true })
 }
 
 const stat = (value: string, follow: boolean) =>
