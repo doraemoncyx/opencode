@@ -30,6 +30,8 @@ Use a short branch name of at most three words, separated by hyphens. Do not use
 
 Examples: `session-recovery`, `fix-scroll-state`, `regenerate-sdk`.
 
+`fork/v2_261008` on `origin` is this checkout's private working branch: it is not a PR source, so commit and push directly to it when asked. Create a short-named branch only when a PR is actually requested.
+
 ## Commits and PR Titles
 
 Use conventional commit-style messages and PR titles: `type(scope): summary`.
