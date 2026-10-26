@@ -19,8 +19,15 @@ export const load = Effect.fn("cli.app-assets.load")(function* () {
       files: lazy(embedded.value, (key) => brotliDecompressSync(embedded.value[key]!)),
       brotli: embedded.value,
     }
-  if (!OPENCODE_LOCAL) return yield* Effect.fail(new Error("Web UI assets are missing from the CLI build"))
-  return { files: yield* sourceAssets(), brotli: undefined }
+  // A source checkout has no virtual:opencode-app-assets module, but it usually has the built web app next door.
+  // Serving that keeps `serve` usable with a non-local channel, which source runs need for a shared database and
+  // service registration. An installed build has no ../app/dist, so it still fails as before.
+  return yield* sourceAssets().pipe(
+    Effect.map((files) => ({ files, brotli: undefined })),
+    Effect.mapError((error) =>
+      OPENCODE_LOCAL ? error : new Error("Web UI assets are missing from the CLI build"),
+    ),
+  )
 })
 
 const sourceAssets = Effect.fnUntraced(function* () {
@@ -33,7 +40,8 @@ const sourceAssets = Effect.fnUntraced(function* () {
       Effect.fnUntraced(function* (file) {
         const target = path.join(root, file)
         if ((yield* fs.stat(target)).type === "Directory") return
-        return [file, target] as const
+        // Recursive reads report OS-separated paths on Windows; URLs are always slash-separated.
+        return [path.sep === "\\" ? file.replaceAll("\\", "/") : file, target] as const
       }),
       { concurrency: "unbounded" },
     )).filter((asset) => asset !== undefined),

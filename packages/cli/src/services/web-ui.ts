@@ -88,7 +88,9 @@ function cspForHtml(body: string) {
   const match = body.match(
     /<script\b(?![^>]*\bsrc\s*=)[^>]*\bid=(["'])oc-theme-preload-script\1[^>]*>([\s\S]*?)<\/script>/i,
   )
-  return csp(match ? createHash("sha256").update(match[2]).digest("base64") : "")
+  // A browser normalizes CRLF to LF in inline script text before hashing it, so a checkout with CRLF line
+  // endings would otherwise hash different bytes than the one the header permits and the script never runs.
+  return csp(match ? createHash("sha256").update(match[2].replace(/\r\n?/g, "\n")).digest("base64") : "")
 }
 
 export * as WebUi from "./web-ui"

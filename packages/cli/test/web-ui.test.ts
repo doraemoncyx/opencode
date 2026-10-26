@@ -134,6 +134,28 @@ describe("web UI", () => {
     )
   })
 
+  test("hashes the inline theme script the way a browser does", async () => {
+    // A Windows checkout keeps CRLF in index.html, but a browser normalizes it to LF before hashing, so the
+    // permitted hash has to be computed from the normalized text or the script is blocked.
+    const index = "<html><body><script id=\"oc-theme-preload-script\">\r\n;(function () {\r\n  document.documentElement.dataset.theme = \"oc-2\"\r\n})()\r\n</script></body></html>"
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const transform = yield* WebUi.handler({ assets: { "index.html": index } })
+          const http = yield* NodeHttpServer.make(createServer, { host: "127.0.0.1", port: 0 })
+          yield* http.serve(transform(Effect.succeed(HttpServerResponse.empty({ status: 404 }))))
+          const response = yield* Effect.promise(() => fetch(`${HttpServer.formatAddress(http.address)}/`))
+          expect(response.status).toBe(200)
+          expect(response.headers.get("content-security-policy")).toContain(
+            "'sha256-saShD7XzxG8jSZo73mLZojtoykjRocbS7GYvTkfTT1w='",
+          )
+          yield* Effect.promise(() => response.arrayBuffer())
+        }),
+      ).pipe(Effect.provide(NodeFileSystem.layer)),
+    )
+  })
+
   test("falls back from API routes to assets and the SPA index", async () => {
     const index = path.join(root, "index.html")
     const asset = path.join(root, "app.js")
