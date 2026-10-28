@@ -11,6 +11,7 @@ export interface TailHeal {
 const reInlineDollarMath =
   /\$\$(?!\$)((?:\\.|[^\\\n])*?(?:\\.|[^\\\n$]))\$\$|\$(?=[^\s$])((?:\\.|[^\\\n$])*?(?:\\\S|[^\s\\$]))\$(?!\w)/y
 const reInlineParenMath = /\\\(((?:\\.|[^\\\n])*?)\\\)/y
+const reInlineBracketMath = /\\\[((?:\\[^]|[^\\])*?)\\\]/y
 const reLinkTail = /(!?)\[([^\]\n]*)\]\(([^)\n]*)$/
 
 function isSpace(c: number): boolean {
@@ -110,6 +111,12 @@ export function computeTailHeal(input: string): TailHeal {
       const pm = reInlineParenMath.exec(text)
       if (pm) {
         i += pm[0].length
+        continue
+      }
+      reInlineBracketMath.lastIndex = i
+      const bm = reInlineBracketMath.exec(text)
+      if (bm) {
+        i += bm[0].length
         continue
       }
       i += 2

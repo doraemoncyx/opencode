@@ -139,6 +139,37 @@ describe("patchmark streaming parser", () => {
     })
   })
 
+  test("parses LaTeX bracket display math, on one line and across lines", () => {
+    const stream = createMarkdownStream()
+    const frame = stream.update(
+      "所以由三角形中位线定理可得 \\[ DE\\parallel BC_1 \\]\n\n\\[\nDE\\parallel \\text{平面}BCC_1B_1\n\\]\n",
+      { streaming: false },
+    )
+    expect(frame.blocks).toHaveLength(2)
+    if (frame.blocks[0]!.kind.type === "paragraph") {
+      expect(frame.blocks[0]!.kind.inlines.filter((n) => n.type === "math")).toEqual([
+        { type: "math", source: "DE\\parallel BC_1", delimiter: "bracket", display: true },
+      ])
+    } else {
+      throw new Error("expected a paragraph")
+    }
+    expect(renderBlocksToHtml(frame.blocks)).toContain('data-math-delimiter="bracket"')
+  })
+
+  test("settles a bracket formula when its closing delimiter arrives", () => {
+    const stream = createMarkdownStream()
+    const opened = stream.append("所以 \\[ DE\\par").blocks[0]!
+    expect(opened.kind.type).toBe("paragraph")
+    if (opened.kind.type === "paragraph") expect(opened.kind.inlines.some((n) => n.type === "math")).toBe(false)
+
+    const closed = stream.append("allel BC_1 \\]").blocks[0]!
+    if (closed.kind.type === "paragraph") {
+      expect(closed.kind.inlines.filter((n) => n.type === "math")).toHaveLength(1)
+    } else {
+      throw new Error("expected a paragraph")
+    }
+  })
+
   test("streams GFM pipe tables row-by-row once the separator line arrives", () => {
     const stream = createMarkdownStream()
     const f1 = stream.append("| Col A | Col B |\n")

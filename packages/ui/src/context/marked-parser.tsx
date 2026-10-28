@@ -35,6 +35,10 @@ const inlineDollarMathRegex =
 
 const inlineParenMathRegex = /^\\\(((?:\\.|[^\\\n])*?)\\\)/
 
+// `\[...\]` is LaTeX's display delimiter. Models write it on one line or across lines, and Markdown would otherwise
+// read `\[` as an escaped bracket. A backslash always consumes the next character, so `\\]` stays inside the formula.
+const inlineBracketMathRegex = /^\\\[((?:\\[^]|[^\\])*?)\\\]/
+
 const blockMathRegex = /^(\${1,2})\n((?:\\[^]|[^\\])+?)\n\1(?:\n|$)/
 
 function renderMath(token: Tokens.Generic) {
@@ -90,6 +94,30 @@ export const markdownMath: MarkedExtension = {
           raw: match[0],
           text: match[1].trim(),
           displayMode: false,
+        }
+      },
+      renderer: renderMath,
+    },
+    {
+      name: "inlineBracketKatex",
+      level: "inline",
+      start(src) {
+        const index = src.indexOf("\\[")
+
+        if (index === -1) return
+
+        return index
+      },
+      tokenizer(src) {
+        const match = src.match(inlineBracketMathRegex)
+
+        if (!match) return
+
+        return {
+          type: "inlineBracketKatex",
+          raw: match[0],
+          text: match[1].trim(),
+          displayMode: true,
         }
       },
       renderer: renderMath,

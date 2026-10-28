@@ -1,4 +1,4 @@
-export type MathDelimiter = "dollar" | "double-dollar" | "paren"
+export type MathDelimiter = "dollar" | "double-dollar" | "paren" | "bracket"
 
 export type InlineNode =
   | { type: "text"; text: string }

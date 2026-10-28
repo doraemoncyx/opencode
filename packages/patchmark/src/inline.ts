@@ -95,6 +95,7 @@ const reMainGfmMath = /[^\n`[\]\\!<&*_'"~$]+/y
 const reInlineDollarMath =
   /\$\$(?!\$)((?:\\.|[^\\\n])*?(?:\\.|[^\\\n$]))\$\$|\$(?=[^\s$])((?:\\.|[^\\\n$])*?(?:\\\S|[^\s\\$]))\$(?!\w)/y
 const reInlineParenMath = /\\\(((?:\\.|[^\\\n])*?)\\\)/y
+const reInlineBracketMath = /\\\[((?:\\[^]|[^\\])*?)\\\]/y
 
 type NodeType =
   | "text"
@@ -320,13 +321,23 @@ class InlineParser {
     const subj = this.subject
     if (this.math) {
       reInlineParenMath.lastIndex = this.pos
-      const m = reInlineParenMath.exec(subj)
-      if (m) {
-        const node = new INode("math", m[1]!.trim())
+      const paren = reInlineParenMath.exec(subj)
+      if (paren) {
+        const node = new INode("math", paren[1]!.trim())
         node.delimiter = "paren"
         node.display = false
         block.appendChild(node)
-        this.pos += m[0].length
+        this.pos += paren[0].length
+        return true
+      }
+      reInlineBracketMath.lastIndex = this.pos
+      const bracket = reInlineBracketMath.exec(subj)
+      if (bracket) {
+        const node = new INode("math", bracket[1]!.trim())
+        node.delimiter = "bracket"
+        node.display = true
+        block.appendChild(node)
+        this.pos += bracket[0].length
         return true
       }
     }

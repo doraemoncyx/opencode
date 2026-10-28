@@ -23,6 +23,23 @@ test("renders inline and block math", async () => {
   expect(await parser.parse("$$\nx^2\n$$\n")).toContain('<span class="katex-display">')
 })
 
+test("renders LaTeX bracket display math, on one line and across lines", async () => {
+  const inline = await parser.parse("所以由三角形中位线定理可得 \\[ DE\\parallel BC_1 \\]")
+
+  expect(inline).toContain('<span class="katex-display">')
+  expect(inline).toContain('<annotation encoding="application/x-tex">DE\\parallel BC_1</annotation>')
+
+  const block = await parser.parse("\\[\nDE\\parallel \\text{平面}BCC_1B_1\n\\]")
+
+  expect(block).toContain('<span class="katex-display">')
+  expect(block).toContain('<annotation encoding="application/x-tex">DE\\parallel \\text{平面}BCC_1B_1</annotation>')
+})
+
+test("keeps an unclosed bracket delimiter and ordinary links as Markdown", async () => {
+  expect(await parser.parse("not math: \\[ unclosed")).not.toContain("katex")
+  expect(await parser.parse("[a](https://example.com)")).toContain('<a href="https://example.com"')
+})
+
 test.each([
   "Energy is $E = mc^2$.",
   "因此 $x^2$ 是正数",
@@ -131,6 +148,8 @@ test.each([
   "foo\n```",
   "\\(x^2\\)",
   "$$\nx^2\n$$\n",
+  "所以 \\[ DE\\parallel BC_1 \\]",
+  "\\[\nDE\\parallel BC_1\n\\]",
   "Energy is $E = mc^2$.",
   "a".repeat(1025),
 ])("leaves code, math, and large Markdown to the worker: %s", (text) => {
