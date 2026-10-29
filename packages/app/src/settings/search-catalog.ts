@@ -106,10 +106,17 @@ export const clientSettings: Entry<SettingsRootTab>[] = [
   },
   {
     tab: "experimental",
-    label: "settings.experimental.row.newModelPicker.title",
-    target: "settings-new-model-picker",
-    description: "settings.experimental.row.newModelPicker.description",
-    keywords: "model picker selector switcher redesign",
+    label: "settings.experimental.row.foldUserMessages.title",
+    target: "settings-fold-user-messages",
+    description: "settings.experimental.row.foldUserMessages.description",
+    keywords: "fold collapse long messages prompts read more",
+  },
+  {
+    tab: "experimental",
+    label: "settings.experimental.row.newQuestionUI.title",
+    target: "settings-new-question-ui",
+    description: "settings.experimental.row.newQuestionUI.description",
+    keywords: "question answers keyboard dock redesign",
   },
   {
     tab: "appearance",
@@ -135,6 +142,13 @@ export const clientSettings: Entry<SettingsRootTab>[] = [
     label: "settings.general.row.terminalFont.title",
     target: "settings-terminal-font",
     keywords: "terminal typeface",
+  },
+  {
+    tab: "appearance",
+    label: "settings.appearance.row.zoom.title",
+    target: "settings-zoom",
+    keywords: "scale size text font larger bigger accessibility",
+    available: "desktop",
   },
   {
     tab: "appearance",
@@ -213,7 +227,12 @@ export const serverSettings: Entry<SettingsServerTab | "servers">[] = [
     label: "settings.extensions.tab.mcps",
     keywords: "model context protocol tools",
   },
-  { tab: "extensions", subtab: "plugins", label: "settings.extensions.tab.plugins" },
+  {
+    tab: "extensions",
+    subtab: "plugins",
+    label: "settings.extensions.tab.plugins",
+    keywords: "extension gui built-in",
+  },
   { tab: "extensions", subtab: "skills", label: "settings.extensions.tab.skills" },
   {
     tab: "servers",

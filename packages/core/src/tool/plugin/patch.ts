@@ -57,7 +57,6 @@ type Prepared =
       readonly target: FileAccess.Target
       readonly before: string
       readonly after: string
-      readonly encoding: FileEncoding
     })
   | (Extract<Patch.Hunk, { readonly type: "update" }> & {
       readonly target: FileAccess.Target
@@ -117,7 +116,8 @@ export const Plugin = {
                 return yield* new ToolFailure({ message: "patch rejected: empty patch" })
               }
               const prepared: Prepared[] = []
-              const updates = new Map<string, string>()
+              const updates = new Map<string, string | null>()
+              // 同一次 patch 里后续 hunk 要按文件首次读取时的编码写回。
               const encodings = new Map<string, FileEncoding>()
               const resolveTarget = Effect.fnUntraced(function* (value: string) {
                 const target = yield* access.resolve({ path: value, kind: "file" })
@@ -143,21 +143,37 @@ export const Plugin = {
                       // 新增文件默认 UTF-8。
                       encoding: "utf-8",
                     })
+                    updates.set(target.absolute, content)
                     return
                   }
                   if (hunk.type === "delete") {
-                    const content = yield* FileMutation.readText(environment.files, target.absolute).pipe(
-                      Effect.mapError(
-                        (error) =>
-                          new ToolFailure({
-                            message: `patch verification failed: Failed to delete ${target.resource}: ${errorMessage(error)}`,
-                          }),
-                      ),
-                    )
-                    prepared.push({ ...hunk, target, before: content.text, after: "", encoding: content.encoding })
+                    const previous = updates.get(target.absolute)
+                    if (previous === null) {
+                      return yield* new ToolFailure({
+                        message: `patch verification failed: Failed to delete ${target.resource}: file does not exist`,
+                      })
+                    }
+                    const before =
+                      previous !== undefined
+                        ? Bom.split(previous).text
+                        : (yield* FileMutation.readText(environment.files, target.absolute).pipe(
+                            Effect.mapError(
+                              (error) =>
+                                new ToolFailure({
+                                  message: `patch verification failed: Failed to delete ${target.resource}: ${errorMessage(error)}`,
+                                }),
+                            ),
+                          )).text
+                    prepared.push({ ...hunk, target, before, after: "" })
+                    updates.set(target.absolute, null)
                     return
                   }
                   const previous = updates.get(target.absolute)
+                  if (previous === null) {
+                    return yield* new ToolFailure({
+                      message: `patch verification failed: Failed to read file to update ${target.absolute}: file does not exist`,
+                    })
+                  }
                   const original =
                     previous ??
                     (yield* Effect.gen(function* () {
@@ -178,23 +194,29 @@ export const Plugin = {
                     try: () => Patch.derive(hunk.path, hunk.chunks, original),
                     catch: (error) => new ToolFailure({ message: `patch verification failed: ${errorMessage(error)}` }),
                   })
-                  const moveTarget = hunk.movePath ? yield* resolveTarget(hunk.movePath) : undefined
-                  const updated = Patch.joinBom(update.content, update.bom)
+                  const move = hunk.movePath ? yield* resolveTarget(hunk.movePath) : undefined
+                  const moveTarget = move && move.absolute !== target.absolute ? move : undefined
+                  const next = Patch.joinBom(update.content, update.bom)
                   // GB18030 无法表示新增文本里的某些字符时拒绝，避免编码器静默改写数据。
-                  if (encoding === "gb18030" && !isEncodable(updated, encoding))
+                  if (encoding === "gb18030" && !isEncodable(next, encoding))
                     return yield* new ToolFailure({
                       message: `Cannot patch ${target.resource} as ${encoding}: the result contains characters ${encoding} cannot represent.`,
                     })
                   prepared.push({
                     ...hunk,
                     target,
-                    content: updated,
+                    content: next,
                     before,
                     after: update.content,
                     moveTarget,
                     encoding,
                   })
-                  if (!moveTarget) updates.set(target.absolute, updated)
+                  if (moveTarget) {
+                    updates.set(target.absolute, null)
+                    updates.set(moveTarget.absolute, next)
+                  } else {
+                    updates.set(target.absolute, next)
+                  }
                 }).pipe(
                   Effect.mapError((error) =>
                     error instanceof ToolFailure
@@ -270,7 +292,7 @@ export const Plugin = {
               )
               const formatted = new Map<string, string>()
               yield* Effect.forEach(
-                [...new Set(applied.filter((item) => item.type !== "delete").map((item) => item.target))],
+                [...updates.entries()].flatMap(([target, value]) => (value === null ? [] : [target])),
                 (target) =>
                   Effect.gen(function* () {
                     const current = yield* FileMutation.readText(environment.files, target).pipe(

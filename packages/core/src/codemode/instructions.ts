@@ -41,9 +41,9 @@ const code = (name: string) => `\`${name}\``
 // prettier-ignore
 const prompt = (hasMoreTools: boolean) => `# Code Mode
 
-Use the \`execute\` tool to call the tools listed below. They cannot be called directly${hasMoreTools ? ", and neither can \`search\`. Both" : ". They"} only work inside code you pass to \`execute\`.
+The tools listed below${hasMoreTools ? ", and \`search\`," : ""} cannot be called directly: they only work as JavaScript inside the \`execute\` tool. Every other tool you have is a normal tool call: call it directly, never inside \`execute\`.
 
-${hasMoreTools ? `The catalog is partial. Inside \`execute\`, use \`search(...)\` to find a tool, then call it by the \`path\` in the result. \`search\` is synchronous. Call it without \`await\`; it does not return a Promise. Do not guess tool names.
+${hasMoreTools ? `The catalog is partial. Before calling a tool that is not listed below, find it with the global \`search(...)\` function. Do not guess tool names. Each result's \`path\` is the complete call expression: write it out as code, for example \`await tools.ns.tool_name({ ... })\`. Do not use it as a key such as \`tools[path]\`.
 
 - ${searchSignature}
 
@@ -53,7 +53,7 @@ ${hasMoreTools ? `The catalog is partial. Inside \`execute\`, use \`search(...)\
 
 A program's globals are exactly ${globals.map(code).join(", ")} and ${library.map(code).join(", ")}. Tools from your native tool list are not globals: call \`read\`, \`shell\`, \`webfetch\`, and the rest directly instead. There are no timers, \`AbortSignal\`, imports, \`process\`, \`Buffer\`, or DOM.
 
-## Available tools`
+## Code Mode tools (call only inside \`execute\`)`
 
 export function render(catalog: CodeModeCatalog.Summary) {
   if (catalog.total === 0)
