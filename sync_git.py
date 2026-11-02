@@ -15,8 +15,10 @@ Usage:
      当前检出分支、工作区干净、fork 可写
   2. 任何一项 FAIL 都在动手前中止；WARN 提示但不拦（如缺少 upstream remote、--discard 将丢改动）
   3. 检查通过后仍需确认（--yes 或交互 y），非交互环境没有 --yes 一律不动
-  4. fetch upstream 与 fork 两个分支：后者给 --force-with-lease 提供新鲜比较基线
-  5. 默认模式：merge upstream 到本地分支再普通 push，代价 ~ 分叉规模、不改写提交；
+  4. 动手前先给当前 HEAD 打一个本地备份 tag（bak_日期_时分，同名已存在时追加序号），
+     同步中途出错可用 git reset --hard <tag> 回到同步前
+  5. fetch upstream 与 fork 两个分支：后者给 --force-with-lease 提供新鲜比较基线
+  6. 默认模式：merge upstream 到本地分支再普通 push，代价 ~ 分叉规模、不改写提交；
      --rebase 模式则逐条 rebase 到 upstream 后带 lease 强推
 
 同步对象默认是「当前检出的分支」，脚本绝不替用户 checkout：曾经因为写死 DEFAULT_BRANCH
@@ -257,6 +259,21 @@ def confirm() -> bool:
     return reply.strip().lower() in ("y", "yes")
 
 
+def create_backup_tag() -> str:
+    # 动手前把当前 HEAD 打个可见的本地 tag，作为同步失败时的回退点；
+    # 同一分钟内重复运行会撞名，追加 _2、_3 避免覆盖旧备份。
+    base = time.strftime("bak_%Y%m%d_%H%M")
+    name = base
+    suffix = 2
+    while git_probe(["rev-parse", "--verify", f"refs/tags/{name}"]) is not None:
+        name = f"{base}_{suffix}"
+        suffix += 1
+    git_checked(["tag", name, "HEAD"])
+    short_head = git_probe(["rev-parse", "--short", "HEAD"]) or "HEAD"
+    log(f"已创建备份 tag {name}（指向 {short_head}），回退：git reset --hard {name}", CYAN)
+    return name
+
+
 def push(fork: str, branch: str, lease: str | None) -> None:
     refspec = f"{branch}:{branch}"
     if lease is None:
@@ -311,6 +328,8 @@ def sync(args: argparse.Namespace) -> None:
     # 检查默认就做，同步本身要再确认一次；管道/CI 里没有 --yes 就不动
     if not args.yes and not confirm():
         raise SystemExit("已取消，未做任何改动（加 --yes 或交互确认才会执行同步）")
+
+    create_backup_tag()
 
     # 检查通过才开始动手，顺序：改 remote / 丢修改 / fetch / merge(或 rebase) / push
     # 分支在 preflight 里已确认就是当前检出的分支，这里不做任何 checkout
