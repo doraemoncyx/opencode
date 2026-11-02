@@ -164,6 +164,7 @@
     "solid-js": "catalog:"
   },
   "patchedDependencies": {
+    "@floating-ui/utils@0.2.12": "patches/@floating-ui%2Futils@0.2.12.patch",
     "@ai-sdk/openai-compatible@2.0.41": "patches/@ai-sdk%2Fopenai-compatible@2.0.41.patch",
     "@dnd-kit/dom@0.5.0": "patches/@dnd-kit%2Fdom@0.5.0.patch",
     "@npmcli/agent@4.0.2": "patches/@npmcli%2Fagent@4.0.2.patch",

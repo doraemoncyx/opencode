@@ -204,6 +204,11 @@ const table = sqliteTable("session", {
 - `bun run check` and every local `typecheck` script fail with `error: Unknown flag "--no-script"` on bun 1.4.3, so in this environment verify with `bun run typecheck:tsc` inside each affected package instead. That is a bun-version mismatch, not a regression in the branch.
 - After merging `upstream/dev`, run `bun install --frozen-lockfile` before typechecking. Without it stale workspace links make `tsc` report phantom `Cannot find module` errors for modules that exist in the tree (`@opencode/util/abort`, `knobs`, `@playwright/test`, `@opencode/patchmark`).
 
+## Web Assets And Patched Dependencies
+
+- `packages/app/dist` is served straight from disk by `packages/cli/src/app-assets.ts`, whose asset map is built once at server start and whose `_assets/*.js` responses carry `max-age=31536000, immutable`. A rebuilt bundle therefore needs a server restart to be served at all, and a patched-but-unchanged filename needs a hard reload (`Ctrl+Shift+R`) in the browser to be seen.
+- `patches/@floating-ui%2Futils@0.2.12.patch` (registered in `patchedDependencies`) guards `isOverflowElement`/`getOverflowAncestors` against anchors that are not elements of their own document. Without it, a Kobalte popper anchored on a plain object or on a node from a `DOMParser` SVG/XML document (its `ownerDocument.body` is `null`) throws `TypeError: Failed to execute 'getComputedStyle' on 'Window': parameter 1 is not of type 'Element'` from `autoUpdate`, reported against the minified `OGE3DKII-*.js` chunk. The same patch warns once per anchor shape with the anchor kind, its `closest('[data-component]')` and a stack, so the call site that produced it is identifiable; grep the console for `[floating-ui] unusable anchor`.
+
 ## Session Core
 
 - Keep durable events minimal: record irreducible new facts and do not repeat state derivable by folding the ordered aggregate history. Enrich projections and read models with previous or derived state when consumers need self-contained views.

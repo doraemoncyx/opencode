@@ -1,0 +1,395 @@
+--- a/dist/floating-ui.utils.dom.mjs
++++ b/dist/floating-ui.utils.dom.mjs
+@@ -39,13 +39,59 @@
+ function isShadowRoot(value) {
+   if (!hasWindow() || typeof ShadowRoot === 'undefined') {
+     return false;
+   }
+   return value instanceof ShadowRoot || value instanceof getWindow(value).ShadowRoot;
+ }
++const reportedAnchorShapes = new Set();
++
++// An anchor that is not an element the window owns makes getComputedStyle
++// throw ("parameter 1 is not of type 'Element'"): a Kobalte virtual anchor
++// (a plain object whose contextElement is itself), or a node from a DOMParser
++// document, whose body is null. Skip it, and report the shape once so the
++// call site that produced it can be found from the console.
++function anchorShape(node) {
++  const element = node instanceof Element ? node : undefined;
++  const owner = element && element.ownerDocument;
++  return [node && node.constructor && node.constructor.name, element ? element.tagName.toLowerCase() : 'non-element', node && node.contextElement === node ? 'virtual' : 'wrapped', owner ? owner.nodeName : 'no-document', owner && owner.body ? 'has-body' : 'no-body'].join(':');
++}
++function reportUnusableAnchor(node) {
++  if (!node || typeof node !== 'object') {
++    return;
++  }
++  const shape = anchorShape(node);
++  if (reportedAnchorShapes.has(shape) || reportedAnchorShapes.size > 20) {
++    return;
++  }
++  reportedAnchorShapes.add(shape);
++  const element = node instanceof Element ? node : undefined;
++  const contextElement = node.contextElement instanceof Element ? node.contextElement : undefined;
++  const labelled = (element && element.closest && element.closest('[data-component]')) || (contextElement && contextElement.closest && contextElement.closest('[data-component]'));
++  console.warn('[floating-ui] unusable anchor, its scroll and resize observers are skipped: ' + shape, {
++    anchor: node,
++    isElement: !!element,
++    hasBoundingClientRect: typeof node.getBoundingClientRect === 'function',
++    contextElement: contextElement || undefined,
++    closestComponent: labelled ? labelled.getAttribute('data-component') : undefined,
++    isConnected: element ? element.isConnected : undefined,
++    ownerDocument: element && element.ownerDocument ? element.ownerDocument.nodeName : undefined,
++    documentHasBody: element && element.ownerDocument ? !!element.ownerDocument.body : undefined,
++    stack: new Error('floating-ui anchor').stack
++  });
++}
++function usableAnchorDocument(element) {
++  if (!isElement(element)) {
++    return false;
++  }
++  return !!element.ownerDocument && element.ownerDocument === getWindow(element).document;
++}
+ function isOverflowElement(element) {
++  if (!usableAnchorDocument(element)) {
++    reportUnusableAnchor(element);
++    return false;
++  }
+   const {
+     overflow,
+     overflowX,
+     overflowY,
+     display
+   } = getComputedStyle(element);
+@@ -145,12 +191,16 @@
+   if (list === void 0) {
+     list = [];
+   }
+   if (traverseIframes === void 0) {
+     traverseIframes = true;
+   }
++  // Top-level call, which is the anchor itself; recursive calls pass their own list.
++  if (list.length === 0 && !usableAnchorDocument(node)) {
++    reportUnusableAnchor(node);
++  }
+   const scrollableAncestor = getNearestOverflowAncestor(node);
+   const isBody = scrollableAncestor === ((_node$ownerDocument2 = node.ownerDocument) == null ? void 0 : _node$ownerDocument2.body);
+   const win = getWindow(scrollableAncestor);
+   if (isBody) {
+     const frameElement = getFrameElement(win);
+     return list.concat(win, win.visualViewport || [], isOverflowElement(scrollableAncestor) ? scrollableAncestor : [], frameElement && traverseIframes ? getOverflowAncestors(frameElement) : []);
+--- a/dist/floating-ui.utils.dom.esm.js
++++ b/dist/floating-ui.utils.dom.esm.js
+@@ -39,13 +39,59 @@
+ function isShadowRoot(value) {
+   if (!hasWindow() || typeof ShadowRoot === 'undefined') {
+     return false;
+   }
+   return value instanceof ShadowRoot || value instanceof getWindow(value).ShadowRoot;
+ }
++const reportedAnchorShapes = new Set();
++
++// An anchor that is not an element the window owns makes getComputedStyle
++// throw ("parameter 1 is not of type 'Element'"): a Kobalte virtual anchor
++// (a plain object whose contextElement is itself), or a node from a DOMParser
++// document, whose body is null. Skip it, and report the shape once so the
++// call site that produced it can be found from the console.
++function anchorShape(node) {
++  const element = node instanceof Element ? node : undefined;
++  const owner = element && element.ownerDocument;
++  return [node && node.constructor && node.constructor.name, element ? element.tagName.toLowerCase() : 'non-element', node && node.contextElement === node ? 'virtual' : 'wrapped', owner ? owner.nodeName : 'no-document', owner && owner.body ? 'has-body' : 'no-body'].join(':');
++}
++function reportUnusableAnchor(node) {
++  if (!node || typeof node !== 'object') {
++    return;
++  }
++  const shape = anchorShape(node);
++  if (reportedAnchorShapes.has(shape) || reportedAnchorShapes.size > 20) {
++    return;
++  }
++  reportedAnchorShapes.add(shape);
++  const element = node instanceof Element ? node : undefined;
++  const contextElement = node.contextElement instanceof Element ? node.contextElement : undefined;
++  const labelled = (element && element.closest && element.closest('[data-component]')) || (contextElement && contextElement.closest && contextElement.closest('[data-component]'));
++  console.warn('[floating-ui] unusable anchor, its scroll and resize observers are skipped: ' + shape, {
++    anchor: node,
++    isElement: !!element,
++    hasBoundingClientRect: typeof node.getBoundingClientRect === 'function',
++    contextElement: contextElement || undefined,
++    closestComponent: labelled ? labelled.getAttribute('data-component') : undefined,
++    isConnected: element ? element.isConnected : undefined,
++    ownerDocument: element && element.ownerDocument ? element.ownerDocument.nodeName : undefined,
++    documentHasBody: element && element.ownerDocument ? !!element.ownerDocument.body : undefined,
++    stack: new Error('floating-ui anchor').stack
++  });
++}
++function usableAnchorDocument(element) {
++  if (!isElement(element)) {
++    return false;
++  }
++  return !!element.ownerDocument && element.ownerDocument === getWindow(element).document;
++}
+ function isOverflowElement(element) {
++  if (!usableAnchorDocument(element)) {
++    reportUnusableAnchor(element);
++    return false;
++  }
+   const {
+     overflow,
+     overflowX,
+     overflowY,
+     display
+   } = getComputedStyle(element);
+@@ -145,12 +191,16 @@
+   if (list === void 0) {
+     list = [];
+   }
+   if (traverseIframes === void 0) {
+     traverseIframes = true;
+   }
++  // Top-level call, which is the anchor itself; recursive calls pass their own list.
++  if (list.length === 0 && !usableAnchorDocument(node)) {
++    reportUnusableAnchor(node);
++  }
+   const scrollableAncestor = getNearestOverflowAncestor(node);
+   const isBody = scrollableAncestor === ((_node$ownerDocument2 = node.ownerDocument) == null ? void 0 : _node$ownerDocument2.body);
+   const win = getWindow(scrollableAncestor);
+   if (isBody) {
+     const frameElement = getFrameElement(win);
+     return list.concat(win, win.visualViewport || [], isOverflowElement(scrollableAncestor) ? scrollableAncestor : [], frameElement && traverseIframes ? getOverflowAncestors(frameElement) : []);
+--- a/dist/floating-ui.utils.dom.umd.js
++++ b/dist/floating-ui.utils.dom.umd.js
+@@ -45,13 +45,59 @@
+   function isShadowRoot(value) {
+     if (!hasWindow() || typeof ShadowRoot === 'undefined') {
+       return false;
+     }
+     return value instanceof ShadowRoot || value instanceof getWindow(value).ShadowRoot;
+   }
++  const reportedAnchorShapes = new Set();
++
++  // An anchor that is not an element the window owns makes getComputedStyle
++  // throw ("parameter 1 is not of type 'Element'"): a Kobalte virtual anchor
++  // (a plain object whose contextElement is itself), or a node from a DOMParser
++  // document, whose body is null. Skip it, and report the shape once so the
++  // call site that produced it can be found from the console.
++  function anchorShape(node) {
++    const element = node instanceof Element ? node : undefined;
++    const owner = element && element.ownerDocument;
++    return [node && node.constructor && node.constructor.name, element ? element.tagName.toLowerCase() : 'non-element', node && node.contextElement === node ? 'virtual' : 'wrapped', owner ? owner.nodeName : 'no-document', owner && owner.body ? 'has-body' : 'no-body'].join(':');
++  }
++  function reportUnusableAnchor(node) {
++    if (!node || typeof node !== 'object') {
++      return;
++    }
++    const shape = anchorShape(node);
++    if (reportedAnchorShapes.has(shape) || reportedAnchorShapes.size > 20) {
++      return;
++    }
++    reportedAnchorShapes.add(shape);
++    const element = node instanceof Element ? node : undefined;
++    const contextElement = node.contextElement instanceof Element ? node.contextElement : undefined;
++    const labelled = (element && element.closest && element.closest('[data-component]')) || (contextElement && contextElement.closest && contextElement.closest('[data-component]'));
++    console.warn('[floating-ui] unusable anchor, its scroll and resize observers are skipped: ' + shape, {
++      anchor: node,
++      isElement: !!element,
++      hasBoundingClientRect: typeof node.getBoundingClientRect === 'function',
++      contextElement: contextElement || undefined,
++      closestComponent: labelled ? labelled.getAttribute('data-component') : undefined,
++      isConnected: element ? element.isConnected : undefined,
++      ownerDocument: element && element.ownerDocument ? element.ownerDocument.nodeName : undefined,
++      documentHasBody: element && element.ownerDocument ? !!element.ownerDocument.body : undefined,
++      stack: new Error('floating-ui anchor').stack
++    });
++  }
++  function usableAnchorDocument(element) {
++    if (!isElement(element)) {
++      return false;
++    }
++    return !!element.ownerDocument && element.ownerDocument === getWindow(element).document;
++  }
+   function isOverflowElement(element) {
++    if (!usableAnchorDocument(element)) {
++      reportUnusableAnchor(element);
++      return false;
++    }
+     const {
+       overflow,
+       overflowX,
+       overflowY,
+       display
+     } = getComputedStyle(element);
+@@ -150,12 +196,16 @@
+     var _node$ownerDocument2;
+     if (list === void 0) {
+       list = [];
+     }
+     if (traverseIframes === void 0) {
+       traverseIframes = true;
++    }
++    // Top-level call, which is the anchor itself; recursive calls pass their own list.
++    if (list.length === 0 && !usableAnchorDocument(node)) {
++      reportUnusableAnchor(node);
+     }
+     const scrollableAncestor = getNearestOverflowAncestor(node);
+     const isBody = scrollableAncestor === ((_node$ownerDocument2 = node.ownerDocument) == null ? void 0 : _node$ownerDocument2.body);
+     const win = getWindow(scrollableAncestor);
+     if (isBody) {
+       const frameElement = getFrameElement(win);
+--- a/dom/floating-ui.utils.dom.esm.js
++++ b/dom/floating-ui.utils.dom.esm.js
+@@ -39,13 +39,59 @@
+ function isShadowRoot(value) {
+   if (!hasWindow() || typeof ShadowRoot === 'undefined') {
+     return false;
+   }
+   return value instanceof ShadowRoot || value instanceof getWindow(value).ShadowRoot;
+ }
++const reportedAnchorShapes = new Set();
++
++// An anchor that is not an element the window owns makes getComputedStyle
++// throw ("parameter 1 is not of type 'Element'"): a Kobalte virtual anchor
++// (a plain object whose contextElement is itself), or a node from a DOMParser
++// document, whose body is null. Skip it, and report the shape once so the
++// call site that produced it can be found from the console.
++function anchorShape(node) {
++  const element = node instanceof Element ? node : undefined;
++  const owner = element && element.ownerDocument;
++  return [node && node.constructor && node.constructor.name, element ? element.tagName.toLowerCase() : 'non-element', node && node.contextElement === node ? 'virtual' : 'wrapped', owner ? owner.nodeName : 'no-document', owner && owner.body ? 'has-body' : 'no-body'].join(':');
++}
++function reportUnusableAnchor(node) {
++  if (!node || typeof node !== 'object') {
++    return;
++  }
++  const shape = anchorShape(node);
++  if (reportedAnchorShapes.has(shape) || reportedAnchorShapes.size > 20) {
++    return;
++  }
++  reportedAnchorShapes.add(shape);
++  const element = node instanceof Element ? node : undefined;
++  const contextElement = node.contextElement instanceof Element ? node.contextElement : undefined;
++  const labelled = (element && element.closest && element.closest('[data-component]')) || (contextElement && contextElement.closest && contextElement.closest('[data-component]'));
++  console.warn('[floating-ui] unusable anchor, its scroll and resize observers are skipped: ' + shape, {
++    anchor: node,
++    isElement: !!element,
++    hasBoundingClientRect: typeof node.getBoundingClientRect === 'function',
++    contextElement: contextElement || undefined,
++    closestComponent: labelled ? labelled.getAttribute('data-component') : undefined,
++    isConnected: element ? element.isConnected : undefined,
++    ownerDocument: element && element.ownerDocument ? element.ownerDocument.nodeName : undefined,
++    documentHasBody: element && element.ownerDocument ? !!element.ownerDocument.body : undefined,
++    stack: new Error('floating-ui anchor').stack
++  });
++}
++function usableAnchorDocument(element) {
++  if (!isElement(element)) {
++    return false;
++  }
++  return !!element.ownerDocument && element.ownerDocument === getWindow(element).document;
++}
+ function isOverflowElement(element) {
++  if (!usableAnchorDocument(element)) {
++    reportUnusableAnchor(element);
++    return false;
++  }
+   const {
+     overflow,
+     overflowX,
+     overflowY,
+     display
+   } = getComputedStyle(element);
+@@ -145,12 +191,16 @@
+   if (list === void 0) {
+     list = [];
+   }
+   if (traverseIframes === void 0) {
+     traverseIframes = true;
+   }
++  // Top-level call, which is the anchor itself; recursive calls pass their own list.
++  if (list.length === 0 && !usableAnchorDocument(node)) {
++    reportUnusableAnchor(node);
++  }
+   const scrollableAncestor = getNearestOverflowAncestor(node);
+   const isBody = scrollableAncestor === ((_node$ownerDocument2 = node.ownerDocument) == null ? void 0 : _node$ownerDocument2.body);
+   const win = getWindow(scrollableAncestor);
+   if (isBody) {
+     const frameElement = getFrameElement(win);
+     return list.concat(win, win.visualViewport || [], isOverflowElement(scrollableAncestor) ? scrollableAncestor : [], frameElement && traverseIframes ? getOverflowAncestors(frameElement) : []);
+--- a/dom/floating-ui.utils.dom.umd.js
++++ b/dom/floating-ui.utils.dom.umd.js
+@@ -45,13 +45,59 @@
+   function isShadowRoot(value) {
+     if (!hasWindow() || typeof ShadowRoot === 'undefined') {
+       return false;
+     }
+     return value instanceof ShadowRoot || value instanceof getWindow(value).ShadowRoot;
+   }
++  const reportedAnchorShapes = new Set();
++
++  // An anchor that is not an element the window owns makes getComputedStyle
++  // throw ("parameter 1 is not of type 'Element'"): a Kobalte virtual anchor
++  // (a plain object whose contextElement is itself), or a node from a DOMParser
++  // document, whose body is null. Skip it, and report the shape once so the
++  // call site that produced it can be found from the console.
++  function anchorShape(node) {
++    const element = node instanceof Element ? node : undefined;
++    const owner = element && element.ownerDocument;
++    return [node && node.constructor && node.constructor.name, element ? element.tagName.toLowerCase() : 'non-element', node && node.contextElement === node ? 'virtual' : 'wrapped', owner ? owner.nodeName : 'no-document', owner && owner.body ? 'has-body' : 'no-body'].join(':');
++  }
++  function reportUnusableAnchor(node) {
++    if (!node || typeof node !== 'object') {
++      return;
++    }
++    const shape = anchorShape(node);
++    if (reportedAnchorShapes.has(shape) || reportedAnchorShapes.size > 20) {
++      return;
++    }
++    reportedAnchorShapes.add(shape);
++    const element = node instanceof Element ? node : undefined;
++    const contextElement = node.contextElement instanceof Element ? node.contextElement : undefined;
++    const labelled = (element && element.closest && element.closest('[data-component]')) || (contextElement && contextElement.closest && contextElement.closest('[data-component]'));
++    console.warn('[floating-ui] unusable anchor, its scroll and resize observers are skipped: ' + shape, {
++      anchor: node,
++      isElement: !!element,
++      hasBoundingClientRect: typeof node.getBoundingClientRect === 'function',
++      contextElement: contextElement || undefined,
++      closestComponent: labelled ? labelled.getAttribute('data-component') : undefined,
++      isConnected: element ? element.isConnected : undefined,
++      ownerDocument: element && element.ownerDocument ? element.ownerDocument.nodeName : undefined,
++      documentHasBody: element && element.ownerDocument ? !!element.ownerDocument.body : undefined,
++      stack: new Error('floating-ui anchor').stack
++    });
++  }
++  function usableAnchorDocument(element) {
++    if (!isElement(element)) {
++      return false;
++    }
++    return !!element.ownerDocument && element.ownerDocument === getWindow(element).document;
++  }
+   function isOverflowElement(element) {
++    if (!usableAnchorDocument(element)) {
++      reportUnusableAnchor(element);
++      return false;
++    }
+     const {
+       overflow,
+       overflowX,
+       overflowY,
+       display
+     } = getComputedStyle(element);
+@@ -150,12 +196,16 @@
+     var _node$ownerDocument2;
+     if (list === void 0) {
+       list = [];
+     }
+     if (traverseIframes === void 0) {
+       traverseIframes = true;
++    }
++    // Top-level call, which is the anchor itself; recursive calls pass their own list.
++    if (list.length === 0 && !usableAnchorDocument(node)) {
++      reportUnusableAnchor(node);
+     }
+     const scrollableAncestor = getNearestOverflowAncestor(node);
+     const isBody = scrollableAncestor === ((_node$ownerDocument2 = node.ownerDocument) == null ? void 0 : _node$ownerDocument2.body);
+     const win = getWindow(scrollableAncestor);
+     if (isBody) {
+       const frameElement = getFrameElement(win);
