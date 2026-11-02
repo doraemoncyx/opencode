@@ -9,14 +9,7 @@ export * as WriteTool from "./write.js"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import { ToolFailure } from "@opencode/ai/effect"
 import { Effect, Schema } from "effect"
-import { Bom } from "@opencode/util/bom"
-import { isEncodable } from "@opencode/util/encoding"
-import { Environment } from "../../environment/index.js"
-import { FileMutation } from "../../file-mutation.js"
-import { Formatter } from "../../formatter.js"
-import { FileAccess } from "../../file-access.js"
-import { Permission } from "../../permission.js"
-import { fileDiff } from "./file-diff.js"
+import { FileWrite } from "../../file-write.js"
 
 export const name = "write"
 
@@ -47,11 +40,7 @@ export const toModelContent = (output: Output) =>
 export const Plugin = {
   id: "opencode.tool.write",
   effect: Effect.fn("WriteTool.Plugin")(function* (ctx: Context) {
-    const access = yield* FileAccess.Service
-    const fileMutation = yield* FileMutation.Service
-    const environment = yield* Environment.Service
-    const formatter = yield* Formatter.Service
-    const permission = yield* Permission.Service
+    const fileWrite = yield* FileWrite.Service
 
     yield* ctx.tool
       .transform((editor) =>
@@ -64,41 +53,13 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
-              const source = {
-                type: "tool" as const,
-                messageID: context.messageID,
-                id: context.id,
+              const written = yield* fileWrite.write(input, context)
+              return {
+                operation: written.operation,
+                target: written.target,
+                resource: written.resource,
+                existed: written.existed,
               }
-              const target = yield* access.resolve({ path: input.path, kind: "file" })
-              yield* access.authorizeExternal([target], context)
-              const current = yield* FileMutation.readText(environment.files, target.absolute).pipe(
-                Effect.catchTag("Environment.NotFound", () => Effect.undefined),
-              )
-              // 覆盖已有文件时保留其编码；新文件默认 UTF-8。
-              const encoding = current?.encoding ?? "utf-8"
-              const next = Bom.split(input.content)
-              const preview = fileDiff(target.resource, current?.text ?? "", next.text, current ? "modified" : "added")
-              yield* permission.assert({
-                action: "edit",
-                resources: [target.resource],
-                save: ["*"],
-                metadata: { files: [preview] },
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source,
-              })
-              // GB18030 无法表示内容里的某些字符时拒绝写入，避免编码器静默改写数据。
-              // 用去掉 BOM 后的文本判定，与 writeTextPreservingBom 实际写入的内容一致。
-              if (encoding === "gb18030" && !isEncodable(next.text, encoding))
-                return yield* new ToolFailure({
-                  message: `Cannot write ${input.path} as ${encoding}: the content contains characters ${encoding} cannot represent.`,
-                })
-              const result = yield* fileMutation.writeTextPreservingBom({ target, content: input.content, encoding })
-              const bom = (yield* FileMutation.readText(environment.files, target.absolute)).bom
-              if (yield* formatter.file(target.absolute)) {
-                yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
-              }
-              return result
             }).pipe(
               Effect.map((output) => ({ output, content: toModelContent(output) })),
               Effect.mapError((error) => new ToolFailure({ message: `Unable to write ${input.path}`, error })),

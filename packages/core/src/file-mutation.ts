@@ -33,6 +33,10 @@ export interface WriteResult {
   readonly existed: boolean
 }
 
+export interface TextWriteResult extends WriteResult {
+  readonly bom: boolean
+}
+
 export interface Interface {
   /** Serialize a complete read/prepare/write mutation transaction by resolved path. */
   readonly withLock: (
@@ -42,17 +46,25 @@ export interface Interface {
   /** Write text while retaining an existing UTF-8 BOM and emitting at most one BOM. */
   readonly writeTextPreservingBom: (
     input: TextWriteInput,
-  ) => Effect.Effect<WriteResult, Environment.WrongKind | Environment.Failed>
+  ) => Effect.Effect<TextWriteResult, Environment.WrongKind | Environment.Failed>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/FileMutation") {}
 
-export const readText = Effect.fn("FileMutation.readText")(function* (files: Files, target: string) {
-  const bytes = (yield* files.read(target)).bytes
+const decodeFile = (bytes: Uint8Array) => {
   const encoding = detectFileEncoding(bytes)
   // GB18030 文件按 gb18030 解码且没有 BOM 概念；UTF-8 仍走 Bom 以保留原有的去 BOM 行为。
   if (encoding === "gb18030") return { text: decodeText(bytes, "gb18030"), bom: false, encoding }
   return { ...Bom.decodeBytes(bytes), encoding }
+}
+
+export const readText = Effect.fn("FileMutation.readText")(function* (files: Files, target: string) {
+  return decodeFile((yield* files.read(target)).bytes)
+})
+
+export const readOptionalText = Effect.fn("FileMutation.readOptionalText")(function* (files: Files, target: string) {
+  const result = yield* files.read(target).pipe(Effect.catchTag("Environment.NotFound", () => Effect.undefined))
+  return result ? decodeFile(result.bytes) : undefined
 })
 
 export const syncTextBom = Effect.fn("FileMutation.syncTextBom")(function* (
@@ -117,21 +129,19 @@ const layer = Layer.effect(
       withTargetLock(input.target)(
         Effect.gen(function* () {
           const encoding = input.encoding ?? "utf-8"
+          const next = Bom.split(input.content)
           const current = yield* environment.files.read(input.target.absolute, { offset: 0, length: 3 }).pipe(
             Effect.map((result) => result.bytes),
             Effect.catchTag("Environment.NotFound", () => Effect.undefined),
           )
-          // GB18030 没有 BOM：先剥掉模型可能传入的前导 \uFEFF，再按 gb18030 写，否则会被编码成 '?'。
+          // GB18030 没有 BOM：Bom.split 已剥掉模型可能传入的前导 \uFEFF，再按 gb18030 写，否则会被编码成 '?'。
           if (encoding === "gb18030") {
-            yield* environment.files.write(input.target.absolute, encodeText(Bom.split(input.content).text, "gb18030"))
-            return writeResult(input.target, current !== undefined)
+            yield* environment.files.write(input.target.absolute, encodeText(next.text, "gb18030"))
+            return { ...writeResult(input.target, current !== undefined), bom: false }
           }
-          const next = Bom.split(input.content)
-          yield* environment.files.write(
-            input.target.absolute,
-            encodeText(Bom.join(next.text, Boolean(current && Bom.has(current)) || next.bom), "utf-8"),
-          )
-          return writeResult(input.target, current !== undefined)
+          const bom = Boolean(current && Bom.has(current)) || next.bom
+          yield* environment.files.write(input.target.absolute, new TextEncoder().encode(Bom.join(next.text, bom)))
+          return { ...writeResult(input.target, current !== undefined), bom }
         }),
       ),
     )

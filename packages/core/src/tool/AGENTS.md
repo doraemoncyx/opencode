@@ -58,3 +58,8 @@ Tool filtering is catalog visibility, not execution authorization. A call still 
 Built-ins return complete tool responses. `Tool.Snapshot.execute` is the local execution boundary. Generic output bounding is applied by the Session runner after execution.
 
 Producer capture remains local to producers. Shell stores combined process output in its backing file and returns a bounded tail with the full-output path when truncated.
+
+## Encodings
+
+- GB18030 support is owned by `FileMutation` (`readText`/`readOptionalText`/`syncTextBom`/`writeTextPreservingBom`) and `FileWrite.commit`: they detect and preserve a file's encoding, and `commit` rejects content the encoding cannot represent instead of letting the encoder write `?`.
+- Do not re-add per-tool encoding detection to `tool/plugin/{read,write,edit,patch}.ts`. Those files stay upstream-verbatim, and `edit` only threads `original.encoding` into `FileWrite.commit`; fork-specific branches inside them are the main conflict source on the next `upstream/dev` merge.

@@ -4,7 +4,7 @@ import { CodeMode, searchSignature, toolExpression } from "@opencode/codemode"
 import { Effect, Schema } from "effect"
 import { Instructions } from "../instructions/index.js"
 import { CodeModeCatalog } from "./catalog.js"
-import { CodeModeWeb } from "./web.js"
+import { CodeModeFetch } from "./fetch.js"
 
 // The sandbox surface is fixed, so it belongs with the catalog rather than in each tool listing. Names
 // come from the runtime and the installed extensions, so the line cannot promise a global that does not
@@ -34,7 +34,7 @@ const library = [
   "console",
 ].filter((name) => CodeMode.globalNames.has(name))
 
-const globals = ["tools", "search", ...Object.keys(CodeModeWeb.extension.globals)]
+const globals = ["tools", "search", ...Object.keys(CodeModeFetch.extension.globals)]
 
 const code = (name: string) => `\`${name}\``
 
