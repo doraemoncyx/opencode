@@ -2,7 +2,7 @@ import { ImagePreview } from "@opencode/ui/image-preview"
 import { useDialog } from "@opencode/ui/context/dialog"
 import type { ReferenceInfo } from "@opencode/client/promise"
 import type { Links, MountedSession } from "@opencode/plugin/gui"
-import { createComponent, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
+import { createComponent, createEffect, createMemo, on, onCleanup } from "solid-js"
 import { Predicate } from "effect"
 import type { ComposerSuggestion } from "./types"
 import { createComposerEditor, createComposerEditorState, type ComposerEditorModel } from "./editor/interaction"
@@ -24,13 +24,15 @@ import { Session } from "@opencode/schema/session"
 import { abort } from "@opencode/util/abort"
 import { parseSessionMention } from "@opencode/util/session-mention"
 import { createKnownServerSessions, createServerSessionEntries } from "@/shell/commands/palette"
-import { matchesSessionTitle } from "./session-match"
+import { rankSessionTitle } from "./session-match"
+import { useTabs } from "@/shell/tabs/tabs"
 import type { ComposerAdapter, ComposerControls, ComposerQueue } from "./adapter"
 import { isAttachment } from "./prompt-parts"
 import { isCommentItem } from "./state"
 import type { PromptHistoryComment } from "./history/entry"
 import { createComposerHistory } from "./history/store"
 import { createComposerSubmit } from "./submit"
+import { composerSubmitView } from "./machine"
 import { useAttachmentDestination } from "./attachments/destination"
 import { parseClientSlashCommand } from "./client-slash-command"
 
@@ -61,6 +63,7 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
   const language = useLanguage()
   const platform = usePlatform()
   const serverSDK = useServerSDK()
+  const tabs = useTabs()
   const prompt = adapter.state
   // Editor actions write the captured store directly, rather than going through the context methods.
   createEffect(
@@ -209,12 +212,9 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
 
   const skills = createMemo(() => data.location.skill.list({ directory: sdk().directory }) ?? [])
 
-  let sessionSearch: string | undefined
-  const [sessionSearched, setSessionSearched] = createSignal<string>()
-
   const sessions = createServerSessionEntries({
     server: server.key,
-    known: createKnownServerSessions(server.ctx),
+    known: createKnownServerSessions(() => server.ctx),
     projects: server.ctx.projects.list,
     load: async (search, signal) => {
       const page = await serverSDK.api.session.list({ parentID: null, search, archived: false, limit: 50 }, { signal })
@@ -231,7 +231,7 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
     untitled: () => language.t("command.session.new"),
     category: () => language.t("command.category.session"),
     recentCategory: () => language.t("palette.group.recentSessions"),
-    recentLimit: 50,
+    recentLimit: Number.POSITIVE_INFINITY,
   })
 
   const context = createMemo<ComposerSuggestion[]>(() => [
@@ -354,6 +354,8 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
     },
   })
 
+  const submitView = createMemo(() => composerSubmitView(submission.state()))
+
   const controller = createComposerEditor({
     store: prompt.store,
     state: interaction,
@@ -366,53 +368,56 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
     },
     commands,
     context,
+    // The server narrows by the first word; the title match then needs the whole query.
+    requestSessionSearch: (word, signal) => sessions.search(word, signal).then(() => undefined),
     searchSessions: (query) => {
-      if (interaction[0].popover.type !== "context") {
-        // Closing aborts the search, so reopening on the same query must fetch again.
-        sessionSearch = undefined
+      const project = sdk().current?.project.id
 
-        return []
-      }
-
-      // The server narrows by the first word; the title match then needs the whole query.
-      const search = firstWord(query)
-
-      if (search !== sessionSearch) {
-        sessionSearch = search
-        void sessions.search(search).then(
-          () => sessionSearch === search && setSessionSearched(search),
-          () => sessionSearch === search && setSessionSearched(search),
-        )
-      }
+      const open = new Set(
+        tabs.store.flatMap((tab) => (tab.type === "session" && tab.server === server.key ? [tab.sessionId] : [])),
+      )
 
       return sessions
-        .items(search)
-        .filter((entry) => !query || matchesSessionTitle(entry.title, query))
-        .flatMap((entry): ComposerSuggestion[] => {
+        .items("")
+        .flatMap((entry) => {
           if (adapter.kind === "active-session" && entry.sessionID === adapter.session().id) return []
           const mention = entry.sessionID && parseSessionMention(entry.sessionID)
 
           if (!mention) return []
+          const local = !project || entry.project?.id === project || entry.directory === sdk().directory
 
-          return [
-            {
-              id: `session:${mention.id}`,
-              kind: "session",
-              label: entry.title,
-              description: entry.description,
-              mention: {
-                type: "session",
-                id: Session.ID.make(mention.id),
-                content: `@${entry.title}`,
-                start: 0,
-                end: 0,
-              },
+          // A bare `@` offers this project's recent sessions; other projects appear once a title is typed.
+          if (!query && !local) return []
+          const rank = query ? rankSessionTitle(entry.title, query) : 0
+
+          if (rank === undefined) return []
+
+          const suggestion: ComposerSuggestion = {
+            id: `session:${mention.id}`,
+            kind: "session",
+            label: entry.title,
+            description: entry.description,
+            mention: {
+              type: "session",
+              id: Session.ID.make(mention.id),
+              content: `@${entry.title}`,
+              start: 0,
+              end: 0,
             },
-          ]
+          }
+
+          return [{ suggestion, local, rank, open: open.has(mention.id), updated: entry.updated ?? 0 }]
         })
-        .slice(0, query ? 8 : 5)
+        .toSorted(
+          (a, b) =>
+            Number(b.local) - Number(a.local) ||
+            a.rank - b.rank ||
+            Number(b.open) - Number(a.open) ||
+            b.updated - a.updated,
+        )
+        .slice(0, 5)
+        .map((item) => item.suggestion)
     },
-    sessionsPending: (query) => sessionSearched() !== firstWord(query),
     searchContextFiles: async (query, signal) =>
       (await files.searchFilesAndDirectories(query, { signal })).map((path) => ({
         id: `file:${path}`,
@@ -458,7 +463,7 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
         return
       }
 
-      if (item?.type === "file") openComment(item, links, plugins.current(), files, comments)
+      if (item?.type === "file") openComment(item, links, plugins.current(), comments)
     },
     onEditor(element) {
       // SAFETY: the editor's only `setEditor` call passes its editable root, a `<div>` (`editor/editor.tsx`).
@@ -533,14 +538,19 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
       submit: {
         available,
         stopping,
-        held: submission.held,
+        held: () => submitView().held,
+        busy: () => submitView().busy,
+        canSubmit: () => submitView().canSubmit,
         working: adapter.working,
         queue: options?.queue,
         quote:
           adapter.kind === "active-session"
             ? {
                 available: () =>
-                  available() && !adapter.controls().model.loading && !submission.held() && !options?.queue?.undoing(),
+                  available() &&
+                  !adapter.controls().model.loading &&
+                  submitView().canSubmit &&
+                  !options?.queue?.undoing(),
                 delivery: () => (adapter.working() ? (options?.queue?.alternate() ?? "steer") : undefined),
                 onSubmit: submission.submitQuote,
               }
@@ -625,33 +635,11 @@ function openComment(
   item: { path: string; commentID?: string; commentOrigin?: "review" | "file" },
   links: Links,
   session: MountedSession | undefined,
-  files: ReturnType<typeof useFile>,
   comments: ReturnType<typeof useComments>,
 ) {
   if (!item.commentID) return
-  const focus = { file: item.path, id: item.commentID }
-  comments.setActive(focus)
-
-  const queueFocus = (attempts = 6) => {
-    requestAnimationFrame(() => {
-      comments.setFocus({ ...focus })
-
-      if (attempts <= 0) return
-      requestAnimationFrame(() => {
-        const current = comments.focus()
-
-        if (current?.file === focus.file && current.id === focus.id) queueFocus(attempts - 1)
-      })
-    })
-  }
-
   // The plugin that owns the comment's origin reveals it (the review diff or a file tab), keeping the conversation.
+  // It opens first, so a preview it replaces unmounts before the request, which then waits for the view to answer.
   links.open({ href: item.path, origin: item.commentOrigin, exact: true, background: true, session })
-
-  if (item.commentOrigin === "review") return queueFocus()
-  void Promise.resolve(files.load(item.path)).finally(() => queueFocus())
-}
-
-function firstWord(query: string) {
-  return query.toLowerCase().split(" ")[0] ?? ""
+  comments.open({ file: item.path, id: item.commentID })
 }

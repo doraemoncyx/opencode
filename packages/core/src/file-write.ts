@@ -84,9 +84,7 @@ const layer = Layer.effect(
         resources: [target.resource],
         save: ["*"],
         metadata: preview ? { files: [preview] } : undefined,
-        sessionID: context.sessionID,
-        agent: context.agent,
-        source: { type: "tool", messageID: context.messageID, id: context.id },
+        ...Permission.invocation(context),
       })
     })
 
