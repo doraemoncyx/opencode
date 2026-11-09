@@ -16,6 +16,7 @@ export const MAX_READ_LINES = 2_000
 export const MAX_READ_BYTES = 50 * 1024
 export const MAX_MEDIA_INGEST_BYTES = 20 * 1024 * 1024
 const FIRST_CHUNK = 256 * 1024
+const TAIL_LINES = 100
 const MAX_LINE_LENGTH = 2_000
 const TREE_BASE = 6
 const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`
@@ -41,15 +42,6 @@ export class MediaIngestLimitError extends Schema.TaggedError<MediaIngestLimitEr
   }
 }
 
-export class OffsetOutOfRangeError extends Schema.TaggedError<OffsetOutOfRangeError>()(
-  "ReadTool.OffsetOutOfRangeError",
-  { offset: Schema.Number, lines: Schema.Number },
-) {
-  override get message() {
-    return `Offset ${this.offset} is out of range for this file (${this.lines} ${this.lines === 1 ? "line" : "lines"})`
-  }
-}
-
 export class PathKindError extends Schema.TaggedError<PathKindError>()("ReadTool.PathKindError", {
   resource: Schema.String,
   expected: Schema.Literals(["a file", "a file or directory"]),
@@ -59,16 +51,24 @@ export class PathKindError extends Schema.TaggedError<PathKindError>()("ReadTool
   }
 }
 
+export class DirectoryOffsetError extends Schema.TaggedError<DirectoryOffsetError>()("ReadTool.DirectoryOffsetError", {
+  resource: Schema.String,
+}) {
+  override get message() {
+    return `A negative offset only works for files, and ${this.resource} is a directory`
+  }
+}
+
 export type ReadError =
   | Environment.NotFound
   | Environment.Failed
   | BinaryFileError
   | MediaIngestLimitError
-  | OffsetOutOfRangeError
   | PathKindError
+  | DirectoryOffsetError
 
 export const PageInput = Schema.Struct({
-  offset: Schema.optionalKey(NonNegativeInt),
+  offset: Schema.optionalKey(Schema.Int),
   limit: Schema.optionalKey(NonNegativeInt),
 })
 export type PageInput = typeof PageInput.Type
@@ -132,16 +132,19 @@ export const read = Effect.fn("ReadTool.read")(function* (
 ) {
   const virtual = resource.startsWith("skill://")
   const first = yield* files.read(input, { offset: 0, length: FIRST_CHUNK }).pipe(
-    Effect.catchTag("Environment.WrongKind", (error) => {
-      if (error.actual !== "directory")
-        return Effect.fail(new PathKindError({ resource, expected: "a file or directory" }))
-      return files.list(input).pipe(
-        Effect.map((entries) => list(entries, page, virtual ? "/" : path.sep)),
-        Effect.catchTag("Environment.WrongKind", () =>
-          Effect.fail(new PathKindError({ resource, expected: "a file or directory" })),
-        ),
-      )
-    }),
+    Effect.catchTag("Environment.WrongKind", (error) =>
+      Effect.gen(function* () {
+        if (error.actual !== "directory")
+          return yield* new PathKindError({ resource, expected: "a file or directory" })
+        if (page.offset !== undefined && page.offset < 0) return yield* new DirectoryOffsetError({ resource })
+        return yield* files.list(input).pipe(
+          Effect.map((entries) => list(entries, page, virtual ? "/" : path.sep)),
+          Effect.catchTag("Environment.WrongKind", () =>
+            Effect.fail(new PathKindError({ resource, expected: "a file or directory" })),
+          ),
+        )
+      }),
+    ),
   )
   if (first instanceof ListPage) return first
 
@@ -174,17 +177,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
     }
   }
 
-  if (first.bytes.length >= first.info.size) {
-    const result = textPage(first.bytes, true, page, encoding)
-    if (result === undefined) return yield* Effect.die("Read page did not settle for a complete first chunk")
-    return yield* makeTextPage(
-      input,
-      resource,
-      result,
-      first.bytes.subarray(0, result.consumed).includes(0),
-      lineCount(textLeaf(first.bytes).summary.lines, first.bytes.at(-1)),
-    )
-  }
+  if (first.bytes.length >= first.info.size) return yield* completePage(input, resource, first.bytes, page)
 
   const offset = page.offset || 1
   const limit = Math.min(page.limit || MAX_READ_LINES, MAX_READ_LINES)
@@ -194,24 +187,38 @@ export const read = Effect.fn("ReadTool.read")(function* (
   let ended = false
   while (true) {
     const eof = ended || bytes >= first.info.size
-    if (lines >= offset - 1 || eof) {
+    const total = lineCount(lines, leaves.at(-1)?.bytes.at(-1))
+    if (eof && offset > total) {
+      const skipped = Math.max(0, total - Math.min(page.limit || TAIL_LINES, TAIL_LINES))
+      // Decode from the newline ending the last skipped line, so a byte order mark
+      // starting the tail stays content. That empty first line is never in the tail.
       const tree = textTree(leaves)
-      const start = textOffset(tree, offset - 1)
-      let position = 0
-      const selected = Buffer.concat(
-        leaves.flatMap((leaf) => {
-          const leafStart = position
-          position += leaf.summary.bytes
-          if (position <= start) return []
-          return [leaf.bytes.subarray(Math.max(0, start - leafStart))]
-        }),
+      const tail = textPage(
+        textSlice(leaves, Math.max(0, textOffset(tree, skipped) - 1), tree.summary.bytes),
+        true,
+        page,
       )
-      const result = textPage(selected, eof, { limit }, encoding)
+      if (tail === undefined) return yield* Effect.die("Read page did not settle for a complete file")
+      return yield* makeTextPage(
+        input,
+        resource,
+        { ...tail, offset: Math.max(0, skipped - 1) + tail.offset },
+        leaves.some((leaf) => leaf.bytes.includes(0)),
+      )
+    }
+    if (eof || (offset > 0 && lines >= offset - 1)) {
+      // A negative offset only resolves at EOF, counting back from the last line.
+      const from = offset < 0 ? Math.max(1, total + offset + 1) : offset
+      const tree = textTree(leaves)
+      const start = textOffset(tree, from - 1)
+      // Decode only the requested lines plus one byte, enough to tell whether more follow.
+      const end = Math.min(tree.summary.bytes, textOffset(tree, from - 1 + limit) + 1)
+      const result = textPage(textSlice(leaves, start, end), eof && end === tree.summary.bytes, { limit })
       if (result !== undefined) {
         const translated = {
           ...result,
-          offset,
-          ...(result.next === undefined ? { next: undefined } : { next: offset + result.next - 1 }),
+          offset: from,
+          ...(result.next === undefined ? { next: undefined } : { next: from + result.next - 1 }),
         }
         const consumed = start + result.consumed
         let checked = 0
@@ -220,7 +227,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
           checked += leaf.summary.bytes
           return length > 0 && leaf.bytes.subarray(0, length).includes(0)
         })
-        return yield* makeTextPage(input, resource, translated, binary, lineCount(lines, leaves.at(-1)?.bytes.at(-1)))
+        return yield* makeTextPage(input, resource, translated, binary)
       }
     }
 
@@ -248,16 +255,29 @@ const readFile = (
       Effect.catchTag("Environment.WrongKind", () => Effect.fail(new PathKindError({ resource, expected: "a file" }))),
     )
 
+const completePage = Effect.fnUntraced(function* (
+  input: AbsolutePath,
+  resource: string,
+  bytes: Uint8Array,
+  page: PageInput,
+) {
+  const total = lineCount(textLeaf(bytes).summary.lines, bytes.at(-1))
+  const result = textPage(
+    bytes,
+    true,
+    page.offset !== undefined && page.offset < 0 ? { ...page, offset: Math.max(1, total + page.offset + 1) } : page,
+  )
+  if (result === undefined) return yield* Effect.die("Read page did not settle for a complete file")
+  return yield* makeTextPage(input, resource, result, bytes.subarray(0, result.consumed).includes(0))
+})
+
 const makeTextPage = Effect.fnUntraced(function* (
   input: AbsolutePath,
   resource: string,
   result: NonNullable<ReturnType<typeof textPage>>,
   binary: boolean,
-  lines: number,
 ) {
   if (binary) return yield* new BinaryFileError({ resource })
-  if (result.entries.length === 0 && result.offset !== 1)
-    return yield* new OffsetOutOfRangeError({ offset: result.offset, lines })
   return new TextPage({
     type: "text-page",
     content: result.entries.join("\n"),
@@ -301,16 +321,28 @@ const list = (items: ReadonlyArray<Environment.DirEntry>, page: PageInput, sep =
   })
 }
 
-const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput, encoding: FileEncoding) => {
+// 分页解码：编码就在本页字节上判定，所以上游的 textPage 调用点无需透传 encoding，合并时不会冲突。
+// 页首总是行首（分页只在换行后切），页尾残字节由 completeBytes 裁掉，判定不会因分页而误判。
+const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput) => {
   const offset = page.offset || 1
   const limit = Math.min(page.limit || MAX_READ_LINES, MAX_READ_LINES)
-  const decoded = decodeBytes(bytes, encoding)
+  const decoded = decodeBytes(bytes, fileEncoding(bytes))
   const split = decoded.split("\n")
   const complete = eof ? (split.at(-1) === "" ? split.slice(0, -1) : split) : split.slice(0, -1)
   const available = complete.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line))
 
   const entries: string[] = []
   let size = 0
+  // An offset past the end returns the file's last lines that fit, ending at the last line.
+  if (eof && offset > Math.max(1, available.length)) {
+    for (const value of available.slice(-Math.min(page.limit || TAIL_LINES, TAIL_LINES)).toReversed()) {
+      const text = clampLine(value)
+      size += Buffer.byteLength(text, "utf-8") + (entries.length > 0 ? 1 : 0)
+      if (size > MAX_READ_BYTES) break
+      entries.unshift(text)
+    }
+    return { entries, offset: available.length - entries.length + 1, next: undefined, consumed: bytes.length }
+  }
   let next: number | undefined
   for (const [index, value] of available.slice(offset - 1).entries()) {
     const line = offset + index
@@ -390,6 +422,22 @@ const textOffset = (tree: TextNode, newline: number) => {
   }
   const end = nthNewline(node.bytes, remaining)
   return end === undefined ? tree.summary.bytes : offset + end
+}
+
+const textSlice = (
+  leaves: ReadonlyArray<Extract<TextNode, { readonly type: "leaf" }>>,
+  start: number,
+  end: number,
+) => {
+  let position = 0
+  return Buffer.concat(
+    leaves.flatMap((leaf) => {
+      const leafStart = position
+      position += leaf.summary.bytes
+      if (position <= start || leafStart >= end) return []
+      return [leaf.bytes.subarray(Math.max(0, start - leafStart), end - leafStart)]
+    }),
+  )
 }
 
 const nthNewline = (bytes: Uint8Array, count: number) => {

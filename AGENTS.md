@@ -218,6 +218,13 @@ const table = sqliteTable("session", {
 - `packages/app/dist` is served straight from disk by `packages/cli/src/app-assets.ts`, whose asset map is built once at server start and whose `_assets/*.js` responses carry `max-age=31536000, immutable`. A rebuilt bundle therefore needs a server restart to be served at all, and a patched-but-unchanged filename needs a hard reload (`Ctrl+Shift+R`) in the browser to be seen.
 - `patches/@floating-ui%2Futils@0.2.12.patch` (registered in `patchedDependencies`) guards `isOverflowElement`/`getOverflowAncestors` against anchors that are not elements of their own document. Without it, a Kobalte popper anchored on a plain object or on a node from a `DOMParser` SVG/XML document (its `ownerDocument.body` is `null`) throws `TypeError: Failed to execute 'getComputedStyle' on 'Window': parameter 1 is not of type 'Element'` from `autoUpdate`, reported against the minified `OGE3DKII-*.js` chunk. The same patch warns once per anchor shape with the anchor kind, its `closest('[data-component]')` and a stack, so the call site that produced it is identifiable; grep the console for `[floating-ui] unusable anchor`.
 
+## Plugin Loading
+
+- Plugins load asynchronously. Server handlers never wait for them (`Plugin.awaitActivation`), never retry until something appears, and never turn slow plugins into a timeout or 503. This applies to reads and to actions such as `generate.*`, `rpc.call`, `vcs.init` and `websearch.query`.
+- The server answers with what is loaded now: lists may be empty or partial on a cold Location, and an action whose model, provider or RPC hasn't loaded yet fails with not-found. That is expected, not a bug to fix on the server.
+- Clients are responsible for making sure what they need is loaded before they call. Long-lived clients refresh on the matching `*.updated` event (`model.updated`, `agent.updated`, `skill.updated`, `integration.updated`, `plugin.updated`, ...). One-shot clients (CLI commands, ACP, SDK callers) wait on their side, for example by polling `plugin.list` or the entry they need. See `packages/cli/src/services/plugin-startup.ts`.
+- Running the hooks that are registered and waiting for their result is fine (for example `hooks.trigger("session", "http.request", ...)`). What is not allowed is waiting for plugins to load first: if the plugin that adds a hook hasn't loaded yet, the call runs without that hook.
+
 ## Session Core
 
 - Keep durable events minimal: record irreducible new facts and do not repeat state derivable by folding the ordered aggregate history. Enrich projections and read models with previous or derived state when consumers need self-contained views.

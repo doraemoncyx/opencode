@@ -54,7 +54,7 @@ describe("shell", () => {
   test("builds command args per shell family", () => {
     expect(ShellSelect.args("/bin/sh", "echo hi")).toEqual(["-c", "echo hi"])
     expect(ShellSelect.args("/usr/bin/fish", "echo hi")).toEqual(["-c", "echo hi"])
-    expect(ShellSelect.args("/bin/zsh", "echo hi")).toEqual(["-c", "echo hi"])
+    expect(ShellSelect.args("/bin/zsh", "echo hi")).toEqual(["+o", "nomatch", "-c", "echo hi"])
     expect(ShellSelect.args("/bin/bash", "echo hi")).toEqual(["-c", "echo hi"])
     const payload =
       process.platform === "win32"
@@ -67,6 +67,14 @@ describe("shell", () => {
       "-Command",
       payload,
     ])
+  })
+
+  const zsh = which("zsh")
+  test.skipIf(!zsh || process.platform === "win32")("passes an unmatched zsh glob through to the command", () => {
+    if (!zsh) return
+    const result = Bun.spawnSync([zsh, ...ShellSelect.args(zsh, "echo opencode-missing-*.nope; echo after")])
+    expect(result.stdout.toString()).toBe("opencode-missing-*.nope\nafter\n")
+    expect(result.exitCode).toBe(0)
   })
 
   if (process.platform !== "win32") {

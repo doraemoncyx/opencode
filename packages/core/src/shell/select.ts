@@ -160,6 +160,9 @@ export function ps(file: string) {
 // cannot carry the prepended statement.
 const PS_UTF8_PREAMBLE = "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n"
 
+// The preamble is only needed where the console code page can differ from UTF-8.
+const psScript = (command: string) => (process.platform === "win32" ? `${PS_UTF8_PREAMBLE}${command}` : command)
+
 function info(file: string, options?: Options, bin?: string): Item {
   const item = full(file, options, bin)
   const n = name(item)
@@ -173,10 +176,11 @@ function info(file: string, options?: Options, bin?: string): Item {
 export function args(file: string, command: string) {
   const n = name(file)
   if (n === "cmd") return ["/c", command]
-  if (ps(file)) {
-    const script = process.platform === "win32" ? `${PS_UTF8_PREAMBLE}${command}` : command
-    return ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script]
-  }
+  // Fork: pin PowerShell's own stdout/stderr to UTF-8, leaving the process list below untouched.
+  if (ps(file)) command = psScript(command)
+  if (ps(file)) return ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
+  // zsh aborts the whole line on an unmatched glob; pass it through literally as bash does.
+  if (n === "zsh") return ["+o", "nomatch", "-c", command]
   return ["-c", command]
 }
 
