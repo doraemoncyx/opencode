@@ -14,12 +14,17 @@ start_dev_server.py - 用本仓库源码起 opencode2 serve, 并抓 CPU profile
   也不依赖 Ctrl+C / 信号 —— taskkill /f 是拿不到 --cpu-prof 的落盘时机的。
 
 流程:
-  1. 先按 startopencode.py 的方式中断该端口上的 running 会话, 再结束占端口的 serve;
+  1. 先中断该端口上的 running 会话, 再结束占端口的 serve;
   2. bun --smol --preload <hook> --tsconfig-override packages/cli/tsconfig.json <abs>/src/index.ts serve ...
-     cwd / 代理环境与 startopencode.py 完全一致;
+     一律摘掉代理变量直连, cwd 用下面 resolve_start_dir() 的固定目录;
   3. 等端口 LISTEN; 你到 TUI 里复现问题, 回车开始采样 N 秒;
   4. 产出 <out-dir>/serve-<时间戳>.cpuprofile + 同名 .md(热点表, 直接看);
-  5. 默认结束后跑 startopencode.py 把真服务恢复(可用 --no-restart 关掉)。
+  5. 结束后可用 --restore-cmd 交给调用方的启动器去恢复真服务(不给就只提示)。
+
+自包含(重要):
+  本脚本不 import 任何仓库外的东西, 只依赖 psutil 这个第三方包。会话中断 / 启动目录 /
+  代理策略全部在下面自己实现: 曾经为了"避免两处参数漂移"去 import startopencode.py,
+  结果是它被移走或换盘符后静默退回兜底(而兜底恰好塞了代理), 排查成本远大于重复几十行。
 
 注意:
   * 这是源码运行, 没有编译产物的字节码; 但 --smol 与 build.ts 的 execArgv 一致。
@@ -29,7 +34,7 @@ start_dev_server.py - 用本仓库源码起 opencode2 serve, 并抓 CPU profile
     CPU 稳定在 98~100% 一个核, 直到进程重启; 1000µs(默认) 残留约 6%, 不采样时是 0%。
     这个空转不进 JS, 所以 cpuprofile 里看不到。要低间隔采样, 采完就把 serve 重启,
     别用 --keep 留着继续跑。
-  * 采样期间跑的就是你那套 serve(同端口/同代理/cwd), TUI 会自动连上(默认 --service)。
+  * 采样期间跑的就是你那套 serve(同端口/同 cwd, 都不走代理), TUI 会自动连上(默认 --service)。
   * 控制文件写在 <out-dir>/serve-<时间戳>.control, 想手动补采可以 `echo start >` 它。
 
 channel / version(踩过的坑):
@@ -45,6 +50,7 @@ channel / version(踩过的坑):
   python start_dev_server.py --port 4599 --no-service --auto --seconds 5
   python start_dev_server.py --keep          # 采完别停, 留在前台继续用
   python start_dev_server.py --disableprofile  # 散包性能模式(不采样)
+  python start_dev_server.py --restore-cmd "'C:\\cyx\\prog\\py314\\pythonw.exe' D:\\x\\launcher.py"
   python start_dev_server.py --help
 
 性能模式(--disableprofile):
@@ -52,43 +58,61 @@ channel / version(踩过的坑):
   同样不加 --smol, 默认把 OPENCODE_LOG_LEVEL 压到 WARN, 并丢掉 OTEL_EXPORTER_OTLP_*(不导出 span)。
   注意 --smol 编译产物是带的(build.ts 的 execArgv), 这里去掉意味着"源码+更多内存换吞吐",
   内存占用会比编译产物高, 与编译产物的对照实验仍建议保持采样模式的默认参数。
-  其余(端口/通道/版本/service 注册/结束恢复)与采样模式完全一样, 只是没有 profile 产物。
+  其余(端口/通道/版本/service 注册)与采样模式完全一样, 只是没有 profile 产物。
 
 产物看哪里:
   .md     直接读 Hot Functions 表(推荐的入口)
   .cpuprofile 拖进 Chrome DevTools -> Performance -> Load profile, 或 https://speedscope.app
 """
 import argparse
+import base64
+import concurrent.futures
+import glob
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 # 本脚本放在仓库根: 用自身位置定位源码, 换工作树/拷到别的 checkout 都不用改
 REPO = Path(__file__).resolve().parent
 CLI_DIR = REPO / "packages" / "cli"
 ENTRY = CLI_DIR / "src" / "index.ts"
-STARTOPENCODE = Path(r"E:\studycode\python\python_misc_codingnet\py3_test\gist\ps1\startopencode.py")
 
 # 采样产物目录(临时目录约定)
 OUT_DIR = Path(r"C:\cache\tmp\prof")
 HOOK = OUT_DIR / "profile-hook.ts"
 
-# 与 startopencode.py 的默认保持一致
+# 默认值(命令行都能覆盖)
 DEFAULT_PORT = 4097
 DEFAULT_CORS = ["https://lehhair.github.io"]
 DEFAULT_SECONDS = 10
 DEFAULT_DELAY = 2
 
-# 无法 import startopencode 时的兜底(仅是它的副本)
-FALLBACK_PROXY = "http://127.0.0.1:2080"
-FALLBACK_BYPASS = "localhost,127.0.0.1,::1"
-FALLBACK_START_DIR_LETTERS = "defghijklmnopqrstuvwxyz"
-FALLBACK_START_DIR_SUFFIX = os.path.join("tmp", "opencode_startdir")
+# 统一启动目录: 从 d: 起按字母序找第一个存在的盘符 x, 启动目录即 x:\tmp\opencode_startdir。
+# 不给 C 盘: 系统盘上的写入一旦被 UAC/杀软拦, 服务就起不来, 而临时盘上随便建。
+START_DIR_LETTERS = "defghijklmnopqrstuvwxyz"
+START_DIR_SUFFIX = os.path.join("tmp", "opencode_startdir")
+
+# serve 子进程一律直连: 本机 2080 的代理经常没有可用出站(经它全是 connection reset / 502),
+# 而 opencode.ai / models.opencode.ai 直连实测都通, 本地环回(网关 8787、TUI 到 serve)也不受影响。
+PROXY_ENV_KEYS = (
+    "ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "all_proxy", "http_proxy", "https_proxy", "no_proxy",
+)
+
+# serve --service 的 Basic 认证用户名(server/src/auth.ts 里写死), 密码在 service*.json 里
+SERVICE_USERNAME = "opencode"
+ABORT_TIMEOUT = 3
+ABORT_WORKERS = 8
+
 
 HOOK_TS = r'''
 // 编译期常量补丁 —— 必须无条件注入, 与采样无关。
@@ -182,47 +206,47 @@ def step(message: str) -> None:
     say(f"[{time.strftime('%H:%M:%S')}] {message}")
 
 
-def load_startopencode():
-    """复用 startopencode.py 的 cwd 解析 / 代理环境 / 会话中断, 避免两处参数漂移。
+def resolve_start_dir() -> str:
+    """统一启动目录: 从 d: 起第一个存在的盘符下的 \\tmp\\opencode_startdir, 不存在就建。
 
-    找不到就退化为脚本内置的兜底(不中断会话, 只按端口结束)。
+    与启动器给真服务用的 cwd 一致: 源码跑和编译产物跑看到同一个 cwd, session 的
+    project 归属才不会因为换了 cwd 而变成另一个项目。
     """
-    if not STARTOPENCODE.exists():
-        step(f"提示: 没找到 {STARTOPENCODE}, 用内置兜底(不预中断会话)")
-        return None
-    sys.path.insert(0, str(STARTOPENCODE.parent))
-    try:
-        import startopencode  # noqa: F401  (同目录脚本, import 无副作用)
-    except Exception as error:
-        step(f"提示: import startopencode.py 失败({error}), 用内置兜底")
-        return None
-    return startopencode
-
-
-def resolve_start_dir(so) -> str:
-    """启动目录: 优先复用 startopencode 的实现, 保证与它一致。"""
-    if so is not None:
-        return so.resolve_start_dir()
-    for letter in FALLBACK_START_DIR_LETTERS:
+    for letter in START_DIR_LETTERS:
         root = f"{letter}:\\"
         if not os.path.exists(root):
             continue
-        path = os.path.join(root, FALLBACK_START_DIR_SUFFIX)
-        os.makedirs(path, exist_ok=True)
+        path = os.path.join(root, START_DIR_SUFFIX)
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError as error:
+            raise SystemExit(f"建不了启动目录 {path}: {error}")
         return path
-    raise SystemExit("从 d: 到 z: 都不存在, 无法确定启动目录")
+    raise SystemExit(f"从 {START_DIR_LETTERS[0]}: 到 {START_DIR_LETTERS[-1]}: 都没有可用盘符")
 
 
-def serve_env(so) -> dict:
-    """serve 子进程环境: 2080 代理 + 放行本机, 与 startopencode.py 保持一致。"""
-    if so is not None:
-        return so.serve_env()
+def serve_env() -> dict:
+    """serve 子进程的环境: 摘掉继承来的所有代理变量, 直连。
+
+    代理只在"用得上"的时候才值得设。这台机器上 2080 的 sing-box 经常没有可用出站,
+    而 bun 的 fetch 一旦拿到 HTTPS_PROXY 就会把所有外部请求都送进去, 于是 Console 用量
+    面板和 models.dev 全变成 "Transport error (...)", 聊天却正常(aigw 走 127.0.0.1:8787
+    环回)。与其猜代理什么时候能用, 不如固定直连。
+    """
     env = os.environ.copy()
-    for key in ("ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "http_proxy", "https_proxy"):
-        env[key] = FALLBACK_PROXY
-    bypass = ",".join(p for p in (env.get("NO_PROXY") or env.get("no_proxy"), FALLBACK_BYPASS) if p)
-    env["NO_PROXY"] = env["no_proxy"] = bypass
+    for key in PROXY_ENV_KEYS:
+        env.pop(key, None)
     return env
+
+
+def split_command(command: str) -> list[str]:
+    """把一条命令行拆成 argv(Windows 路径安全)。
+
+    不能用默认的 shlex.split: posix 模式会把 D:\\x 里的反斜杠当转义吃掉, 变成 D:x。
+    posix=False 保留反斜杠但把引号留在词里, 所以再剥一层成对的首尾引号。
+    """
+    return [token[1:-1] if len(token) > 1 and token[0] == token[-1] and token[0] in "\"'" else token
+            for token in shlex.split(command, posix=False)]
 
 
 def listen_root(kind: str) -> Path:
@@ -235,6 +259,106 @@ def listen_root(kind: str) -> Path:
     }[kind]
     env = {"data": "XDG_DATA_HOME", "state": "XDG_STATE_HOME", "config": "XDG_CONFIG_HOME"}[kind]
     return Path(os.environ.get(env) or default) / "opencode"
+
+
+def service_password(port: int) -> str | None:
+    """取该端口 serve 的 Basic 密码; 取不到返回 None。
+
+    --service 模式的密码不读 OPENCODE_PASSWORD: server-process.ts 用 service 配置里的 password,
+    没有就随机生成并写回, 所以只能从 service*.json 里找。按可靠度:
+      1. state 下的 service*.json 带 url, 按端口挑出当前实例;
+      2. config 下的 service*.json 只有 password(按 channel 共用), 取最近修改的一份;
+      3. 最后才看环境变量(只有非 --service 模式才生效)。
+    """
+    for path in sorted(glob.glob(str(listen_root("state") / "service*.json")),
+                       key=os.path.getmtime, reverse=True):
+        info = read_json(path) or {}
+        if not info.get("password"):
+            continue
+        if url_port(str(info.get("url") or "")) == port:
+            return str(info["password"])
+
+    configured = [p for p in glob.glob(str(listen_root("config") / "service*.json"))
+                  if (read_json(p) or {}).get("password")]
+    if configured:
+        info = read_json(max(configured, key=os.path.getmtime)) or {}
+        if info.get("password"):
+            return str(info["password"])
+
+    for key in ("OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD"):
+        if os.environ.get(key):
+            return os.environ[key]
+    return None
+
+
+def read_json(path: str) -> dict | None:
+    """读一个 JSON 对象; 读不到或不是对象就返回 None(文件可能正在被写一半)。"""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def url_port(url: str) -> int | None:
+    """从注册文件的 url 里取端口; 解析失败返回 None。"""
+    try:
+        return urllib.parse.urlparse(url).port
+    except ValueError:
+        return None
+
+
+def abort_sessions(port: int) -> None:
+    """把该端口上 running 的会话逐个 interrupt, 让服务端记成 interrupted 而不是被静默杀掉。
+
+    必须带密码: serve 以 --service 模式跑时 /api/* 一律要 Basic 认证, 不带就 401,
+    会话会被后面的 taskkill 直接带走, 恢复出来是"半截任务"。
+    """
+    password = service_password(port)
+    if not password:
+        step(f"警告: 读不到端口 {port} 的 service 密码, 跳过会话中断(会话会被 taskkill 直接带走)")
+        return
+    token = base64.b64encode(f"{SERVICE_USERNAME}:{password}".encode("utf-8")).decode("ascii")
+    base = f"http://127.0.0.1:{port}"
+    headers = {"Authorization": f"Basic {token}"}
+
+    try:
+        request = urllib.request.Request(f"{base}/api/session/active", headers=headers)
+        with urllib.request.urlopen(request, timeout=ABORT_TIMEOUT) as response:
+            active = (json.loads(response.read().decode("utf-8")) or {}).get("data") or {}
+    except urllib.error.HTTPError as error:
+        step(f"警告: 查询 {port} 的会话失败: {error}, 跳过中断")
+        return
+    except Exception as error:
+        step(f"端口 {port}: 查不到会话({error}), 跳过中断")
+        return
+
+    ids = [sid for sid, info in active.items() if isinstance(info, dict) and info.get("type") == "running"]
+    if not ids:
+        step(f"端口 {port}: 没有 running 会话")
+        return
+
+    def interrupt_one(sid: str) -> tuple[str, bool, str]:
+        """中断一个会话; 只回结果, 不让单个失败打断同批其它会话。"""
+        request = urllib.request.Request(
+            f"{base}/api/session/{urllib.parse.quote(sid)}/interrupt",
+            data=b"{}",
+            headers={"Content-Type": "application/json", **headers},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=ABORT_TIMEOUT) as response:
+                return sid, bool((json.loads(response.read().decode("utf-8")) or {}).get("interrupted")), ""
+        except Exception as error:
+            return sid, False, str(error)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(ids), ABORT_WORKERS)) as pool:
+        outcomes = list(pool.map(interrupt_one, ids))
+    for sid, ok, detail in outcomes:
+        if not ok:
+            step(f"中断 {sid} 失败: {detail}")
+    step(f"端口 {port}: 已中断 {sum(1 for _, ok, _ in outcomes if ok)}/{len(ids)} 个会话")
 
 
 def detect_channel() -> str:
@@ -297,18 +421,14 @@ def listener_pid(port: int) -> int | None:
     return None
 
 
-def stop_existing(port: int, so) -> None:
+def stop_existing(port: int) -> None:
     """结束占端口的旧 serve: 先中断会话(让 outcome=interrupted), 再整树 taskkill。"""
     pid = listener_pid(port)
     if pid is None:
         step(f"端口 {port} 空闲")
         return
     step(f"端口 {port} 被 pid={pid} 占用, 先中断其会话再结束")
-    try:
-        if so is not None:
-            so.abort_sessions(port)
-    except Exception as error:
-        step(f"中断会话失败(继续): {error}")
+    abort_sessions(port)
     subprocess.run(
         ["taskkill", "/F", "/T", "/PID", str(pid)],
         stdout=subprocess.DEVNULL,
@@ -342,7 +462,7 @@ def build_command(args, hook: Path, service: bool) -> list[str]:
     if not ENTRY.exists():
         raise SystemExit(f"没找到源码入口 {ENTRY}; 这个脚本要放在仓库根目录(packages/cli 的上一级)")
     # 不用 `bun run`: 它的参数解析不接受前置的 --preload, 而这里需要 (a) 注入通道补丁/采样 hook
-    # (b) 保留 startopencode 的 cwd, 所以直接给绝对入口 + 显式指定 CLI 包的 tsconfig
+    # (b) 固定 cwd 由调用方给, 所以直接给绝对入口 + 显式指定 CLI 包的 tsconfig
     # (否则 tsx/jsx 会按仓库根的 tsconfig 解析, 报 react/jsx-dev-runtime 找不到)。
     command = [bun]
     if not args.disable_profile and not args.no_smol:
@@ -476,7 +596,15 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR, help=f"产物目录(默认 {OUT_DIR})")
     parser.add_argument("--no-service", action="store_true", help="前台 serve, 不注册 service(TUI 需自行 --server 指向)")
     parser.add_argument("--keep", action="store_true", help="采样结束后不停掉 profile 服务")
-    parser.add_argument("--no-restart", action="store_true", help="结束后不自动跑 startopencode.py 恢复真服务")
+    parser.add_argument(
+        "--restore-cmd",
+        help="结束后跑这条命令恢复真服务(例如启动器的绝对路径); 不给就只打印提示",
+    )
+    parser.add_argument(
+        "--no-restart",
+        action="store_true",
+        help="已废弃: 现在默认就不恢复服务, 保留只为兼容还在传这个参数的旧启动 bat",
+    )
     parser.add_argument(
         "--channel",
         help="覆盖通道(默认 latest); 决定用哪个数据库 / service 注册文件",
@@ -486,7 +614,6 @@ def main() -> None:
     args.cors = args.cors or list(DEFAULT_CORS)
     out_dir: Path = args.out_dir
 
-    so = load_startopencode()
     profiling = not args.disable_profile
     # 无论哪种模式都要装: 通道/版本补丁在里面, 丢掉它会让源码服务退化成 local 通道。
     hook = write_hook(out_dir, profiling)
@@ -509,7 +636,7 @@ def main() -> None:
     if version is None and not args.no_service:
         step("警告: 没探测到已安装版本, TUI 可能因为版本不一致把这位服务换掉; 可用 --version 指定")
 
-    stop_existing(args.port, so)
+    stop_existing(args.port)
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     profile_path = out_dir / f"serve-{stamp}.cpuprofile"
@@ -517,7 +644,7 @@ def main() -> None:
     if profiling:
         write_control(control, "")
 
-    env = serve_env(so)
+    env = serve_env()
     env["OPENCODE_PROFILE_CHANNEL"] = channel
     if version:
         env["OPENCODE_PROFILE_VERSION"] = version
@@ -535,7 +662,7 @@ def main() -> None:
         )
 
     command = build_command(args, hook, service=not args.no_service)
-    start_dir = resolve_start_dir(so)
+    start_dir = resolve_start_dir()
     step("启动: " + " ".join(command[1:]))
     step(f"cwd: {start_dir}")
     child = subprocess.Popen(command, cwd=start_dir, env=env)
@@ -590,13 +717,13 @@ def main() -> None:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-        if not args.keep and not args.no_restart:
-            step("恢复真服务: 跑 startopencode.py")
-            subprocess.run([sys.executable or "python", str(STARTOPENCODE)])
-        elif args.keep:
+        if args.keep:
             step(f"dev 服务仍在运行: http://127.0.0.1:{args.port}(Ctrl+C 结束)")
+        elif args.restore_cmd:
+            step(f"恢复真服务: {args.restore_cmd}")
+            subprocess.run(split_command(args.restore_cmd))
         else:
-            step("已跳过恢复, 记得手动跑 startopencode.py 把真服务拉起来")
+            step("已停掉 dev 服务; 需要真服务的话用你自己的启动器拉起(或下次 --restore-cmd 让它自动恢复)")
 
     if profiling:
         say()
