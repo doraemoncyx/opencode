@@ -35,6 +35,12 @@ const description = (shell?: string) =>
   [
     "Execute a shell command and return its output.",
     ...(shell ? [`Commands run on ${OS} using ${shell}.`] : []),
+    ...(shell && ShellSelect.ps(shell)
+      ? [
+          "Write PowerShell syntax: single-quote regexes so `\\` stays a literal backslash (`rg -n '\\d+' file`), and escape with a backtick.",
+          "Cap output with `Select-Object -First N` and search with `Select-String`.",
+        ]
+      : []),
     "Quote file paths containing spaces or special characters.",
     "Prefer dedicated tools over shell commands when possible.",
     "When output is large, the full result is saved to a file and a truncated preview is returned.",
