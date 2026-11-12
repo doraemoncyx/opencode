@@ -214,7 +214,7 @@ export type Options = typeof Options.Type
  * long a connected server process is retained, never what the server exposes to the model.
  */
 export interface LayerOptions extends Options {
-  /** Release a connected server's process after this long without a live interaction. Defaults to 5 minutes. */
+  /** Release a connected server's process after this long without a live interaction. Defaults to 3 hours. */
   readonly idleTimeout?: Duration.Input
   /** How often the idle reaper checks for releasable servers. Defaults to 1 minute. */
   readonly idleSweepInterval?: Duration.Input
@@ -235,7 +235,7 @@ export const layer = (options?: LayerOptions) =>
       const root = yield* Effect.scope
       const fork = yield* FiberSet.makeRuntime<never, void, never>()
       const clock = yield* Clock.Clock
-      const idleTimeout = Duration.toMillis(options?.idleTimeout ?? "5 minutes")
+      const idleTimeout = Duration.toMillis(options?.idleTimeout ?? "3 hours")
       const idleSweepInterval = options?.idleSweepInterval ?? "1 minute"
       // Server scopes close in parallel on shutdown, so one slow server's stop grace does not delay
       // the rest past a service restart's kill deadline and leave them orphaned.
