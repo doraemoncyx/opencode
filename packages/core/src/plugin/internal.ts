@@ -100,7 +100,6 @@ import { WriteTool } from "../tool/plugin/write.js"
 import { AgentPlugin } from "./agent.js"
 import BrowserPlugin from "@opencode/plugin-browser"
 import { CommandPlugin } from "./command.js"
-import { FastfilesearchPlugin } from "./fastfilesearch.js"
 import { IdentityPlugin } from "./identity.js"
 import { PlanPlugin } from "./plan.js"
 import { GoalPlugin } from "./goal.js"
@@ -284,9 +283,6 @@ const pre = [
 ] as const satisfies readonly InternalPlugin[]
 
 const post = [
-  // Runs after ConfigMcpPlugin (pre) so the direct fff-mcp binary replaces any configured wrapper
-  // for the `fastfilesearch` server.
-  FastfilesearchPlugin.Plugin,
   ConfigInstructionPlugin.Plugin,
   ConfigReferencePlugin.Plugin,
   ConfigAgentPlugin.Plugin,

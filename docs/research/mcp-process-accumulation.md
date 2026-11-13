@@ -10,6 +10,16 @@ live in [`specs/v2/`](../../specs/v2/README.md) and explicitly exclude actionabl
 work ("Put actionable work in GitHub issues"). There is no notes/research convention,
 so this file is placed at the documented fallback path `docs/research/` (directory created).
 
+**Status note.** The built-in `FastfilesearchPlugin` this note cites no longer exists.
+It was removed to stop it from shadowing the built-in search tools, so a declared
+`fastfilesearch` MCP server now only adds `fastfilesearch_*` tools; it no longer strips
+`grep`/`glob`, rewrites the server command to the resolved `fff-mcp` binary, or
+auto-approves its own actions. Line citations to `plugin/fastfilesearch.ts` and its
+`internal.ts` registration below therefore describe the state at the time of the
+investigation; read them against that plugin's last commit rather than the current tree.
+The findings about per-Location process accumulation are unaffected: each Location still
+spawns its own `fff-mcp` for a user-declared `fastfilesearch` server.
+
 ---
 
 ## 1. Observation (real evidence)
@@ -136,12 +146,12 @@ What _is_ missing is any bound tighter than Location eviction:
 
 ### Hypotheses checked
 
-| Hypothesis                            | Verdict       | Evidence                                                                                                                                                |
-| ------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 3 distinct Locations                  | **Confirmed** | 3 `location services booted` + 3 `mcp connected ... fastfilesearch` at 3 directories; `/api/debug/location` returns those plus the failed home Location |
-| Repeat `startServer` on one Location  | Refuted       | `applied` guard short-circuits equal configs (`mcp/index.ts:657-698`); one connected log per directory                                                  |
-| Config + built-in double registration | Refuted       | the built-in only upgrades an existing `fastfilesearch` entry, never adds one (`plugin/fastfilesearch.ts:24-32`, `plugin/internal.ts:232-235`)          |
-| Failure-path process leak             | Refuted here  | failed Location's scope is closed (`mcp/index.ts:592`); no orphan `fff-mcp` for `C:\Users\cyxn2760`                                                     |
+| Hypothesis                            | Verdict       | Evidence                                                                                                                                                            |
+| ------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 3 distinct Locations                  | **Confirmed** | 3 `location services booted` + 3 `mcp connected ... fastfilesearch` at 3 directories; `/api/debug/location` returns those plus the failed home Location             |
+| Repeat `startServer` on one Location  | Refuted       | `applied` guard short-circuits equal configs (`mcp/index.ts:657-698`); one connected log per directory                                                              |
+| Config + built-in double registration | Refuted       | the built-in only upgraded an existing `fastfilesearch` entry, never added one (`plugin/fastfilesearch.ts:24-32`, `plugin/internal.ts:232-235`, both removed since) |
+| Failure-path process leak             | Refuted here  | failed Location's scope is closed (`mcp/index.ts:592`); no orphan `fff-mcp` for `C:\Users\cyxn2760`                                                                 |
 
 ### What would settle any residual doubt
 
@@ -231,8 +241,9 @@ signals — TUI tab close, session end, last connection for a directory.
 
 ### (e) Config knob to disable the built-in — **not applicable as stated**
 
-`fastfilesearch` is already user-declared, not auto-added
-(`plugin/fastfilesearch.ts:24-32`). The user already has the knob: set
+`fastfilesearch` is already user-declared, not auto-added; the built-in that used to
+upgrade the declared entry (`plugin/fastfilesearch.ts:24-32`) has since been removed. The
+user already has the knob: set
 `"disabled": true` on the server (`schema/src/mcp.ts:26`). This removes a process per
 Location but forfeits the tool.
 
@@ -470,8 +481,8 @@ Deliberate scope limits (raised in review):
 - `packages/core/src/location-service-map.ts:9-18` (global service + node).
 - `packages/core/src/instance.ts:88` (`Mcp.node`), `:146-157` (`layer(ref)` compile).
 - `packages/core/src/effect/app-node-builder.ts:8-27` (`Instance.provide` → `locations.get`).
-- `packages/core/src/plugin/fastfilesearch.ts:24-32` (upgrade-only registration),
-  `packages/core/src/plugin/internal.ts:232-235` (post-config ordering).
+- `packages/core/src/plugin/fastfilesearch.ts:24-32` (upgrade-only registration, removed),
+  `packages/core/src/plugin/internal.ts:232-235` (post-config ordering, removed with it).
 - `packages/core/src/tool/mcp.ts:37-40` (tool discovery waits on connect), `:130-150`
   (reload on `ToolsChanged`).
 - `packages/util/src/effect/app-node.ts:3-12` (`location`/`global` tags, `makeLocationNode`).
