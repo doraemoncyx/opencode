@@ -86,9 +86,10 @@ REPO = Path(__file__).resolve().parent
 CLI_DIR = REPO / "packages" / "cli"
 ENTRY = CLI_DIR / "src" / "index.ts"
 
-# 采样产物目录(临时目录约定)
-OUT_DIR = Path(r"C:\cache\tmp\prof")
-HOOK = OUT_DIR / "profile-hook.ts"
+# 采样产物目录。
+# 别再放 C:\cache\tmp: autodo_office_pc.py 启动时会清空整个 c:\cache\tmp, 而 hook 是每次启动现写的,
+# 清目录的线程与它并发 —— 实际吃过这个亏: hook 刚写就被 rmtree, bun 直接 "preload not found" 退出。
+OUT_DIR = Path(r"D:\cache\opencodecache")
 
 # 默认值(命令行都能覆盖)
 DEFAULT_PORT = 4097
