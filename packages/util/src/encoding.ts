@@ -83,8 +83,9 @@ export function isEncodable(text: string, encoding: FileEncoding): boolean {
 // 字符内部，所以按行切分是安全的：每行各自判定编码，整流只用一个编码解会让少数派那些行整片乱码。
 //
 // `skip` 是窗口开头已被调用方交付过的字节数，对应字符会被丢弃；`consumed` 是本窗口被解码的字节数，
-// 供调用方推进字节游标。
-export function decodeShellOutput(bytes: Uint8Array, skip = 0): { text: string; consumed: number } {
+// 供调用方推进字节游标。`final` 表示本窗口已到文件末尾：输出文件不会再增长，尾部残字符没有下一页
+// 可以补齐，直接按替换符解出，否则游标会永远停在文件末尾之前。
+export function decodeShellOutput(bytes: Uint8Array, skip = 0, final = false): { text: string; consumed: number } {
   const lines = []
   for (let start = 0; start < bytes.length; ) {
     const newline = bytes.indexOf(0x0a, start)
@@ -93,7 +94,7 @@ export function decodeShellOutput(bytes: Uint8Array, skip = 0): { text: string; 
     const encoding = detectEncoding(slice)
     // 带换行的行必然完整；窗口末尾没有换行的那行可能被页边界从字符中间截断，只取完整字符，
     // 尾部留给下一页重读。
-    const used = newline === -1 ? completeBytes(slice, encoding) : slice.length
+    const used = newline === -1 && !final ? completeBytes(slice, encoding) : slice.length
     lines.push({ start, encoding, used, text: decodeText(slice.subarray(0, used), encoding) })
     start = end
   }

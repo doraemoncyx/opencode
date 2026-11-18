@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test"
 import { CodeModeTool } from "@opencode/core/codemode/tool"
-import { Flag } from "@opencode/core/flag"
 import { Tool } from "@opencode/core/tool"
 import { execute } from "@opencode/core/tool/runtime"
 import { Agent } from "@opencode/schema/agent"
@@ -22,27 +21,11 @@ const context = {
 
 const allowAll = permissionService({ assert: () => Effect.void })
 
-const vmFlag = (codemode_vm: boolean): Flag.Interface => {
-  const resolve: Flag.Interface["resolve"] = (entries) =>
-    Flag.resolve({
-      entries,
-      channel: codemode_vm ? "dev" : "latest",
-      overrides: `${codemode_vm ? "" : "-"}codemode_vm`,
-    })
-  const all = Effect.sync(() => resolve([]))
-  return {
-    resolve,
-    all,
-    enabled: (key) => Effect.map(all, (flags) => flags[key].enabled),
-  }
-}
-
 const createCodeModeWithDirect = (direct: ReadonlySet<string>) =>
   CodeModeTool.create(
     { tools: new Map(), direct },
     (_, tool, input, context) => execute(tool, input, context),
     allowAll,
-    vmFlag(false),
   )
 
 test("an unknown tool that the model calls directly elsewhere names the real remedy", async () => {

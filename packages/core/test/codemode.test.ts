@@ -52,6 +52,40 @@ describe("CodeMode", () => {
     }).pipe(Effect.scoped, Effect.provide(toolNode)),
   )
 
+  it.effect("never hands a stop to a nested call, so its error cannot replace the execute call's result", () =>
+    Effect.gen(function* () {
+      const tools = yield* Tool.Service
+      yield* tools.transform((editor) => {
+        editor.add({
+          name: "stoppable",
+          description: "Stops on cancel",
+          input: Schema.Struct({}),
+          output: Schema.String,
+          execute: (_input, context) =>
+            context.cancel
+              ? context.cancel.pipe(Effect.andThen(Effect.fail(new Tool.Error({ message: "nested stopped" }))))
+              : Effect.succeed({ output: "ran" }),
+        })
+      })
+      const snapshot = yield* tools.snapshot()
+      const result = yield* snapshot.execute({
+        sessionID: Session.ID.make("ses_codemode_cancel"),
+        agent: Agent.ID.make("build"),
+        messageID: SessionMessage.ID.create(),
+        call: {
+          type: "tool-call",
+          id: "call-execute",
+          name: "execute",
+          input: { code: "return await tools.stoppable({})" },
+        },
+        // Already stopped: the execute call itself does not wait for it.
+        cancel: Effect.void,
+      })
+      expect(JSON.stringify(result.content)).toContain("ran")
+      expect(JSON.stringify(result.content)).not.toContain("nested stopped")
+    }).pipe(Effect.scoped, Effect.provide(toolNode)),
+  )
+
   it.effect("renders Effect numbers in built-in tool signatures as number", () =>
     Effect.gen(function* () {
       const tools = yield* Tool.Service
