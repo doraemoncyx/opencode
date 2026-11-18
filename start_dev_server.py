@@ -16,7 +16,7 @@ start_dev_server.py - 用本仓库源码起 opencode2 serve, 并抓 CPU profile
 流程:
   1. 先中断该端口上的 running 会话, 再结束占端口的 serve;
   2. bun --smol --preload <hook> --tsconfig-override packages/cli/tsconfig.json <abs>/src/index.ts serve ...
-     一律摘掉代理变量直连, cwd 用下面 resolve_start_dir() 的固定目录;
+     出网走本机 2080 代理(环回直连), cwd 用下面 resolve_start_dir() 的固定目录;
   3. 等端口 LISTEN; 你到 TUI 里复现问题, 回车开始采样 N 秒;
   4. 产出 <out-dir>/serve-<时间戳>.cpuprofile + 同名 .md(热点表, 直接看);
   5. 结束后可用 --restore-cmd 交给调用方的启动器去恢复真服务(不给就只提示)。
@@ -34,7 +34,7 @@ start_dev_server.py - 用本仓库源码起 opencode2 serve, 并抓 CPU profile
     CPU 稳定在 98~100% 一个核, 直到进程重启; 1000µs(默认) 残留约 6%, 不采样时是 0%。
     这个空转不进 JS, 所以 cpuprofile 里看不到。要低间隔采样, 采完就把 serve 重启,
     别用 --keep 留着继续跑。
-  * 采样期间跑的就是你那套 serve(同端口/同 cwd, 都不走代理), TUI 会自动连上(默认 --service)。
+  * 采样期间跑的就是你那套 serve(同端口/同 cwd/同代理), TUI 会自动连上(默认 --service)。
   * 控制文件写在 <out-dir>/serve-<时间戳>.control, 想手动补采可以 `echo start >` 它。
 
 channel / version(踩过的坑):
@@ -102,8 +102,12 @@ DEFAULT_DELAY = 2
 START_DIR_LETTERS = "defghijklmnopqrstuvwxyz"
 START_DIR_SUFFIX = os.path.join("tmp", "opencode_startdir")
 
-# serve 子进程一律直连: 本机 2080 的代理经常没有可用出站(经它全是 connection reset / 502),
-# 而 opencode.ai / models.opencode.ai 直连实测都通, 本地环回(网关 8787、TUI 到 serve)也不受影响。
+# serve 子进程的出网策略: 统一走本机 2080 的 sing-box mixed 入站。
+# 2080 同时收 socks5 与 http 两种握手, 但 bun 的 fetch 只认 http:// 方案 ——
+# HTTPS_PROXY=socks5://127.0.0.1:2080 会直接 "UnsupportedProxyProtocol" 失败(bun 1.4.4 实测)。
+# 环回(网关 8787、TUI 到 serve)必须留在 NO_PROXY 里, 否则聊天直接不可用。
+PROXY_URL = "http://127.0.0.1:2080"
+NO_PROXY_VALUE = "127.0.0.1,localhost,::1"
 PROXY_ENV_KEYS = (
     "ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
     "all_proxy", "http_proxy", "https_proxy", "no_proxy",
@@ -227,16 +231,22 @@ def resolve_start_dir() -> str:
 
 
 def serve_env() -> dict:
-    """serve 子进程的环境: 摘掉继承来的所有代理变量, 直连。
+    """serve 子进程的环境: 出网走 PROXY_URL, 环回直连。
 
-    代理只在"用得上"的时候才值得设。这台机器上 2080 的 sing-box 经常没有可用出站,
-    而 bun 的 fetch 一旦拿到 HTTPS_PROXY 就会把所有外部请求都送进去, 于是 Console 用量
-    面板和 models.dev 全变成 "Transport error (...)", 聊天却正常(aigw 走 127.0.0.1:8787
-    环回)。与其猜代理什么时候能用, 不如固定直连。
+    2080 上的 sing-box mixed 入站, 出站节点随时会换, 但方案名必须写 http:// ——
+    bun 的 fetch 拿到 socks5:// 会直接 UnsupportedProxyProtocol 退出请求, 而 mixed
+    端口两种握手都收, 所以 http:// 拿到的是同一个出站。
+    NO_PROXY 必须钉死: 本地 AI 网关(127.0.0.1:8787)与 TUI 到 serve 的环回一旦被塞进
+    代理, 聊天就整体不可用(这正是历史上"把代理变量全摘掉"的原因, 现在改成显式指定)。
     """
     env = os.environ.copy()
     for key in PROXY_ENV_KEYS:
         env.pop(key, None)
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        env[key] = PROXY_URL
+        env[key.lower()] = PROXY_URL
+    for key in ("NO_PROXY", "no_proxy"):
+        env[key] = NO_PROXY_VALUE
     return env
 
 
