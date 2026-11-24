@@ -185,8 +185,10 @@ def resolve_remotes(fork: str | None, upstream: str | None) -> tuple[str, str, d
 
 
 def writable(remote: str) -> tuple[bool, str]:
-    # dry-run 推一个一次性 ref：可写时服务端校验通过（实际不落库），只读时返回 Permission denied
-    result = git(["push", "--dry-run", remote, f"HEAD:refs/heads/{PROBE_REF}"], capture=True)
+    # dry-run 推一个一次性 ref：可写时服务端校验通过（实际不落库），只读时返回 Permission denied。
+    # --no-verify 跳过 pre-push 钩子（.husky/pre-push 会跑 bun run check）：钩子失败说明本地 lint
+    # 不干净，和「fork 能不能写」无关，混在一起会报成 Permission denied 以外的假故障。
+    result = git(["push", "--dry-run", "--no-verify", remote, f"HEAD:refs/heads/{PROBE_REF}"], capture=True)
     return result.returncode == 0, (result.stderr or "").strip()
 
 
