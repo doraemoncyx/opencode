@@ -63,7 +63,6 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const access = yield* FileAccess.Service
-    const environment = yield* Environment.Service
     const fileMutation = yield* FileMutation.Service
     const formatter = yield* Formatter.Service
     const permission = yield* Permission.Service
@@ -82,7 +81,7 @@ const layer = Layer.effect(
       yield* permission.assert({
         action: "edit",
         resources: [target.resource],
-        save: ["*"],
+        save: [FileAccess.always(target)],
         metadata: preview ? { files: [preview] } : undefined,
         ...Permission.invocation(context),
       })
@@ -99,16 +98,16 @@ const layer = Layer.effect(
           message: `Cannot write ${target.resource} as ${encoding}: the content contains characters ${encoding} cannot represent.`,
         })
       const written = yield* fileMutation.writeTextPreservingBom({ target, content, encoding })
-      if (!(yield* formatter.file(target.absolute))) return written
+      if (!(yield* formatter.file(target))) return written
       return {
         ...written,
-        formatted: yield* FileMutation.syncTextBom(environment.files, target.absolute, written.bom),
+        formatted: yield* FileMutation.syncTextBom(target.environment.files, target.absolute, written.bom),
       } satisfies Written
     })
 
     const write = Effect.fn("FileWrite.write")(function* (input: WriteInput, context: FileAccess.Invocation) {
       const resolved = yield* target(input.path, context)
-      const current = yield* FileMutation.readOptionalText(environment.files, resolved.absolute)
+      const current = yield* FileMutation.readOptionalText(resolved.environment.files, resolved.absolute)
       yield* authorize(
         resolved,
         context,
@@ -125,5 +124,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Environment.node, FileAccess.node, FileMutation.node, Formatter.node, Permission.node],
+  deps: [FileAccess.node, FileMutation.node, Formatter.node, Permission.node],
 })

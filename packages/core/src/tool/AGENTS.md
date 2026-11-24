@@ -62,6 +62,20 @@ Producer capture remains local to producers. Shell stores combined process outpu
 
 ## Encodings
 
-- GB18030 support is owned by `FileMutation` (`readText`/`readOptionalText`/`syncTextBom`/`writeTextPreservingBom`) and `FileWrite.commit`: they detect and preserve a file's encoding, and `commit` rejects content the encoding cannot represent instead of letting the encoder write `?`.
+- GB18030 support is owned by `FileMutation` (`readText`/`readEditableText`/`readOptionalText`/`syncTextBom`/`writeTextPreservingBom`) and `FileWrite.commit`: they detect and preserve a file's encoding, and `commit` rejects content the encoding cannot represent instead of letting the encoder write `?`.
 - Do not re-add per-tool encoding detection to `tool/plugin/{read,write,edit,patch}.ts`. Those files stay upstream-verbatim, and `edit` only threads `original.encoding` into `FileWrite.commit`; fork-specific branches inside them are the main conflict source on the next `upstream/dev` merge.
 - `patch.ts` follows that rule as edits inside upstream's own statements, never as a rewritten branch: it keeps a per-target `encoding` on `Prepared` (carried into the write as `encodeText(change.content, change.encoding)` in place of `new TextEncoder().encode(...)`) and refuses a GB18030 result that cannot represent the new text. Upstream restructured the delete/move bookkeeping around these calls; keep the fork's part as the argument of the call upstream writes, so its hunks still apply.
+
+## Tool hints
+
+`src/tool.ts` keeps the fork's renamed-tool and wrong-input hints as helpers near the bottom. Upstream owns `snapshot` and the Code Mode catalog; keep its filtering and caching verbatim, then re-add one `withInputHint` wrapper around the execution paths. Never restore the old `active`/`catalog` snapshot branch.
+
+## Model tool policy
+
+`tool/model-policy.ts` (`modelTools`) decides, per model, which tools are hidden and which tools that allow Code Mode stay direct. `Tool.snapshot` in `src/tool.ts` applies it: a tool is inside Code Mode only when Code Mode is enabled, `defaultCodeMode` in `tool/runtime.ts` allows it (`options.codemode !== false`), and the policy doesn't keep it direct. The built-in registrations in `tool/plugin/` decide which tools allow Code Mode.
+
+The team docs site mirrors this logic in an interactive page: https://anoma.ly/team/abattoir/projects/opencode/model-tools (repo `anomalyco/abattoir`). When you change `modelTools`, the placement check in `Tool.snapshot`, `defaultCodeMode`, or a built-in's `codemode` option, update the page in the same change:
+
+- `src/guides/oc-model-tools.ts` holds a hand-copied version of `modelTools` and the snapshot placement, plus the `MODELS` and `TOOLS` example lists. Keep the copy identical to the code here.
+- `content/projects/opencode/model-tools.md` has the page text; update it if a rule changes.
+- Open a PR into Abattoir's `dev` branch.
