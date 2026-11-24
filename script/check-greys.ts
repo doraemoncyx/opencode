@@ -60,9 +60,13 @@ const EXCEPTIONS: [RegExp, string][] = [
 // Pure black is a token only for video letterboxing (--media-black).
 const scale = new Set([...SCALE.light, ...SCALE.dark, "#000000"])
 
+// Paths come back with the platform separator; the EXCEPTIONS patterns are written with "/", so
+// normalize once here or every exception silently stops matching on Windows.
 const files = (
   await Promise.all(ROOTS.map((root) => Array.fromAsync(new Bun.Glob(`${root}/**/*.css`).scan({ cwd: repo() }))))
-).flat()
+)
+  .flat()
+  .map((file) => file.replaceAll("\\", "/"))
 
 const entries = (
   await Promise.all(
